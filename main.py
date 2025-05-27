@@ -33,15 +33,7 @@ def main():
     # Регистрируем все обработчики команд
     register_all_handlers(dp)
 
-    # add_handler_obj = expense_handlers()
-    # dp.add_handler(CommandHandler("add", add_handler_obj))
-    #
-    # dp.add_handler(budget_conv_handler)
-    #
-    # # Обработчик текстовых сообщений вида "45 кафе"
-    # dp.add_handler(MessageHandler(Filters.text & ~Filters.command, handle_expense_text))
 
-    
     # Запускаем бота
     updater.start_polling()
     logger.info("Бот запущен")

@@ -261,6 +261,10 @@ def register_stats_handlers(dp):
     Регистрирует обработчики команд для получения статистики и анализа
     """
 
+    dp.add_handler(CommandHandler("month", month_command))
+    dp.add_handler(CommandHandler("category", category_command))
+    dp.add_handler(CommandHandler("stats", stats_command))
+
     # Регистрируем ConversationHandler для команды /budget
     budget_conv_handler = ConversationHandler(
         entry_points=[CommandHandler("budget", budget_command)],
