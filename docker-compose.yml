@@ -1,8 +1,6 @@
-version: "3.9"
-
 services:
   bot:
     build: .
     restart: always
-    environment:
-      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
+    env_file:
+      - .env
