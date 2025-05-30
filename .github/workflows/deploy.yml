@@ -1,0 +1,17 @@
+name: Deploy to local server
+
+on:
+  push:
+    branches: [master]  # или main
+
+jobs:
+  deploy:
+    runs-on: self-hosted  # ВАЖНО: указывает на локальный раннер
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Build and restart container
+        run: |
+          docker compose down
+          docker compose up -d --build
