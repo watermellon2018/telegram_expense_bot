@@ -1,0 +1,32 @@
+name: Deploy Telegram Bot
+
+on:
+  push:
+    branches:
+      - main  # или другая ветка, с которой работаешь
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v3
+
+      - name: Set up SSH
+        uses: webfactory/ssh-agent@v0.8.0
+        with:
+          ssh-private-key: ${{ secrets.DEPLOY_KEY }}
+
+      - name: Rsync to server
+        run: |
+          rsync -avz --delete ./ ${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }}:/opt/telegram-bot
+
+      - name: Restart container on server
+        run: |
+          ssh ${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }} << 'EOF'
+            cd /opt/telegram-bot
+            docker-compose build --no-cache
+            docker-compose down
+            docker-compose up -d
+          EOF
