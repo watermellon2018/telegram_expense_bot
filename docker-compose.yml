@@ -4,4 +4,5 @@ services:
   bot:
     build: .
     restart: always
-    env_file: .env
+    environment:
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
