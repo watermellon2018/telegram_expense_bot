@@ -1,15 +1,20 @@
-name: Deploy to local server
+name: Deploy to Local Server
 
 on:
   push:
-    branches: [master]  # или main
+    branches:
+      - master  # измени при необходимости
 
 jobs:
   deploy:
-    runs-on: self-hosted  # ВАЖНО: указывает на локальный раннер
+    runs-on: self-hosted  # ключевое — self-hosted
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v3
+
+      - name: Set environment file
+        run: echo "TELEGRAM_BOT_TOKEN=${{ secrets.TELEGRAM_BOT_TOKEN }}" > .env
 
       - name: Build and restart container
         run: |
