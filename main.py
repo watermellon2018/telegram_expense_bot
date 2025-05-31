@@ -15,7 +15,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# from handlers.expense import expense_handlers
+
 def main():
     """
     Основная функция запуска бота
