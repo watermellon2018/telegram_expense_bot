@@ -48,11 +48,12 @@ def category_command(update: Update, context: CallbackContext) -> None:
     # Проверяем, что указана категория
     if not context.args or len(context.args) < 1:
         # Отправляем список доступных категорий
-        categories_list = ", ".join(config.DEFAULT_CATEGORIES.keys())
+        categories_list_emoji = [f"{emoji}  {category.title()}" for category, emoji in config.DEFAULT_CATEGORIES.items()]
+        message = 'Доступные категории:\n'
+        message += '\n'.join(categories_list_emoji)
+        
         update.message.reply_text(
-            "❌ Не указана категория. Используйте:\n"
-            "/category <название>\n"
-            f"Доступные категории: {categories_list}"
+            message
         )
         return
 

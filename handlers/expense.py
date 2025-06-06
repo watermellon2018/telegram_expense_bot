@@ -40,11 +40,11 @@ def text_handler(update: Update, context: CallbackContext) -> None:
         confirmation = (
             f"✅ Расход добавлен:\n"
             f"💰 Сумма: {expense_data['amount']}\n"
-            f"{category_emoji} Категория: {expense_data['category']}"
+            f"{category_emoji} Категория: {expense_data['category'].title()}"
         )
 
         if expense_data['description']:
-            confirmation += f"\n📝 Описание: {expense_data['description']}"
+            confirmation += f"\n📝 Описание: {expense_data['description'].title()}"
 
         update.message.reply_text(confirmation)
 
