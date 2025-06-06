@@ -69,7 +69,7 @@ def format_month_expenses(expenses, month=None, year=None):
     for category, amount in sorted_categories:
         from config import DEFAULT_CATEGORIES
         emoji = DEFAULT_CATEGORIES.get(category, "")
-        report += f"{emoji} {category}: {amount:.2f}\n"
+        report += f"{emoji} {category.title()}: {amount:.2f}\n"
     
     return report
 
@@ -190,6 +190,6 @@ def format_day_expenses(expenses, date=None):
         from config import DEFAULT_CATEGORIES
         emoji = DEFAULT_CATEGORIES.get(category, "")
         percentage = (amount / expenses['total']) * 100
-        report += f"{emoji} {category}: {amount:.2f} ({percentage:.1f}%)\n"
+        report += f"{emoji} {category.title()}: {amount:.2f} ({percentage:.1f}%)\n"
     
     return report
