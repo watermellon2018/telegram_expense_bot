@@ -251,3 +251,60 @@ def get_all_expenses(user_id, year=None):
     except Exception as e:
         print(f"Ошибка при получении всех расходов: {e}")
         return None
+
+
+def get_day_expenses(user_id, date=None):
+    """
+    Возвращает статистику расходов за указанный день
+    """
+    if date is None:
+        date = datetime.datetime.now().strftime('%Y-%m-%d')
+    
+    year = int(date.split('-')[0])
+    month = int(date.split('-')[1])
+    day = int(date.split('-')[2])
+    
+    excel_path = get_excel_path(user_id, year)
+    
+    # Проверяем, существует ли файл
+    if not os.path.exists(excel_path):
+        return None
+    
+    try:
+        # Загружаем данные
+        expenses_df = pd.read_excel(excel_path, sheet_name='Expenses', engine='openpyxl')
+        
+        # Проверяем, существует ли столбец 'date'
+        if 'date' not in expenses_df.columns:
+            return {
+                'status': False,
+                'note': 'Нет данных'
+            }
+        
+        # Фильтруем по дате
+        day_data = expenses_df[expenses_df['date'] == date]
+        
+        
+        # Если данных нет, возвращаем пустой результат
+        if day_data.empty:
+            return {
+                'status': True,
+                'total': 0,
+                'by_category': {},
+                'count': 0
+            }
+        
+        # Рассчитываем статистику
+        total = day_data['amount'].sum()
+        by_category = day_data.groupby('category')['amount'].sum().to_dict()
+        count = len(day_data)
+        
+        return {
+            'status': True,
+            'total': total,
+            'by_category': by_category,
+            'count': count
+        }
+    except Exception as e:
+        print(f"Error getting daily statistics: {e}")
+        return None
