@@ -255,6 +255,24 @@ def cancel(update: Update, context: CallbackContext):
     update.message.reply_text("Действие отменено.")
     return ConversationHandler.END
 
+def day_command(update: Update, context: CallbackContext) -> None:
+    """
+    Команда /day для получения статистики за текущий день
+    """
+    user_id = update.effective_user.id
+    
+    # Получаем текущую дату
+    date = datetime.datetime.now().strftime('%Y-%m-%d')
+    
+    # Получаем статистику расходов
+    expenses = excel.get_day_expenses(user_id, date)
+    
+    # Форматируем отчет
+    report = helpers.format_day_expenses(expenses, date)
+    
+    # Отправляем отчет
+    update.message.reply_text(report)
+    
 
 def register_stats_handlers(dp):
     """
@@ -264,6 +282,7 @@ def register_stats_handlers(dp):
     dp.add_handler(CommandHandler("month", month_command))
     dp.add_handler(CommandHandler("category", category_command))
     dp.add_handler(CommandHandler("stats", stats_command))
+    dp.add_handler(CommandHandler("day", day_command))
 
     # Регистрируем ConversationHandler для команды /budget
     budget_conv_handler = ConversationHandler(

@@ -158,3 +158,38 @@ def format_budget_status(user_id, month=None, year=None):
         report += f"❌ Перерасход: {overspent:.2f} ({percentage - 100:.1f}%)\n"
     
     return report
+
+def format_day_expenses(expenses, date=None):
+    """
+    Форматирует статистику расходов за день в текстовый отчет
+    """
+    if date is None:
+        date = datetime.datetime.now().strftime('%Y-%m-%d')
+    
+    if expenses['status'] == False:
+        return expenses['note']
+        
+    if not expenses or expenses['total'] == 0:
+        return f"Расходов за {date} не было."
+    
+    # Форматируем отчет
+    report = f"📊 Статистика расходов за {date}:\n\n"
+    report += f"💰 Общая сумма: {expenses['total']:.2f}\n"
+    report += f"🧾 Количество транзакций: {expenses['count']}\n\n"
+    
+    report += "📋 Расходы по категориям:\n"
+    
+    # Сортируем категории по убыванию сумм
+    sorted_categories = sorted(
+        expenses['by_category'].items(), 
+        key=lambda x: x[1], 
+        reverse=True
+    )
+    
+    for category, amount in sorted_categories:
+        from config import DEFAULT_CATEGORIES
+        emoji = DEFAULT_CATEGORIES.get(category, "")
+        percentage = (amount / expenses['total']) * 100
+        report += f"{emoji} {category}: {amount:.2f} ({percentage:.1f}%)\n"
+    
+    return report
