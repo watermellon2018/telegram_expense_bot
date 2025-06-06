@@ -4,3 +4,5 @@ services:
     restart: always
     env_file:
       - .env
+    volumes:
+      - /home/matafix/analitycs_money/telegram_bot_data/users:/app/data/users
