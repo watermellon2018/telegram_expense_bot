@@ -96,32 +96,6 @@ def stats_command(update: Update, context: CallbackContext) -> None:
     # Получаем текущий год
     year = datetime.datetime.now().year
 
-    # Получаем текущий месяц
-    month = datetime.datetime.now().month
-
-    # Получаем статистику расходов за текущий месяц
-    month_expenses = excel.get_month_expenses(user_id, month, year)
-
-    # Получаем статус бюджета
-    budget_status = helpers.format_budget_status(user_id, month, year)
-
-    # Формируем общий отчет
-    report = "📊 Общая статистика расходов\n\n"
-
-    # Добавляем статистику за текущий месяц
-    month_name = helpers.get_month_name(month)
-    if month_expenses and month_expenses['total'] > 0:
-        report += f"💰 Расходы за {month_name}: {month_expenses['total']:.2f}\n"
-        report += f"🧾 Количество транзакций: {month_expenses['count']}\n\n"
-    else:
-        report += f"В {month_name} расходов не было.\n\n"
-
-    # Добавляем статус бюджета
-    report += budget_status
-
-    # Отправляем отчет
-    update.message.reply_text(report)
-
     # Отправляем графики
     # 1. Распределение по категориям
     category_chart = visualization.create_category_distribution_chart(user_id, year)

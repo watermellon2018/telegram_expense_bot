@@ -12,6 +12,7 @@ import tempfile
 import shutil
 import pandas as pd
 
+
 def export_excel_command(update: Update, context: CallbackContext) -> None:
     """
     Обрабатывает команду /export для отправки Excel файла с данными пользователя
@@ -68,6 +69,7 @@ def export_excel_command(update: Update, context: CallbackContext) -> None:
                 os.unlink(tmp_path)
             except:
                 pass
+
 
 def export_stats_command(update: Update, context: CallbackContext) -> None:
     """
@@ -207,9 +209,10 @@ def export_stats_command(update: Update, context: CallbackContext) -> None:
             except:
                 pass
 
+
 def register_export_handlers(dp):
     """
     Регистрирует обработчики команд для экспорта
     """
     dp.add_handler(CommandHandler("export", export_excel_command))
-    dp.add_handler(CommandHandler("export_stats", export_stats_command)) 
+    dp.add_handler(CommandHandler("export_stats", export_stats_command))
