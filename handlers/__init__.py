@@ -6,6 +6,7 @@ from handlers.start import register_start_handlers
 from handlers.expense import register_expense_handlers
 from handlers.stats import register_stats_handlers
 from handlers.reminder import register_reminder_handlers
+from handlers.export import register_export_handlers
 
 def register_all_handlers(dp):
     """
@@ -17,5 +18,6 @@ def register_all_handlers(dp):
     # Так как оба метода отслеживают ввод
     register_stats_handlers(dp)
     register_expense_handlers(dp)
+    register_export_handlers(dp)
 
     register_reminder_handlers(dp)
