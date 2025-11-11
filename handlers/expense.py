@@ -26,12 +26,16 @@ def text_handler(update: Update, context: CallbackContext) -> None:
         if expense_data['category'] not in config.DEFAULT_CATEGORIES:
             return  # Не отвечаем, если категория не найдена в обычном сообщении
 
+        # Получаем активный проект
+        project_id = context.user_data.get('active_project_id')
+        
         # Добавляем расход
         excel.add_expense(
             user_id,
             expense_data['amount'],
             expense_data['category'],
-            expense_data['description']
+            expense_data['description'],
+            project_id
         )
 
         # Отправляем подтверждение
@@ -45,6 +49,15 @@ def text_handler(update: Update, context: CallbackContext) -> None:
 
         if expense_data['description']:
             confirmation += f"\n📝 Описание: {expense_data['description'].title()}"
+        
+        # Добавляем информацию о проекте
+        if project_id is not None:
+            from utils import projects
+            project = projects.get_project_by_id(user_id, project_id)
+            if project:
+                confirmation += f"\n📁 Проект: {project['project_name']}"
+        else:
+            confirmation += f"\n📊 Общие расходы"
 
         update.message.reply_text(confirmation)
 
@@ -77,12 +90,16 @@ def add_command(update: Update, context: CallbackContext) -> int:
             )
             return ConversationHandler.END
 
+        # Получаем активный проект
+        project_id = context.user_data.get('active_project_id')
+        
         # Добавляем расход
         excel.add_expense(
             user_id,
             expense_data['amount'],
             expense_data['category'],
-            expense_data['description']
+            expense_data['description'],
+            project_id
         )
 
         # Отправляем подтверждение
@@ -96,6 +113,15 @@ def add_command(update: Update, context: CallbackContext) -> int:
 
         if expense_data['description']:
             confirmation += f"\n📝 Описание: {expense_data['description']}"
+        
+        # Добавляем информацию о проекте
+        if project_id is not None:
+            from utils import projects
+            project = projects.get_project_by_id(user_id, project_id)
+            if project:
+                confirmation += f"\n📁 Проект: {project['project_name']}"
+        else:
+            confirmation += f"\n📊 Общие расходы"
 
         update.message.reply_text(confirmation)
         return ConversationHandler.END
@@ -200,6 +226,7 @@ def handle_description(update: Update, context: CallbackContext) -> int:
     # Получаем данные из контекста
     amount = context.user_data.get('amount', 0)
     category = context.user_data.get('category', '')
+    project_id = context.user_data.get('active_project_id')
 
     # Проверяем, хочет ли пользователь пропустить описание
     if text == '/skip':
@@ -208,7 +235,7 @@ def handle_description(update: Update, context: CallbackContext) -> int:
         description = text
 
     # Добавляем расход
-    excel.add_expense(user_id, amount, category, description)
+    excel.add_expense(user_id, amount, category, description, project_id)
 
     # Отправляем подтверждение
     category_emoji = config.DEFAULT_CATEGORIES[category]
@@ -221,6 +248,15 @@ def handle_description(update: Update, context: CallbackContext) -> int:
 
     if description:
         confirmation += f"\n📝 Описание: {description}"
+    
+    # Добавляем информацию о проекте
+    if project_id is not None:
+        from utils import projects
+        project = projects.get_project_by_id(user_id, project_id)
+        if project:
+            confirmation += f"\n📁 Проект: {project['project_name']}"
+    else:
+        confirmation += f"\n📊 Общие расходы"
 
     update.message.reply_text(confirmation)
 

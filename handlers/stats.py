@@ -23,18 +23,33 @@ def month_command(update: Update, context: CallbackContext) -> None:
     month = now.month
     year = now.year
 
+    # Получаем активный проект
+    project_id = context.user_data.get('active_project_id')
+
     # Получаем статистику расходов
-    expenses = excel.get_month_expenses(user_id, month, year)
+    expenses = excel.get_month_expenses(user_id, month, year, project_id)
 
     # Форматируем отчет
     report = helpers.format_month_expenses(expenses, month, year)
+    
+    # Добавляем информацию о проекте
+    if project_id is not None:
+        from utils import projects
+        project = projects.get_project_by_id(user_id, project_id)
+        if project:
+            report = f"📁 Проект: {project['project_name']}\n\n" + report
+    else:
+        report = f"📊 Общие расходы\n\n" + report
 
     # Отправляем отчет
     update.message.reply_text(report)
 
     # Если есть расходы, отправляем круговую диаграмму
     if expenses and expenses['total'] > 0:
-        chart_path = visualization.create_monthly_pie_chart(user_id, month, year)
+        chart_path = visualization.create_monthly_pie_chart(user_id,
+                                                            month=month,
+                                                            year=year,
+                                                            project_id=project_id)
         if chart_path and os.path.exists(chart_path):
             with open(chart_path, 'rb') as photo:
                 update.message.reply_photo(photo=photo, caption="Распределение расходов по категориям")
@@ -71,11 +86,23 @@ def category_command(update: Update, context: CallbackContext) -> None:
     # Получаем текущий год
     year = datetime.datetime.now().year
 
+    # Получаем активный проект
+    project_id = context.user_data.get('active_project_id')
+
     # Получаем статистику расходов по категории
-    category_data = excel.get_category_expenses(user_id, category, year)
+    category_data = excel.get_category_expenses(user_id, category, year, project_id)
 
     # Форматируем отчет
     report = helpers.format_category_expenses(category_data, category, year)
+    
+    # Добавляем информацию о проекте
+    if project_id is not None:
+        from utils import projects
+        project = projects.get_project_by_id(user_id, project_id)
+        if project:
+            report = f"📁 Проект: {project['project_name']}\n\n" + report
+    else:
+        report = f"📊 Общие расходы\n\n" + report
 
     # Отправляем отчет
     update.message.reply_text(report)
@@ -239,11 +266,23 @@ def day_command(update: Update, context: CallbackContext) -> None:
     # Получаем текущую дату
     date = datetime.datetime.now().strftime('%Y-%m-%d')
     
+    # Получаем активный проект
+    project_id = context.user_data.get('active_project_id')
+    
     # Получаем статистику расходов
-    expenses = excel.get_day_expenses(user_id, date)
+    expenses = excel.get_day_expenses(user_id, date, project_id)
     
     # Форматируем отчет
     report = helpers.format_day_expenses(expenses, date)
+    
+    # Добавляем информацию о проекте
+    if project_id is not None:
+        from utils import projects
+        project = projects.get_project_by_id(user_id, project_id)
+        if project:
+            report = f"📁 Проект: {project['project_name']}\n\n" + report
+    else:
+        report = f"📊 Общие расходы\n\n" + report
     
     # Отправляем отчет
     update.message.reply_text(report)

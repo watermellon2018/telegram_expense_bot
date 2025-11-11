@@ -18,25 +18,35 @@ def create_user_dir(user_id):
         os.makedirs(user_dir)
     return user_dir
 
-def get_excel_path(user_id, year=None):
+def get_excel_path(user_id, year=None, project_id=None):
     """
     Возвращает путь к Excel-файлу для указанного года
     Если год не указан, используется текущий год
+    Если project_id указан, возвращает путь к файлу проекта
     """
     if year is None:
         year = datetime.datetime.now().year
     
     user_dir = create_user_dir(user_id)
+    
+    if project_id is not None:
+        # Путь к файлу проекта
+        project_dir = os.path.join(user_dir, "projects", str(project_id))
+        if not os.path.exists(project_dir):
+            os.makedirs(project_dir)
+        return os.path.join(project_dir, f"{year}.xlsx")
+    
     return os.path.join(user_dir, f"{year}.xlsx")
 
-def create_excel_file(user_id, year=None):
+def create_excel_file(user_id, year=None, project_id=None):
     """
     Создает новый Excel-файл для указанного года с нужной структурой
+    Если project_id указан, создает файл для проекта
     """
     if year is None:
         year = datetime.datetime.now().year
     
-    excel_path = get_excel_path(user_id, year)
+    excel_path = get_excel_path(user_id, year, project_id)
     
     # Создаем новый файл только если он не существует
     if not os.path.exists(excel_path):
@@ -66,9 +76,10 @@ def create_excel_file(user_id, year=None):
     
     return excel_path
 
-def add_expense(user_id, amount, category, description=""):
+def add_expense(user_id, amount, category, description="", project_id=None):
     """
     Добавляет новый расход в Excel-файл
+    Если project_id указан, добавляет расход в проект
     """
     now = datetime.datetime.now()
     year = now.year
@@ -77,7 +88,7 @@ def add_expense(user_id, amount, category, description=""):
     time_str = now.strftime('%H:%M:%S')
     
     # Получаем путь к файлу и создаем его, если не существует
-    excel_path = create_excel_file(user_id, year)
+    excel_path = create_excel_file(user_id, year, project_id)
     
     # Сначала читаем все данные из файла
     try:
@@ -113,16 +124,17 @@ def add_expense(user_id, amount, category, description=""):
         print(f"Ошибка при добавлении расхода: {e}")
         return False
 
-def get_month_expenses(user_id, month=None, year=None):
+def get_month_expenses(user_id, month=None, year=None, project_id=None):
     """
     Возвращает статистику расходов за указанный месяц
+    Если project_id указан, возвращает статистику по проекту
     """
     if month is None:
         month = datetime.datetime.now().month
     if year is None:
         year = datetime.datetime.now().year
     
-    excel_path = get_excel_path(user_id, year)
+    excel_path = get_excel_path(user_id, year, project_id)
     
     # Проверяем, существует ли файл
     if not os.path.exists(excel_path):
@@ -157,9 +169,10 @@ def get_month_expenses(user_id, month=None, year=None):
         print(f"Ошибка при получении статистики за месяц: {e}")
         return None
 
-def set_budget(user_id, amount, month=None, year=None):
+def set_budget(user_id, amount, month=None, year=None, project_id=None):
     """
     Устанавливает бюджет на указанный месяц
+    Если project_id указан, устанавливает бюджет для проекта
     """
     if month is None:
         month = datetime.datetime.now().month
@@ -167,7 +180,7 @@ def set_budget(user_id, amount, month=None, year=None):
         year = datetime.datetime.now().year
     
     # Получаем путь к файлу и создаем его, если не существует
-    excel_path = create_excel_file(user_id, year)
+    excel_path = create_excel_file(user_id, year, project_id)
     
     try:
         # Сначала читаем все данные из файла
@@ -189,14 +202,15 @@ def set_budget(user_id, amount, month=None, year=None):
         print(f"Ошибка при установке бюджета: {e}")
         return False
 
-def get_category_expenses(user_id, category, year=None):
+def get_category_expenses(user_id, category, year=None, project_id=None):
     """
     Возвращает статистику расходов по указанной категории за год
+    Если project_id указан, возвращает статистику по проекту
     """
     if year is None:
         year = datetime.datetime.now().year
     
-    excel_path = get_excel_path(user_id, year)
+    excel_path = get_excel_path(user_id, year, project_id)
     
     # Проверяем, существует ли файл
     if not os.path.exists(excel_path):
@@ -231,14 +245,15 @@ def get_category_expenses(user_id, category, year=None):
         print(f"Ошибка при получении статистики по категории: {e}")
         return None
 
-def get_all_expenses(user_id, year=None):
+def get_all_expenses(user_id, year=None, project_id=None):
     """
     Возвращает все расходы за указанный год
+    Если project_id указан, возвращает расходы по проекту
     """
     if year is None:
         year = datetime.datetime.now().year
     
-    excel_path = get_excel_path(user_id, year)
+    excel_path = get_excel_path(user_id, year, project_id)
     
     # Проверяем, существует ли файл
     if not os.path.exists(excel_path):
@@ -253,9 +268,10 @@ def get_all_expenses(user_id, year=None):
         return None
 
 
-def get_day_expenses(user_id, date=None):
+def get_day_expenses(user_id, date=None, project_id=None):
     """
     Возвращает статистику расходов за указанный день
+    Если project_id указан, возвращает статистику по проекту
     """
     if date is None:
         date = datetime.datetime.now().strftime('%Y-%m-%d')
@@ -264,7 +280,7 @@ def get_day_expenses(user_id, date=None):
     month = int(date.split('-')[1])
     day = int(date.split('-')[2])
     
-    excel_path = get_excel_path(user_id, year)
+    excel_path = get_excel_path(user_id, year, project_id)
     
     # Проверяем, существует ли файл
     if not os.path.exists(excel_path):
