@@ -46,7 +46,10 @@ def month_command(update: Update, context: CallbackContext) -> None:
 
     # Если есть расходы, отправляем круговую диаграмму
     if expenses and expenses['total'] > 0:
-        chart_path = visualization.create_monthly_pie_chart(user_id, month, year, project_id)
+        chart_path = visualization.create_monthly_pie_chart(user_id,
+                                                            month=month,
+                                                            year=year,
+                                                            project_id=project_id)
         if chart_path and os.path.exists(chart_path):
             with open(chart_path, 'rb') as photo:
                 update.message.reply_photo(photo=photo, caption="Распределение расходов по категориям")

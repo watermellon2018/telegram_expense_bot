@@ -73,7 +73,6 @@ def create_monthly_pie_chart(user_id, month=None, year=None, save_path=None, pro
     if save_path is None:
         user_dir = excel.create_user_dir(user_id)
         save_path = os.path.join(user_dir, f"pie_chart_{year}_{month}.png")
-    
     plt.savefig(save_path, bbox_inches='tight')
     plt.close()
     
