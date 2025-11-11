@@ -20,7 +20,8 @@ def start(update: Update, context: CallbackContext) -> None:
     # Создаем клавиатуру с основными командами
     keyboard = [
         ['/add', '/month', '/day', '/stats'],
-        ['/category', '/budget', '/export', '/export_stats', '/help']
+        ['/category', '/budget', '/export', '/export_stats'],
+        ['📁 Проекты', '/help']
     ]
     reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
     
@@ -50,6 +51,14 @@ def help_command(update: Update, context: CallbackContext) -> None:
     # Формируем справочное сообщение
     message = (
         "📋 Список доступных команд:\n\n"
+        "📁 Управление проектами:\n"
+        "• /project_create <название> - создать проект\n"
+        "• /project_list - список проектов\n"
+        "• /project_select <название или ID> - переключиться на проект\n"
+        "• /project_main - переключиться на общие расходы\n"
+        "• /project_delete <название или ID> - удалить проект\n"
+        "• /project_info - информация о текущем проекте\n\n"
+        "💰 Учет расходов:\n"
         "• /add <сумма> <категория> [описание] - добавить расход\n"
         "• /month - статистика за текущий месяц\n"
         "• /day - статистика за текущий день\n"
@@ -57,15 +66,9 @@ def help_command(update: Update, context: CallbackContext) -> None:
         "• /budget <сумма> - установить бюджет на месяц\n"
         "• /category - перечень всех возможных категорий\n"
         "• /category <название> - расходы по категории\n"
-        "Например: /category продукты\n"
         "• /export - экспорт всех расходов в Excel\n"
-        "  Например: /export или /export 2025\n"
-        "• /export_stats - экспорт детальной статистики и анализом расходов в Excel \n"
-        "Виды анализа: Топ-10 расходов, общая статистика, статистика по категориями и прочее\n"
-        " Например: /export_stats 2025 июнь ; /export_stats 2025 6; /export_stats 2025\n"
-        "• /help - показать эту справку\n"
-        " Например: /help\n\n"
-        
+        "• /export_stats - экспорт детальной статистики\n"
+        "• /help - показать эту справку\n\n"
         "📊 Доступные категории расходов:\n"
     )
     
@@ -81,9 +84,48 @@ def help_command(update: Update, context: CallbackContext) -> None:
     
     update.message.reply_text(message)
 
+def projects_menu(update: Update, context: CallbackContext) -> None:
+    """
+    Отображает меню управления проектами
+    """
+    # Создаем клавиатуру с функциями проектов
+    keyboard = [
+        ['🆕 Создать проект', '📋 Список проектов'],
+        ['🔄 Выбрать проект', '📊 Общие расходы'],
+        ['ℹ️ Инфо о проекте', '🗑️ Удалить проект'],
+        ['⬅️ Главное меню']
+    ]
+    reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+    
+    update.message.reply_text(
+        "📁 Меню управления проектами:\n\n"
+        "Выберите действие:",
+        reply_markup=reply_markup
+    )
+
+def main_menu(update: Update, context: CallbackContext) -> None:
+    """
+    Возвращает в главное меню
+    """
+    keyboard = [
+        ['/add', '/month', '/day', '/stats'],
+        ['/category', '/budget', '/export', '/export_stats'],
+        ['📁 Проекты', '/help']
+    ]
+    reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+    
+    update.message.reply_text(
+        "✅ Возвращение в главное меню",
+        reply_markup=reply_markup
+    )
+
 def register_start_handlers(dp):
     """
     Регистрирует обработчики команд /start и /help
     """
     dp.add_handler(CommandHandler("start", start))
     dp.add_handler(CommandHandler("help", help_command))
+    
+    # Обработчики для кнопок меню
+    dp.add_handler(MessageHandler(Filters.regex('^📁 Проекты$'), projects_menu))
+    dp.add_handler(MessageHandler(Filters.regex('^⬅️ Главное меню$'), main_menu))
