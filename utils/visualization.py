@@ -12,9 +12,10 @@ import datetime
 from utils import excel
 import config
 
-def create_monthly_pie_chart(user_id, month=None, year=None, save_path=None):
+def create_monthly_pie_chart(user_id, month=None, year=None, save_path=None, project_id=None):
     """
     Создает круговую диаграмму расходов по категориям за указанный месяц
+    Если project_id указан, создает диаграмму для проекта
     """
     if month is None:
         month = datetime.datetime.now().month
@@ -22,7 +23,7 @@ def create_monthly_pie_chart(user_id, month=None, year=None, save_path=None):
         year = datetime.datetime.now().year
     
     # Получаем данные о расходах
-    expenses = excel.get_month_expenses(user_id, month, year)
+    expenses = excel.get_month_expenses(user_id, month, year, project_id)
     
     if not expenses or expenses['total'] == 0:
         return None

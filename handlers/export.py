@@ -19,6 +19,9 @@ def export_excel_command(update: Update, context: CallbackContext) -> None:
     """
     user_id = update.effective_user.id
     
+    # Получаем активный проект
+    project_id = context.user_data.get('active_project_id')
+    
     # Получаем год из аргументов команды или используем текущий
     year = None
     if context.args:
@@ -32,7 +35,7 @@ def export_excel_command(update: Update, context: CallbackContext) -> None:
             return
     
     # Получаем путь к Excel файлу
-    excel_path = excel.get_excel_path(user_id, year)
+    excel_path = excel.get_excel_path(user_id, year, project_id)
     
     # Проверяем, существует ли файл
     if not os.path.exists(excel_path):
@@ -51,11 +54,22 @@ def export_excel_command(update: Update, context: CallbackContext) -> None:
         # Отправляем файл
         with open(tmp_path, 'rb') as file:
             year_text = f" за {year} год" if year else ""
+            
+            # Добавляем информацию о проекте
+            if project_id is not None:
+                from utils import projects
+                project = projects.get_project_by_id(user_id, project_id)
+                if project:
+                    caption = f"📁 Проект: {project['project_name']}\n📊 Расходы{year_text}\n\nФайл содержит все записи о расходах проекта."
+                else:
+                    caption = f"📊 Ваши расходы{year_text}\n\nФайл содержит все ваши записи о расходах с детальной статистикой."
+            else:
+                caption = f"📊 Общие расходы{year_text}\n\nФайл содержит все ваши записи о расходах с детальной статистикой."
+            
             update.message.reply_document(
                 document=file,
                 filename=f"expenses{year_text}.xlsx",
-                caption=f"📊 Ваши расходы{year_text}\n\n"
-                        f"Файл содержит все ваши записи о расходах с детальной статистикой."
+                caption=caption
             )
         
         # Удаляем временный файл
