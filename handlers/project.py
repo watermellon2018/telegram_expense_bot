@@ -156,9 +156,9 @@ def project_select_command(update: Update, context: CallbackContext) -> None:
         update.message.reply_text(f"❌ {result['message']}")
 
 
-def project_general_command(update: Update, context: CallbackContext) -> None:
+def project_main_command(update: Update, context: CallbackContext) -> None:
     """
-    Обрабатывает команду /project_general для переключения на общие расходы
+    Обрабатывает команду /project_main для переключения на общие расходы
     """
     user_id = update.effective_user.id
     
@@ -349,7 +349,7 @@ def register_project_handlers(dp):
     dp.add_handler(CommandHandler("project_create", project_create_command))
     dp.add_handler(CommandHandler("project_list", project_list_command))
     dp.add_handler(CommandHandler("project_select", project_select_command))
-    dp.add_handler(CommandHandler("project_general", project_general_command))
+    dp.add_handler(CommandHandler("project_main", project_main_command))
     dp.add_handler(CommandHandler("project_info", project_info_command))
     
     # Регистрируем ConversationHandler для удаления проекта

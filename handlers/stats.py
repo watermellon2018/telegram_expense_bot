@@ -263,11 +263,23 @@ def day_command(update: Update, context: CallbackContext) -> None:
     # Получаем текущую дату
     date = datetime.datetime.now().strftime('%Y-%m-%d')
     
+    # Получаем активный проект
+    project_id = context.user_data.get('active_project_id')
+    
     # Получаем статистику расходов
-    expenses = excel.get_day_expenses(user_id, date)
+    expenses = excel.get_day_expenses(user_id, date, project_id)
     
     # Форматируем отчет
     report = helpers.format_day_expenses(expenses, date)
+    
+    # Добавляем информацию о проекте
+    if project_id is not None:
+        from utils import projects
+        project = projects.get_project_by_id(user_id, project_id)
+        if project:
+            report = f"📁 Проект: {project['project_name']}\n\n" + report
+    else:
+        report = f"📊 Общие расходы\n\n" + report
     
     # Отправляем отчет
     update.message.reply_text(report)
