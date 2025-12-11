@@ -3,9 +3,12 @@ import asyncpg
 import os
 import pandas as pd
 from pathlib import Path
+from dotenv import load_dotenv
+
+load_dotenv()
 
 # --- Настройки подключения ---
-DB_HOST = os.environ.get("DB_HOST", "localhost")
+DB_HOST = os.environ.get("DB_HOST", "postgres_server")
 DB_PORT = os.environ.get("DB_PORT", "5432")
 DB_NAME = os.environ.get("DB_NAME", "botdb")
 DB_USER = os.environ.get("DB_USER", "bot_user")
