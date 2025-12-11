@@ -3,6 +3,7 @@ import asyncpg
 import os
 import pandas as pd
 from pathlib import Path
+from urllib.parse import quote_plus
 
 
 # --- Настройки подключения ---
@@ -13,7 +14,7 @@ DB_USER = os.environ.get("DB_USER", "bot_user")
 DB_PASSWORD = os.environ.get("DB_PASSWORD")
 USERS_FOLDER = os.environ.get("USERS_FOLDER", "users")
 
-DATABASE_URL = f"postgresql://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:{DB_PORT}/{DB_NAME}"
+DATABASE_URL = f"postgresql://{DB_USER}:{quote_plus(DB_PASSWORD)}@{DB_HOST}:{DB_PORT}/{DB_NAME}"
 USERS_FOLDER = os.path.expanduser(USERS_FOLDER)
 
 # --- Миграция одного пользователя ---
