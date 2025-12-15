@@ -6,3 +6,9 @@ services:
       - .env
     volumes:
       - /home/matafix/analitycs_money/telegram_bot_data/users:/app/data/users
+    networks:
+      - postgres_net
+
+networks:
+  postgres_net:
+    external: true
