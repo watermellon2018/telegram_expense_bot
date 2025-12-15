@@ -4,6 +4,8 @@ import os
 import pandas as pd
 from pathlib import Path
 from urllib.parse import quote_plus
+from datetime import datetime, date, time
+
 
 
 # --- Настройки подключения ---
@@ -16,6 +18,32 @@ USERS_FOLDER = os.environ.get("USERS_FOLDER", "users")
 
 DATABASE_URL = f"postgresql://{DB_USER}:{quote_plus(DB_PASSWORD)}@{DB_HOST}:{DB_PORT}/{DB_NAME}"
 USERS_FOLDER = os.path.expanduser(USERS_FOLDER)
+
+
+def parse_date(val):
+    """Конвертируем строку или pd.Timestamp в datetime.date"""
+    if pd.isna(val):
+        return None
+    if isinstance(val, date):
+        return val
+    if isinstance(val, pd.Timestamp):
+        return val.date()
+    if isinstance(val, str):
+        return datetime.strptime(val, "%Y-%m-%d").date()
+    raise ValueError(f"Cannot convert {val} to date")
+
+def parse_time(val):
+    """Конвертируем строку или pd.Timestamp в datetime.time"""
+    if pd.isna(val):
+        return None
+    if isinstance(val, time):
+        return val
+    if isinstance(val, pd.Timestamp):
+        return val.time()
+    if isinstance(val, str):
+        return datetime.strptime(val, "%H:%M:%S").time()
+    raise ValueError(f"Cannot convert {val} to time")
+
 
 # --- Миграция одного пользователя ---
 async def migrate_user(conn, user_folder: Path):
@@ -38,8 +66,8 @@ async def migrate_user(conn, user_folder: Path):
                 """INSERT INTO expenses(user_id, project_id, date, time, amount, category, description, month)
                    VALUES($1, NULL, $2, $3, $4, $5, $6, $7)""",
                 user_id,
-                row["date"],
-                row["time"],
+                parse_date(row["date"]),
+                parse_time(row["time"]),
                 row["amount"],
                 row.get("category"),
                 row.get("description"),
@@ -62,6 +90,7 @@ async def migrate_user(conn, user_folder: Path):
     if projects_file.exists():
         df_projects = pd.read_excel(projects_file, sheet_name="Projects")
         for row in df_projects.to_dict(orient="records"):
+            row["created_date"] = parse_date(row["created_date"])
             project_id = row["project_id"]
             is_active = True if str(row["is_active"]).upper() in ("ИСТИНА", "TRUE", "1") else False
             await conn.execute(
@@ -92,8 +121,8 @@ async def migrate_user(conn, user_folder: Path):
                            VALUES($1, $2, $3, $4, $5, $6, $7, $8)""",
                         user_id,
                         project_id,
-                        r["date"],
-                        r["time"],
+                        parse_date(r["date"]),
+                        parse_time(r["time"]),
                         r["amount"],
                         r.get("category"),
                         r.get("description"),
