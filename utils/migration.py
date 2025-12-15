@@ -20,6 +20,13 @@ DATABASE_URL = f"postgresql://{DB_USER}:{quote_plus(DB_PASSWORD)}@{DB_HOST}:{DB_
 USERS_FOLDER = os.path.expanduser(USERS_FOLDER)
 
 
+def safe_str(val):
+    """Конвертируем значение в строку для asyncpg, пустое или NaN → None"""
+    if pd.isna(val):
+        return None
+    return str(val)
+
+
 def parse_date(val):
     """Конвертируем строку или pd.Timestamp в datetime.date"""
     if pd.isna(val):
@@ -70,7 +77,7 @@ async def migrate_user(conn, user_folder: Path):
                 parse_time(row["time"]),
                 row["amount"],
                 row.get("category"),
-                row.get("description"),
+                safe_str(row.get("description")),
                 row["month"]
             )
         # Budget
@@ -125,7 +132,7 @@ async def migrate_user(conn, user_folder: Path):
                         parse_time(r["time"]),
                         r["amount"],
                         r.get("category"),
-                        r.get("description"),
+                        safe_str(r.get("description")),
                         r["month"]
                     )
                 # Budget
