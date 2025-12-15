@@ -1,326 +1,336 @@
 """
-Утилиты для работы с Excel-файлами
+Утилиты для работы с данными расходов.
+Изначально все хранилось в Excel, теперь вся логика чтения/записи переведена на Postgres.
+Публичный API модуля (add_expense, get_month_expenses и т.п.) сохранён, чтобы не трогать обработчики.
 """
 
 import os
-import pandas as pd
 import datetime
-from openpyxl import Workbook
-from openpyxl.utils.dataframe import dataframe_to_rows
+import pandas as pd
+
 import config
+from . import db
+
 
 def create_user_dir(user_id):
     """
-    Создает директорию для хранения данных пользователя
+    Директория для файлов пользователя (картинки, временные экспорты и т.п.).
+    Оставляем файловую структуру, чтобы не ломать визуализацию/экспорт.
     """
     user_dir = os.path.join(config.DATA_DIR, str(user_id))
     if not os.path.exists(user_dir):
         os.makedirs(user_dir)
     return user_dir
 
-def get_excel_path(user_id, year=None, project_id=None):
-    """
-    Возвращает путь к Excel-файлу для указанного года
-    Если год не указан, используется текущий год
-    Если project_id указан, возвращает путь к файлу проекта
-    """
-    if year is None:
-        year = datetime.datetime.now().year
-    
-    user_dir = create_user_dir(user_id)
-    
-    if project_id is not None:
-        # Путь к файлу проекта
-        project_dir = os.path.join(user_dir, "projects", str(project_id))
-        if not os.path.exists(project_dir):
-            os.makedirs(project_dir)
-        return os.path.join(project_dir, f"{year}.xlsx")
-    
-    return os.path.join(user_dir, f"{year}.xlsx")
 
-def create_excel_file(user_id, year=None, project_id=None):
-    """
-    Создает новый Excel-файл для указанного года с нужной структурой
-    Если project_id указан, создает файл для проекта
-    """
-    if year is None:
-        year = datetime.datetime.now().year
-    
-    excel_path = get_excel_path(user_id, year, project_id)
-    
-    # Создаем новый файл только если он не существует
-    if not os.path.exists(excel_path):
-        # Создаем пустой DataFrame для расходов
-        expenses_df = pd.DataFrame(columns=[
-            'date', 'time', 'amount', 'category', 'description', 'month'
-        ])
-        
-        # Создаем DataFrame для категорий
-        categories_df = pd.DataFrame({
-            'category_name': list(config.DEFAULT_CATEGORIES.keys()),
-            'emoji': list(config.DEFAULT_CATEGORIES.values())
-        })
-        
-        # Создаем DataFrame для бюджета
-        budget_df = pd.DataFrame({
-            'month': list(range(1, 13)),
-            'budget': [0] * 12,
-            'actual': [0] * 12
-        })
-        
-        # Сохраняем все в Excel
-        with pd.ExcelWriter(excel_path, engine='openpyxl') as writer:
-            expenses_df.to_excel(writer, sheet_name='Expenses', index=False)
-            categories_df.to_excel(writer, sheet_name='Categories', index=False)
-            budget_df.to_excel(writer, sheet_name='Budget', index=False)
-    
-    return excel_path
+# --- Вспомогательные функции для Postgres ---
 
-def add_expense(user_id, amount, category, description="", project_id=None):
+def _normalize_project_id(project_id):
     """
-    Добавляет новый расход в Excel-файл
-    Если project_id указан, добавляет расход в проект
+    Для удобства сравнения в SQL: None -> None, иначе int.
+    """
+    if project_id is None:
+        return None
+    return int(project_id)
+
+
+def add_expense(user_id, amount, category, description: str = "", project_id=None):
+    """
+    Добавляет новый расход в БД.
+    Если project_id указан, добавляет расход в проект.
     """
     now = datetime.datetime.now()
-    year = now.year
     month = now.month
-    date_str = now.strftime('%Y-%m-%d')
-    time_str = now.strftime('%H:%M:%S')
-    
-    # Получаем путь к файлу и создаем его, если не существует
-    excel_path = create_excel_file(user_id, year, project_id)
-    
-    # Сначала читаем все данные из файла
+    date_val = now.date()
+    time_val = now.time().replace(microsecond=0)
+    category = category.lower()
+    project_id = _normalize_project_id(project_id)
+
+    async def _do():
+        # 1. Убедимся, что пользователь существует
+        await db.execute(
+            "INSERT INTO users(user_id) VALUES($1) ON CONFLICT (user_id) DO NOTHING",
+            str(user_id),
+        )
+
+        # 2. Вставляем сам расход
+        await db.execute(
+            """
+            INSERT INTO expenses(user_id, project_id, date, time, amount, category, description, month)
+            VALUES($1, $2, $3, $4, $5, $6, $7, $8)
+            """,
+            str(user_id),
+            project_id,
+            date_val,
+            time_val,
+            float(amount),
+            category,
+            description or None,
+            month,
+        )
+
+        # 3. Обновляем таблицу budget (как раньше обновляли лист Budget.actual)
+        # Сначала гарантируем, что строка для месяца существует
+        await db.execute(
+            """
+            INSERT INTO budget(user_id, project_id, month, budget, actual)
+            VALUES($1, $2, $3, 0, 0)
+            ON CONFLICT (user_id, project_id, month) DO NOTHING
+            """,
+            str(user_id),
+            project_id,
+            month,
+        )
+
+        # Затем пересчитываем actual как сумму по expenses
+        await db.execute(
+            """
+            UPDATE budget b
+            SET actual = COALESCE((
+                SELECT SUM(e.amount)
+                FROM expenses e
+                WHERE e.user_id = b.user_id
+                  AND ((e.project_id IS NULL AND b.project_id IS NULL) OR e.project_id = b.project_id)
+                  AND e.month = b.month
+            ), 0)
+            WHERE b.user_id = $1
+              AND ((b.project_id IS NULL AND $2::int IS NULL) OR b.project_id = $2::int)
+              AND b.month = $3
+            """,
+            str(user_id),
+            project_id,
+            month,
+        )
+
     try:
-        # Загружаем текущие данные
-        expenses_df = pd.read_excel(excel_path, sheet_name='Expenses', engine='openpyxl')
-        budget_df = pd.read_excel(excel_path, sheet_name='Budget', engine='openpyxl')
-        categories_df = pd.read_excel(excel_path, sheet_name='Categories', engine='openpyxl')
-        
-        # Добавляем новую запись
-        new_expense = pd.DataFrame({
-            'date': [date_str],
-            'time': [time_str],
-            'amount': [float(amount)],
-            'category': [category.lower()],
-            'description': [description],
-            'month': [month]
-        })
-        
-        expenses_df = pd.concat([expenses_df, new_expense], ignore_index=True)
-        
-        # Обновляем фактические расходы в бюджете
-        month_expenses = expenses_df[expenses_df['month'] == month]['amount'].sum()
-        budget_df.loc[budget_df['month'] == month, 'actual'] = month_expenses
-        
-        # Затем записываем все данные обратно в файл
-        with pd.ExcelWriter(excel_path, engine='openpyxl') as writer:
-            expenses_df.to_excel(writer, sheet_name='Expenses', index=False)
-            budget_df.to_excel(writer, sheet_name='Budget', index=False)
-            categories_df.to_excel(writer, sheet_name='Categories', index=False)
-        
+        db.run_async(_do())
         return True
     except Exception as e:
-        print(f"Ошибка при добавлении расхода: {e}")
+        print(f"Ошибка при добавлении расхода в БД: {e}")
         return False
+
 
 def get_month_expenses(user_id, month=None, year=None, project_id=None):
     """
-    Возвращает статистику расходов за указанный месяц
-    Если project_id указан, возвращает статистику по проекту
+    Возвращает статистику расходов за указанный месяц.
+    year сейчас не используется на уровне БД (таблица expenses без поля года, он в date).
     """
     if month is None:
         month = datetime.datetime.now().month
-    if year is None:
-        year = datetime.datetime.now().year
-    
-    excel_path = get_excel_path(user_id, year, project_id)
-    
-    # Проверяем, существует ли файл
-    if not os.path.exists(excel_path):
-        return None
-    
-    try:
-        # Загружаем данные
-        expenses_df = pd.read_excel(excel_path, sheet_name='Expenses', engine='openpyxl')
-        
-        # Фильтруем по месяцу
-        month_data = expenses_df[expenses_df['month'] == month]
-        
-        # Если данных нет, возвращаем пустой результат
-        if month_data.empty:
+    project_id = _normalize_project_id(project_id)
+
+    async def _do():
+        rows = await db.fetch(
+            """
+            SELECT amount, category
+            FROM expenses
+            WHERE user_id = $1
+              AND month = $2
+              AND ((project_id IS NULL AND $3::int IS NULL) OR project_id = $3::int)
+            """,
+            str(user_id),
+            month,
+            project_id,
+        )
+        if not rows:
             return {
-                'total': 0,
-                'by_category': {},
-                'count': 0
+                "total": 0,
+                "by_category": {},
+                "count": 0,
             }
-        
-        # Рассчитываем статистику
-        total = month_data['amount'].sum()
-        by_category = month_data.groupby('category')['amount'].sum().to_dict()
-        count = len(month_data)
-        
+
+        total = 0.0
+        by_category = {}
+        for r in rows:
+            amt = float(r["amount"])
+            cat = r["category"]
+            total += amt
+            by_category[cat] = by_category.get(cat, 0.0) + amt
+
         return {
-            'total': total,
-            'by_category': by_category,
-            'count': count
+            "total": total,
+            "by_category": by_category,
+            "count": len(rows),
         }
+
+    try:
+        return db.run_async(_do())
     except Exception as e:
-        print(f"Ошибка при получении статистики за месяц: {e}")
+        print(f"Ошибка при получении статистики за месяц из БД: {e}")
         return None
+
 
 def set_budget(user_id, amount, month=None, year=None, project_id=None):
     """
-    Устанавливает бюджет на указанный месяц
-    Если project_id указан, устанавливает бюджет для проекта
+    Устанавливает бюджет на указанный месяц.
+    year игнорируем, так как в таблице budget он не хранится.
     """
     if month is None:
         month = datetime.datetime.now().month
-    if year is None:
-        year = datetime.datetime.now().year
-    
-    # Получаем путь к файлу и создаем его, если не существует
-    excel_path = create_excel_file(user_id, year, project_id)
-    
+    project_id = _normalize_project_id(project_id)
+
+    async def _do():
+        await db.execute(
+            """
+            INSERT INTO budget(user_id, project_id, month, budget, actual)
+            VALUES($1, $2, $3, $4, 0)
+            ON CONFLICT (user_id, project_id, month)
+            DO UPDATE SET budget = EXCLUDED.budget
+            """,
+            str(user_id),
+            project_id,
+            month,
+            float(amount),
+        )
+
     try:
-        # Сначала читаем все данные из файла
-        budget_df = pd.read_excel(excel_path, sheet_name='Budget', engine='openpyxl')
-        expenses_df = pd.read_excel(excel_path, sheet_name='Expenses', engine='openpyxl')
-        categories_df = pd.read_excel(excel_path, sheet_name='Categories', engine='openpyxl')
-        
-        # Обновляем бюджет для указанного месяца
-        budget_df.loc[budget_df['month'] == month, 'budget'] = float(amount)
-        
-        # Затем записываем все данные обратно в файл
-        with pd.ExcelWriter(excel_path, engine='openpyxl') as writer:
-            budget_df.to_excel(writer, sheet_name='Budget', index=False)
-            expenses_df.to_excel(writer, sheet_name='Expenses', index=False)
-            categories_df.to_excel(writer, sheet_name='Categories', index=False)
-        
+        db.run_async(_do())
         return True
     except Exception as e:
-        print(f"Ошибка при установке бюджета: {e}")
+        print(f"Ошибка при установке бюджета в БД: {e}")
         return False
+
 
 def get_category_expenses(user_id, category, year=None, project_id=None):
     """
-    Возвращает статистику расходов по указанной категории за год
-    Если project_id указан, возвращает статистику по проекту
+    Возвращает статистику расходов по указанной категории за год.
+    Фильтруем по полю date по году.
     """
     if year is None:
         year = datetime.datetime.now().year
-    
-    excel_path = get_excel_path(user_id, year, project_id)
-    
-    # Проверяем, существует ли файл
-    if not os.path.exists(excel_path):
-        return None
-    
-    try:
-        # Загружаем данные
-        expenses_df = pd.read_excel(excel_path, sheet_name='Expenses', engine='openpyxl')
-        
-        # Фильтруем по категории
-        category_data = expenses_df[expenses_df['category'] == category.lower()]
-        
-        # Если данных нет, возвращаем пустой результат
-        if category_data.empty:
+    project_id = _normalize_project_id(project_id)
+    category = category.lower()
+
+    async def _do():
+        rows = await db.fetch(
+            """
+            SELECT amount, month
+            FROM expenses
+            WHERE user_id = $1
+              AND category = $2
+              AND EXTRACT(YEAR FROM date) = $3
+              AND ((project_id IS NULL AND $4::int IS NULL) OR project_id = $4::int)
+            """,
+            str(user_id),
+            category,
+            year,
+            project_id,
+        )
+        if not rows:
             return {
-                'total': 0,
-                'by_month': {},
-                'count': 0
+                "total": 0,
+                "by_month": {},
+                "count": 0,
             }
-        
-        # Рассчитываем статистику
-        total = category_data['amount'].sum()
-        by_month = category_data.groupby('month')['amount'].sum().to_dict()
-        count = len(category_data)
-        
+
+        total = 0.0
+        by_month = {}
+        for r in rows:
+            amt = float(r["amount"])
+            m = int(r["month"])
+            total += amt
+            by_month[m] = by_month.get(m, 0.0) + amt
+
         return {
-            'total': total,
-            'by_month': by_month,
-            'count': count
+            "total": total,
+            "by_month": by_month,
+            "count": len(rows),
         }
+
+    try:
+        return db.run_async(_do())
     except Exception as e:
-        print(f"Ошибка при получении статистики по категории: {e}")
+        print(f"Ошибка при получении статистики по категории из БД: {e}")
         return None
+
 
 def get_all_expenses(user_id, year=None, project_id=None):
     """
-    Возвращает все расходы за указанный год
-    Если project_id указан, возвращает расходы по проекту
+    Возвращает все расходы за указанный год в виде pandas.DataFrame.
+    Если project_id указан, фильтруем по проекту.
     """
     if year is None:
         year = datetime.datetime.now().year
-    
-    excel_path = get_excel_path(user_id, year, project_id)
-    
-    # Проверяем, существует ли файл
-    if not os.path.exists(excel_path):
-        return None
-    
+    project_id = _normalize_project_id(project_id)
+
+    async def _do():
+        rows = await db.fetch(
+            """
+            SELECT date, time, amount, category, description, month, project_id
+            FROM expenses
+            WHERE user_id = $1
+              AND EXTRACT(YEAR FROM date) = $2
+              AND ((project_id IS NULL AND $3::int IS NULL) OR project_id = $3::int)
+            ORDER BY date, time
+            """,
+            str(user_id),
+            year,
+            project_id,
+        )
+        if not rows:
+            return None
+
+        data = [dict(r) for r in rows]
+        return pd.DataFrame(data)
+
     try:
-        # Загружаем данные
-        expenses_df = pd.read_excel(excel_path, sheet_name='Expenses', engine='openpyxl')
-        return expenses_df
+        return db.run_async(_do())
     except Exception as e:
-        print(f"Ошибка при получении всех расходов: {e}")
+        print(f"Ошибка при получении всех расходов из БД: {e}")
         return None
 
 
 def get_day_expenses(user_id, date=None, project_id=None):
     """
-    Возвращает статистику расходов за указанный день
-    Если project_id указан, возвращает статистику по проекту
+    Возвращает статистику расходов за указанный день.
+    Формат результата сохранён таким же, как и при работе с Excel.
     """
     if date is None:
-        date = datetime.datetime.now().strftime('%Y-%m-%d')
-    
-    year = int(date.split('-')[0])
-    month = int(date.split('-')[1])
-    day = int(date.split('-')[2])
-    
-    excel_path = get_excel_path(user_id, year, project_id)
-    
-    # Проверяем, существует ли файл
-    if not os.path.exists(excel_path):
-        return None
-    
-    try:
-        # Загружаем данные
-        expenses_df = pd.read_excel(excel_path, sheet_name='Expenses', engine='openpyxl')
-        
-        # Проверяем, существует ли столбец 'date'
-        if 'date' not in expenses_df.columns:
+        date = datetime.datetime.now().strftime("%Y-%m-%d")
+
+    project_id = _normalize_project_id(project_id)
+    target_date = datetime.datetime.strptime(date, "%Y-%m-%d").date()
+
+    async def _do():
+        rows = await db.fetch(
+            """
+            SELECT amount, category
+            FROM expenses
+            WHERE user_id = $1
+              AND date = $2
+              AND ((project_id IS NULL AND $3::int IS NULL) OR project_id = $3::int)
+            """,
+            str(user_id),
+            target_date,
+            project_id,
+        )
+        # Если в старой логике не было столбца date – возвращали status False.
+        # Сейчас столбец всегда есть, поэтому просто смотрим на наличие строк.
+        if not rows:
             return {
-                'status': False,
-                'note': 'Нет данных'
+                "status": True,
+                "total": 0,
+                "by_category": {},
+                "count": 0,
             }
-        
-        # Фильтруем по дате
-        day_data = expenses_df[expenses_df['date'] == date]
-        
-        
-        # Если данных нет, возвращаем пустой результат
-        if day_data.empty:
-            return {
-                'status': True,
-                'total': 0,
-                'by_category': {},
-                'count': 0
-            }
-        
-        # Рассчитываем статистику
-        total = day_data['amount'].sum()
-        by_category = day_data.groupby('category')['amount'].sum().to_dict()
-        count = len(day_data)
-        
+
+        total = 0.0
+        by_category = {}
+        for r in rows:
+            amt = float(r["amount"])
+            cat = r["category"]
+            total += amt
+            by_category[cat] = by_category.get(cat, 0.0) + amt
+
         return {
-            'status': True,
-            'total': total,
-            'by_category': by_category,
-            'count': count
+            "status": True,
+            "total": total,
+            "by_category": by_category,
+            "count": len(rows),
         }
+
+    try:
+        return db.run_async(_do())
     except Exception as e:
-        print(f"Error getting daily statistics: {e}")
+        print(f"Error getting daily statistics from DB: {e}")
         return None

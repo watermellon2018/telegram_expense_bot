@@ -34,23 +34,25 @@ def export_excel_command(update: Update, context: CallbackContext) -> None:
             )
             return
     
-    # Получаем путь к Excel файлу
-    excel_path = excel.get_excel_path(user_id, year, project_id)
-    
-    # Проверяем, существует ли файл
-    if not os.path.exists(excel_path):
+    # Берём данные из БД и формируем временный Excel "на лету"
+    expenses_df = excel.get_all_expenses(user_id, year, project_id)
+
+    if expenses_df is None or expenses_df.empty:
         if year:
             update.message.reply_text(f"❌ Нет данных за {year} год.")
         else:
             update.message.reply_text("❌ У вас пока нет данных о расходах.")
         return
-    
+
     try:
-        # Создаем временную копию файла для отправки
+        # Создаем временный Excel файл
         with tempfile.NamedTemporaryFile(delete=False, suffix='.xlsx') as tmp_file:
-            shutil.copy2(excel_path, tmp_file.name)
             tmp_path = tmp_file.name
-        
+
+        # Записываем данные в Excel
+        with pd.ExcelWriter(tmp_path, engine='openpyxl') as writer:
+            expenses_df.to_excel(writer, sheet_name='Expenses', index=False)
+
         # Отправляем файл
         with open(tmp_path, 'rb') as file:
             year_text = f" за {year} год" if year else ""

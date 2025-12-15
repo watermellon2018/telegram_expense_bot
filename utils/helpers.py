@@ -119,25 +119,36 @@ def format_budget_status(user_id, month=None, year=None):
         month = datetime.datetime.now().month
     if year is None:
         year = datetime.datetime.now().year
-    
-    excel_path = excel.get_excel_path(user_id, year)
-    
-    # Проверяем, существует ли файл
-    if not excel.os.path.exists(excel_path):
+
+    # Теперь бюджет храним в Postgres.
+    # Используем ту же семантику: если строки нет или budget == 0 -> "не установлен".
+    async def _do():
+        from utils import db
+
+        row = await db.fetchrow(
+            """
+            SELECT budget, actual
+            FROM budget
+            WHERE user_id = $1
+              AND project_id IS NULL
+              AND month = $2
+            """,
+            str(user_id),
+            month,
+        )
+        return row
+
+    try:
+        row = excel.db.run_async(_do())
+    except Exception as e:
+        print(f"Ошибка при получении статуса бюджета из БД: {e}")
+        row = None
+
+    if not row or float(row["budget"]) == 0:
         return f"Бюджет на {get_month_name(month)} {year} года не установлен."
-    
-    # Загружаем данные
-    import pandas as pd
-    budget_df = pd.read_excel(excel_path, sheet_name='Budget')
-    
-    # Получаем данные о бюджете
-    month_budget = budget_df[budget_df['month'] == month]
-    
-    if month_budget.empty or month_budget['budget'].values[0] == 0:
-        return f"Бюджет на {get_month_name(month)} {year} года не установлен."
-    
-    budget = month_budget['budget'].values[0]
-    actual = month_budget['actual'].values[0]
+
+    budget = float(row["budget"])
+    actual = float(row["actual"])
     
     # Рассчитываем процент использования бюджета
     if budget > 0:
