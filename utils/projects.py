@@ -1,58 +1,40 @@
 """
 Утилиты для работы с проектами
+Теперь все данные хранятся в Postgres вместо Excel.
+
+Требования к схеме БД:
+- Таблица projects: project_id, user_id, project_name, created_date, is_active
+- Таблица users должна иметь колонку active_project_id (INTEGER, может быть NULL)
+  Если колонки нет, выполните: ALTER TABLE users ADD COLUMN active_project_id INTEGER;
 """
 
 import os
-import pandas as pd
 import datetime
 import shutil
+import pandas as pd
 import config
-
-def get_projects_file_path(user_id):
-    """
-    Возвращает путь к файлу с проектами пользователя
-    """
-    from utils.excel import create_user_dir
-    user_dir = create_user_dir(user_id)
-    return os.path.join(user_dir, "projects.xlsx")
-
-def create_projects_file(user_id):
-    """
-    Создает файл с проектами, если он не существует
-    """
-    projects_path = get_projects_file_path(user_id)
-    
-    if not os.path.exists(projects_path):
-        # Создаем DataFrame для проектов
-        projects_df = pd.DataFrame(columns=[
-            'project_id', 'project_name', 'created_date', 'is_active'
-        ])
-        
-        # Создаем DataFrame для активного проекта
-        active_project_df = pd.DataFrame({
-            'active_project_id': [None]
-        })
-        
-        # Сохраняем в Excel
-        with pd.ExcelWriter(projects_path, engine='openpyxl') as writer:
-            projects_df.to_excel(writer, sheet_name='Projects', index=False)
-            active_project_df.to_excel(writer, sheet_name='ActiveProject', index=False)
-    
-    return projects_path
+from . import db
 
 def get_next_project_id(user_id):
     """
     Возвращает следующий доступный ID проекта
     """
-    projects_path = create_projects_file(user_id)
+    async def _do():
+        # Убедимся, что пользователь существует
+        await db.execute(
+            "INSERT INTO users(user_id) VALUES($1) ON CONFLICT (user_id) DO NOTHING",
+            str(user_id),
+        )
+        
+        # Получаем максимальный project_id для этого пользователя
+        row = await db.fetchrow(
+            "SELECT COALESCE(MAX(project_id), 0) as max_id FROM projects WHERE user_id = $1",
+            str(user_id),
+        )
+        return (row['max_id'] or 0) + 1
     
     try:
-        projects_df = pd.read_excel(projects_path, sheet_name='Projects', engine='openpyxl')
-        
-        if projects_df.empty:
-            return 1
-        
-        return int(projects_df['project_id'].max()) + 1
+        return db.run_async(_do())
     except Exception as e:
         print(f"Ошибка при получении следующего ID проекта: {e}")
         return 1
@@ -61,44 +43,51 @@ def create_project(user_id, project_name):
     """
     Создает новый проект
     """
-    projects_path = create_projects_file(user_id)
-    
-    try:
-        # Читаем текущие данные
-        projects_df = pd.read_excel(projects_path, sheet_name='Projects', engine='openpyxl')
-        active_project_df = pd.read_excel(projects_path, sheet_name='ActiveProject', engine='openpyxl')
+    async def _do():
+        # Убедимся, что пользователь существует
+        await db.execute(
+            "INSERT INTO users(user_id) VALUES($1) ON CONFLICT (user_id) DO NOTHING",
+            str(user_id),
+        )
         
         # Проверяем, существует ли проект с таким именем
-        if not projects_df.empty and project_name.lower() in projects_df['project_name'].str.lower().values:
+        existing = await db.fetchrow(
+            "SELECT project_id FROM projects WHERE user_id = $1 AND LOWER(project_name) = LOWER($2) AND is_active = TRUE",
+            str(user_id),
+            project_name,
+        )
+        
+        if existing:
             return {
                 'success': False,
                 'message': f"Проект '{project_name}' уже существует"
             }
         
         # Получаем следующий ID
-        project_id = get_next_project_id(user_id)
+        row = await db.fetchrow(
+            "SELECT COALESCE(MAX(project_id), 0) as max_id FROM projects WHERE user_id = $1",
+            str(user_id),
+        )
+        project_id = (row['max_id'] or 0) + 1
         
         # Создаем новую запись
-        new_project = pd.DataFrame({
-            'project_id': [project_id],
-            'project_name': [project_name],
-            'created_date': [datetime.datetime.now().strftime('%Y-%m-%d')],
-            'is_active': [True]
-        })
+        created_date = datetime.datetime.now().date()
+        await db.execute(
+            """INSERT INTO projects(project_id, user_id, project_name, created_date, is_active)
+               VALUES($1, $2, $3, $4, $5)""",
+            project_id,
+            str(user_id),
+            project_name,
+            created_date,
+            True,
+        )
         
-        projects_df = pd.concat([projects_df, new_project], ignore_index=True)
-        
-        # Создаем директорию для проекта
+        # Создаем директорию для проекта (для совместимости со старым кодом)
         from utils.excel import create_user_dir
         user_dir = create_user_dir(user_id)
         project_dir = os.path.join(user_dir, "projects", str(project_id))
         if not os.path.exists(project_dir):
             os.makedirs(project_dir)
-        
-        # Сохраняем изменения
-        with pd.ExcelWriter(projects_path, engine='openpyxl') as writer:
-            projects_df.to_excel(writer, sheet_name='Projects', index=False)
-            active_project_df.to_excel(writer, sheet_name='ActiveProject', index=False)
         
         return {
             'success': True,
@@ -106,6 +95,9 @@ def create_project(user_id, project_name):
             'project_name': project_name,
             'message': f"Проект '{project_name}' создан"
         }
+    
+    try:
+        return db.run_async(_do())
     except Exception as e:
         print(f"Ошибка при создании проекта: {e}")
         return {
@@ -117,18 +109,31 @@ def get_all_projects(user_id):
     """
     Возвращает список всех проектов пользователя
     """
-    projects_path = create_projects_file(user_id)
-    
-    try:
-        projects_df = pd.read_excel(projects_path, sheet_name='Projects', engine='openpyxl')
+    async def _do():
+        rows = await db.fetch(
+            """SELECT project_id, project_name, created_date, is_active
+               FROM projects
+               WHERE user_id = $1 AND is_active = TRUE
+               ORDER BY project_id""",
+            str(user_id),
+        )
         
-        # Фильтруем только активные проекты
-        active_projects = projects_df[projects_df['is_active'] == True]
-        
-        if active_projects.empty:
+        if not rows:
             return []
         
-        return active_projects.to_dict('records')
+        # Конвертируем в список словарей
+        result = []
+        for row in rows:
+            result.append({
+                'project_id': row['project_id'],
+                'project_name': row['project_name'],
+                'created_date': row['created_date'].strftime('%Y-%m-%d') if row['created_date'] else None,
+                'is_active': row['is_active'],
+            })
+        return result
+    
+    try:
+        return db.run_async(_do())
     except Exception as e:
         print(f"Ошибка при получении списка проектов: {e}")
         return []
@@ -137,20 +142,27 @@ def get_project_by_id(user_id, project_id):
     """
     Возвращает проект по ID
     """
-    projects_path = create_projects_file(user_id)
-    
-    try:
-        projects_df = pd.read_excel(projects_path, sheet_name='Projects', engine='openpyxl')
+    async def _do():
+        row = await db.fetchrow(
+            """SELECT project_id, project_name, created_date, is_active
+               FROM projects
+               WHERE user_id = $1 AND project_id = $2 AND is_active = TRUE""",
+            str(user_id),
+            project_id,
+        )
         
-        project = projects_df[
-            (projects_df['project_id'] == project_id) & 
-            (projects_df['is_active'] == True)
-        ]
-        
-        if project.empty:
+        if not row:
             return None
         
-        return project.iloc[0].to_dict()
+        return {
+            'project_id': row['project_id'],
+            'project_name': row['project_name'],
+            'created_date': row['created_date'].strftime('%Y-%m-%d') if row['created_date'] else None,
+            'is_active': row['is_active'],
+        }
+    
+    try:
+        return db.run_async(_do())
     except Exception as e:
         print(f"Ошибка при получении проекта по ID: {e}")
         return None
@@ -159,20 +171,27 @@ def get_project_by_name(user_id, project_name):
     """
     Возвращает проект по имени
     """
-    projects_path = create_projects_file(user_id)
-    
-    try:
-        projects_df = pd.read_excel(projects_path, sheet_name='Projects', engine='openpyxl')
+    async def _do():
+        row = await db.fetchrow(
+            """SELECT project_id, project_name, created_date, is_active
+               FROM projects
+               WHERE user_id = $1 AND LOWER(project_name) = LOWER($2) AND is_active = TRUE""",
+            str(user_id),
+            project_name,
+        )
         
-        project = projects_df[
-            (projects_df['project_name'].str.lower() == project_name.lower()) & 
-            (projects_df['is_active'] == True)
-        ]
-        
-        if project.empty:
+        if not row:
             return None
         
-        return project.iloc[0].to_dict()
+        return {
+            'project_id': row['project_id'],
+            'project_name': row['project_name'],
+            'created_date': row['created_date'].strftime('%Y-%m-%d') if row['created_date'] else None,
+            'is_active': row['is_active'],
+        }
+    
+    try:
+        return db.run_async(_do())
     except Exception as e:
         print(f"Ошибка при получении проекта по имени: {e}")
         return None
@@ -181,31 +200,35 @@ def delete_project(user_id, project_id):
     """
     Удаляет проект (помечает как неактивный и удаляет файлы)
     """
-    projects_path = create_projects_file(user_id)
-    
-    try:
-        # Читаем текущие данные
-        projects_df = pd.read_excel(projects_path, sheet_name='Projects', engine='openpyxl')
-        active_project_df = pd.read_excel(projects_path, sheet_name='ActiveProject', engine='openpyxl')
-        
+    async def _do():
         # Проверяем, существует ли проект
-        project = projects_df[projects_df['project_id'] == project_id]
+        project = await db.fetchrow(
+            "SELECT project_name FROM projects WHERE user_id = $1 AND project_id = $2",
+            str(user_id),
+            project_id,
+        )
         
-        if project.empty:
+        if not project:
             return {
                 'success': False,
                 'message': "Проект не найден"
             }
         
-        project_name = project.iloc[0]['project_name']
+        project_name = project['project_name']
         
         # Помечаем проект как неактивный
-        projects_df.loc[projects_df['project_id'] == project_id, 'is_active'] = False
+        await db.execute(
+            "UPDATE projects SET is_active = FALSE WHERE user_id = $1 AND project_id = $2",
+            str(user_id),
+            project_id,
+        )
         
         # Если удаляемый проект был активным, сбрасываем активный проект
-        current_active = active_project_df.iloc[0]['active_project_id']
-        if pd.notna(current_active) and int(current_active) == project_id:
-            active_project_df.loc[0, 'active_project_id'] = None
+        await db.execute(
+            "UPDATE users SET active_project_id = NULL WHERE user_id = $1 AND active_project_id = $2",
+            str(user_id),
+            project_id,
+        )
         
         # Удаляем директорию проекта
         from utils.excel import create_user_dir
@@ -214,15 +237,13 @@ def delete_project(user_id, project_id):
         if os.path.exists(project_dir):
             shutil.rmtree(project_dir)
         
-        # Сохраняем изменения
-        with pd.ExcelWriter(projects_path, engine='openpyxl') as writer:
-            projects_df.to_excel(writer, sheet_name='Projects', index=False)
-            active_project_df.to_excel(writer, sheet_name='ActiveProject', index=False)
-        
         return {
             'success': True,
             'message': f"Проект '{project_name}' удален"
         }
+    
+    try:
+        return db.run_async(_do())
     except Exception as e:
         print(f"Ошибка при удалении проекта: {e}")
         return {
@@ -234,21 +255,19 @@ def set_active_project(user_id, project_id):
     """
     Устанавливает активный проект
     """
-    projects_path = create_projects_file(user_id)
-    
-    try:
-        # Читаем текущие данные
-        projects_df = pd.read_excel(projects_path, sheet_name='Projects', engine='openpyxl')
-        active_project_df = pd.read_excel(projects_path, sheet_name='ActiveProject', engine='openpyxl')
+    async def _do():
+        # Убедимся, что пользователь существует
+        await db.execute(
+            "INSERT INTO users(user_id) VALUES($1) ON CONFLICT (user_id) DO NOTHING",
+            str(user_id),
+        )
         
         # Если project_id is None, переключаемся на общие расходы
         if project_id is None:
-            active_project_df.loc[0, 'active_project_id'] = None
-            
-            # Сохраняем изменения
-            with pd.ExcelWriter(projects_path, engine='openpyxl') as writer:
-                projects_df.to_excel(writer, sheet_name='Projects', index=False)
-                active_project_df.to_excel(writer, sheet_name='ActiveProject', index=False)
+            await db.execute(
+                "UPDATE users SET active_project_id = NULL WHERE user_id = $1",
+                str(user_id),
+            )
             
             return {
                 'success': True,
@@ -258,26 +277,26 @@ def set_active_project(user_id, project_id):
             }
         
         # Проверяем, существует ли проект
-        project = projects_df[
-            (projects_df['project_id'] == project_id) & 
-            (projects_df['is_active'] == True)
-        ]
+        project = await db.fetchrow(
+            "SELECT project_name FROM projects WHERE user_id = $1 AND project_id = $2 AND is_active = TRUE",
+            str(user_id),
+            project_id,
+        )
         
-        if project.empty:
+        if not project:
             return {
                 'success': False,
                 'message': "Проект не найден"
             }
         
-        project_name = project.iloc[0]['project_name']
+        project_name = project['project_name']
         
         # Устанавливаем активный проект
-        active_project_df.loc[0, 'active_project_id'] = project_id
-        
-        # Сохраняем изменения
-        with pd.ExcelWriter(projects_path, engine='openpyxl') as writer:
-            projects_df.to_excel(writer, sheet_name='Projects', index=False)
-            active_project_df.to_excel(writer, sheet_name='ActiveProject', index=False)
+        await db.execute(
+            "UPDATE users SET active_project_id = $2 WHERE user_id = $1",
+            str(user_id),
+            project_id,
+        )
         
         return {
             'success': True,
@@ -285,6 +304,9 @@ def set_active_project(user_id, project_id):
             'project_name': project_name,
             'message': f"Переключено на проект '{project_name}'"
         }
+    
+    try:
+        return db.run_async(_do())
     except Exception as e:
         print(f"Ошибка при установке активного проекта: {e}")
         return {
@@ -296,19 +318,40 @@ def get_active_project(user_id):
     """
     Возвращает информацию об активном проекте
     """
-    projects_path = create_projects_file(user_id)
-    
-    try:
-        active_project_df = pd.read_excel(projects_path, sheet_name='ActiveProject', engine='openpyxl')
+    async def _do():
+        # Получаем active_project_id из users
+        user_row = await db.fetchrow(
+            "SELECT active_project_id FROM users WHERE user_id = $1",
+            str(user_id),
+        )
         
-        active_project_id = active_project_df.iloc[0]['active_project_id']
-        
-        # Если активный проект не установлен, возвращаем None
-        if pd.isna(active_project_id):
+        # Если пользователя нет или active_project_id не установлен
+        if not user_row or user_row['active_project_id'] is None:
             return None
         
+        active_project_id = user_row['active_project_id']
+        
         # Получаем информацию о проекте
-        return get_project_by_id(user_id, int(active_project_id))
+        project = await db.fetchrow(
+            """SELECT project_id, project_name, created_date, is_active
+               FROM projects
+               WHERE user_id = $1 AND project_id = $2 AND is_active = TRUE""",
+            str(user_id),
+            active_project_id,
+        )
+        
+        if not project:
+            return None
+        
+        return {
+            'project_id': project['project_id'],
+            'project_name': project['project_name'],
+            'created_date': project['created_date'].strftime('%Y-%m-%d') if project['created_date'] else None,
+            'is_active': project['is_active'],
+        }
+    
+    try:
+        return db.run_async(_do())
     except Exception as e:
         print(f"Ошибка при получении активного проекта: {e}")
         return None
@@ -332,9 +375,15 @@ def get_project_stats(user_id, project_id, year=None):
                 'by_category': {}
             }
         
-        total = expenses_df['amount'].sum()
+        # Конвертируем amount в numeric, если необходимо
+        if 'amount' in expenses_df.columns:
+            expenses_df['amount'] = pd.to_numeric(expenses_df['amount'], errors='coerce')
+        
+        total = float(expenses_df['amount'].sum())
         count = len(expenses_df)
         by_category = expenses_df.groupby('category')['amount'].sum().to_dict()
+        # Конвертируем значения в float
+        by_category = {k: float(v) for k, v in by_category.items()}
         
         return {
             'total': total,
