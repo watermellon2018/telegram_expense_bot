@@ -28,6 +28,8 @@ def text_handler(update: Update, context: CallbackContext) -> None:
 
         # Получаем активный проект
         project_id = context.user_data.get('active_project_id')
+        print('project_id:', project_id)
+        print('user_id', user_id)
         
         # Добавляем расход
         excel.add_expense(

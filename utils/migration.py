@@ -6,7 +6,9 @@ from pathlib import Path
 from urllib.parse import quote_plus
 from datetime import datetime, date, time
 
+from dotenv import load_dotenv
 
+load_dotenv()
 
 # --- Настройки подключения ---
 DB_HOST = os.environ.get("DB_HOST", "postgres_server")
@@ -14,7 +16,7 @@ DB_PORT = os.environ.get("DB_PORT", "5432")
 DB_NAME = os.environ.get("DB_NAME", "botdb")
 DB_USER = os.environ.get("DB_USER", "bot_user")
 DB_PASSWORD = os.environ.get("DB_PASSWORD")
-USERS_FOLDER = os.environ.get("USERS_FOLDER", "users")
+USERS_FOLDER = os.environ.get("USER_FOLDER_FOR_MIGRATION", "users")
 
 DATABASE_URL = f"postgresql://{DB_USER}:{quote_plus(DB_PASSWORD)}@{DB_HOST}:{DB_PORT}/{DB_NAME}"
 USERS_FOLDER = os.path.expanduser(USERS_FOLDER)
@@ -85,7 +87,9 @@ async def migrate_user(conn, user_folder: Path):
         for row in df_budget.to_dict(orient="records"):
             await conn.execute(
                 """INSERT INTO budget(user_id, project_id, month, budget, actual)
-                   VALUES($1, NULL, $2, $3, $4)""",
+                   VALUES($1, NULL, $2, $3, $4)
+                   ON CONFLICT (user_id, project_id, month) 
+                   DO UPDATE SET budget = EXCLUDED.budget, actual = EXCLUDED.actual""",
                 user_id,
                 row["month"],
                 row["budget"],
@@ -140,7 +144,9 @@ async def migrate_user(conn, user_folder: Path):
                 for r in df_budget_proj.to_dict(orient="records"):
                     await conn.execute(
                         """INSERT INTO budget(user_id, project_id, month, budget, actual)
-                           VALUES($1, $2, $3, $4, $5)""",
+                           VALUES($1, $2, $3, $4, $5)
+                           ON CONFLICT (user_id, project_id, month) 
+                           DO UPDATE SET budget = EXCLUDED.budget, actual = EXCLUDED.actual""",
                         user_id,
                         project_id,
                         r["month"],
@@ -151,6 +157,27 @@ async def migrate_user(conn, user_folder: Path):
 # --- Основная функция ---
 async def main():
     conn = await asyncpg.connect(DATABASE_URL)
+    
+    # Создаем уникальное ограничение для budget, если его еще нет
+    try:
+        await conn.execute("""
+            DO $$
+            BEGIN
+                IF NOT EXISTS (
+                    SELECT 1 FROM pg_constraint 
+                    WHERE conname = 'budget_unique_user_project_month'
+                ) THEN
+                    ALTER TABLE budget
+                    ADD CONSTRAINT budget_unique_user_project_month
+                    UNIQUE (user_id, project_id, month);
+                END IF;
+            END $$;
+        """)
+        print("Budget constraint checked/created successfully")
+    except Exception as e:
+        print(f"Warning: Could not create budget constraint: {e}")
+        print("Continuing migration anyway...")
+    
     users_path = Path(USERS_FOLDER)
     
     for user_folder in users_path.iterdir():
