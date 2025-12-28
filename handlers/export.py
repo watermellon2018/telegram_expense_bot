@@ -43,6 +43,10 @@ def export_excel_command(update: Update, context: CallbackContext) -> None:
         else:
             update.message.reply_text("❌ У вас пока нет данных о расходах.")
         return
+    
+    # Конвертируем amount в numeric, если это необходимо
+    if 'amount' in expenses_df.columns:
+        expenses_df['amount'] = pd.to_numeric(expenses_df['amount'], errors='coerce')
 
     try:
         # Создаем временный Excel файл
@@ -140,6 +144,10 @@ def export_stats_command(update: Update, context: CallbackContext) -> None:
         else:
             update.message.reply_text("❌ У вас пока нет данных о расходах.")
         return
+    
+    # Конвертируем amount в numeric, если это необходимо
+    if 'amount' in expenses_df.columns:
+        expenses_df['amount'] = pd.to_numeric(expenses_df['amount'], errors='coerce')
     
     # Фильтруем по месяцу, если указан
     if month:
