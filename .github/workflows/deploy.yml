@@ -36,9 +36,10 @@ jobs:
         uses: docker/build-push-action@v5
         with:
           context: .
-          file: Dockerfile
-          tags: ghcr.io/watermellon2018/money_bot:$${tags.tag}
           push: true
+          tags: |
+            ghcr.io/${{ github.repository_owner }}/money_bot:${{ steps.tags.outputs.tag }}
+            ghcr.io/${{ github.repository_owner }}/money_bot:latest
 
       - name: Set environment file
         run: |
