@@ -1,5 +1,7 @@
 services:
   bot:
+    image: ghcr.io/watermellon2018/money_bot:v1.0
+    container_name: money_bot
     build: .
     restart: always
     env_file:
