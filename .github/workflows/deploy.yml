@@ -29,7 +29,7 @@ jobs:
         run: |
           SHORT_SHA=$(git rev-parse --short HEAD)
           TIMESTAMP=$(date +%Y%m%d-%H%M%S)
-          echo "tag=$$ {TIMESTAMP}- $${SHORT_SHA}" >> $GITHUB_OUTPUT
+          echo "tag=${TIMESTAMP}-${SHORT_SHA}" >> $GITHUB_OUTPUT
 
 
       - name: Build and push Docker image
