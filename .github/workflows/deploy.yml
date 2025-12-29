@@ -1,9 +1,14 @@
 name: Deploy to Local Server
 
+permissions:
+  contents: read
+  packages: write  # ← это даёт GITHUB_TOKEN права на write в packages
+  
 on:
   push:
     branches:
       - master  # измени при необходимости
+    workflow_dispatch:
 
 jobs:
   deploy:
@@ -12,6 +17,33 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Generate unique tag
+        id: tags
+        run: |
+          SHORT_SHA=$(git rev-parse --short HEAD)
+          TIMESTAMP=$(date +%Y%m%d-%H%M%S)
+          echo "tag=${TIMESTAMP}-${SHORT_SHA}" >> $GITHUB_OUTPUT
+
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: true
+          tags: |
+            ghcr.io/${{ github.repository_owner }}/money_bot:${{ steps.tags.outputs.tag }}
+            ghcr.io/${{ github.repository_owner }}/money_bot:latest
 
       - name: Set environment file
         run: |
@@ -23,7 +55,101 @@ jobs:
           echo "DB_PASSWORD=${{ secrets.DB_PASSWORD }}" >> .env
           echo "USERS_FOLDER=/app/data/users" >> .env
 
-      - name: Build and restart container
+      - name: Save current version for rollback
+        id: save_current
         run: |
-          docker compose down
-          docker compose up -d --build
+          CURRENT_IMAGE=$(docker inspect money_bot --format='{{.Config.Image}}' 2>/dev/null || echo "")
+          if [ -n "$CURRENT_IMAGE" ]; then
+            echo "current_image=${CURRENT_IMAGE}" >> $GITHUB_OUTPUT
+            echo "Previous version: ${CURRENT_IMAGE}"
+          else
+            echo "current_image=" >> $GITHUB_OUTPUT
+            echo "No previous version found"
+          fi
+
+      - name: Deploy new version
+        id: deploy
+        run: |
+          export BOT_TAG=${{ steps.tags.outputs.tag }}
+          docker compose pull money_bot
+          docker compose up -d --no-deps money_bot
+          echo "deployed=true" >> $GITHUB_OUTPUT
+
+      - name: Wait for health check
+        run: |
+          echo "Waiting for container to be healthy..."
+          timeout=120
+          elapsed=0
+          while [ $elapsed -lt $timeout ]; do
+            if docker inspect money_bot --format='{{.State.Health.Status}}' 2>/dev/null | grep -q "healthy"; then
+              echo "Container is healthy!"
+              exit 0
+            fi
+            sleep 5
+            elapsed=$((elapsed + 5))
+            echo "Waiting... (${elapsed}s/${timeout}s)"
+          done
+          echo "Health check timeout!"
+          exit 1
+
+      - name: Verify deployment
+        run: |
+          # Check if container is running
+          if ! docker ps | grep -q money_bot; then
+            echo "Container is not running!"
+            echo "Container logs:"
+            docker logs money_bot --tail 50 || true
+            exit 1
+          fi
+          
+          # Check container status
+          STATUS=$(docker inspect money_bot --format='{{.State.Status}}')
+          if [ "$STATUS" != "running" ]; then
+            echo "Container status is: $STATUS (expected: running)"
+            echo "Container logs:"
+            docker logs money_bot --tail 50 || true
+            exit 1
+          fi
+          
+          # Check for errors in logs (last 20 lines)
+          echo "Checking recent logs for errors..."
+          docker logs money_bot --tail 20
+          
+          # Check exit code
+          EXIT_CODE=$(docker inspect money_bot --format='{{.State.ExitCode}}')
+          if [ "$EXIT_CODE" != "0" ] && [ "$EXIT_CODE" != "<no value>" ]; then
+            echo "Warning: Container exit code is $EXIT_CODE"
+          fi
+          
+          echo "Deployment verified successfully!"
+
+      - name: Rollback on failure
+        if: failure()
+        run: |
+          PREVIOUS_IMAGE="${{ steps.save_current.outputs.current_image }}"
+          if [ -z "$PREVIOUS_IMAGE" ]; then
+            echo "No previous version to rollback to. Stopping container."
+            docker compose stop money_bot || true
+            exit 1
+          fi
+          
+          echo "Rolling back to previous version: ${PREVIOUS_IMAGE}"
+          
+          # Update docker-compose to use previous image
+          sed -i "s|image:.*|image: ${PREVIOUS_IMAGE}|" docker-compose.yml
+          
+          # Pull and start previous version
+          docker compose pull money_bot
+          docker compose up -d --no-deps money_bot
+          
+          echo "Rollback completed to: ${PREVIOUS_IMAGE}"
+          
+          # Wait a bit and verify rollback
+          sleep 10
+          if docker ps | grep -q money_bot; then
+            echo "Rollback verified - container is running"
+          else
+            echo "Rollback failed - container is not running"
+            exit 1
+          fi
+
