@@ -28,20 +28,20 @@ async def export_excel_command(update: Update, context: ContextTypes.DEFAULT_TYP
         try:
             year = int(context.args[0])
         except ValueError:
-            update.message.reply_text(
+            await update.message.reply_text(
                 "❌ Неверный формат года. Используйте: /export [год]\n"
                 "Например: /export 2024"
             )
             return
     
     # Берём данные из БД и формируем временный Excel "на лету"
-    expenses_df = excel.get_all_expenses(user_id, year, project_id)
+    expenses_df = await excel.get_all_expenses(user_id, year, project_id)
 
     if expenses_df is None or expenses_df.empty:
         if year:
-            update.message.reply_text(f"❌ Нет данных за {year} год.")
+            await update.message.reply_text(f"❌ Нет данных за {year} год.")
         else:
-            update.message.reply_text("❌ У вас пока нет данных о расходах.")
+            await update.message.reply_text("❌ У вас пока нет данных о расходах.")
         return
     
     # Конвертируем amount в numeric, если это необходимо
@@ -64,7 +64,7 @@ async def export_excel_command(update: Update, context: ContextTypes.DEFAULT_TYP
             # Добавляем информацию о проекте
             if project_id is not None:
                 from utils import projects
-                project = projects.get_project_by_id(user_id, project_id)
+                project = await projects.get_project_by_id(user_id, project_id)
                 if project:
                     caption = f"📁 Проект: {project['project_name']}\n📊 Расходы{year_text}\n\nФайл содержит все записи о расходах проекта."
                 else:
@@ -72,7 +72,7 @@ async def export_excel_command(update: Update, context: ContextTypes.DEFAULT_TYP
             else:
                 caption = f"📊 Общие расходы{year_text}\n\nФайл содержит все ваши записи о расходах с детальной статистикой."
             
-            update.message.reply_document(
+            await update.message.reply_document(
                 document=file,
                 filename=f"expenses{year_text}.xlsx",
                 caption=caption
@@ -82,7 +82,7 @@ async def export_excel_command(update: Update, context: ContextTypes.DEFAULT_TYP
         os.unlink(tmp_path)
         
     except Exception as e:
-        update.message.reply_text(f"❌ Ошибка при отправке файла: {str(e)}")
+        await update.message.reply_text(f"❌ Ошибка при отправке файла: {str(e)}")
         # Очищаем временный файл в случае ошибки
         if 'tmp_path' in locals():
             try:
@@ -107,7 +107,7 @@ async def export_stats_command(update: Update, context: ContextTypes.DEFAULT_TYP
         try:
             year = int(context.args[0])
         except ValueError:
-            update.message.reply_text(
+            await update.message.reply_text(
                 "❌ Неверный формат года. Используйте: /export_stats [год] [месяц]\n"
                 "Например: /export_stats 2024 или /export_stats 2024 июнь"
             )
@@ -120,7 +120,7 @@ async def export_stats_command(update: Update, context: ContextTypes.DEFAULT_TYP
         try:
             month = int(month_arg)
             if month < 1 or month > 12:
-                update.message.reply_text("❌ Месяц должен быть от 1 до 12.")
+                await update.message.reply_text("❌ Месяц должен быть от 1 до 12.")
                 return
         except ValueError:
             # Если не число, пытаемся найти в словаре названий
@@ -128,7 +128,7 @@ async def export_stats_command(update: Update, context: ContextTypes.DEFAULT_TYP
                 month = config.MONTH_NAMES[month_arg]
             else:
                 available_months = ", ".join([f"{num} ({name})" for name, num in config.MONTH_NAMES.items() if len(name) > 3 or name=='май'])
-                update.message.reply_text(
+                await update.message.reply_text(
                     f"❌ Неизвестный месяц '{month_arg}'.\n"
                     f"Доступные варианты: {available_months}\n"
                     f"Или используйте числа от 1 до 12."
@@ -136,13 +136,13 @@ async def export_stats_command(update: Update, context: ContextTypes.DEFAULT_TYP
                 return
     
     # Получаем все данные
-    expenses_df = excel.get_all_expenses(user_id, year)
+    expenses_df = await excel.get_all_expenses(user_id, year)
     
     if expenses_df is None or expenses_df.empty:
         if year:
-            update.message.reply_text(f"❌ Нет данных за {year} год.")
+            await update.message.reply_text(f"❌ Нет данных за {year} год.")
         else:
-            update.message.reply_text("❌ У вас пока нет данных о расходах.")
+            await update.message.reply_text("❌ У вас пока нет данных о расходах.")
         return
     
     # Конвертируем amount в numeric, если это необходимо
@@ -154,7 +154,7 @@ async def export_stats_command(update: Update, context: ContextTypes.DEFAULT_TYP
         expenses_df = expenses_df[expenses_df['month'] == month]
         if expenses_df.empty:
             month_name = get_month_name(month)
-            update.message.reply_text(f"❌ Нет данных за {month_name} {year} года.")
+            await update.message.reply_text(f"❌ Нет данных за {month_name} {year} года.")
             return
     
     try:
@@ -215,7 +215,7 @@ async def export_stats_command(update: Update, context: ContextTypes.DEFAULT_TYP
                 filename = "expense_stats_all.xlsx"
                 caption = "📈 Статистика всех расходов\n\nФайл содержит детальную статистику ваших расходов."
             
-            update.message.reply_document(
+            await update.message.reply_document(
                 document=file,
                 filename=filename,
                 caption=caption
@@ -225,7 +225,7 @@ async def export_stats_command(update: Update, context: ContextTypes.DEFAULT_TYP
         os.unlink(tmp_path)
         
     except Exception as e:
-        update.message.reply_text(f"❌ Ошибка при создании статистики: {str(e)}")
+        await update.message.reply_text(f"❌ Ошибка при создании статистики: {str(e)}")
         # Очищаем временный файл в случае ошибки
         if 'tmp_path' in locals():
             try:

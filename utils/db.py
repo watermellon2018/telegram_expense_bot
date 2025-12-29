@@ -85,3 +85,24 @@ async def fetchrow(query: str, *args):
 async def fetchval(query: str, *args):
     async with get_connection() as conn:
         return await conn.fetchval(query, *args)
+
+
+def run_async(coro):
+    """
+    Вспомогательная функция для запуска асинхронного кода из синхронного.
+    Использует текущий цикл событий или создает новый.
+    """
+    try:
+        loop = asyncio.get_event_loop()
+    except RuntimeError:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+    
+    if loop.is_running():
+        # Если цикл уже запущен (как в случае с python-telegram-bot),
+        # мы не можем использовать loop.run_until_complete.
+        # В идеале весь код должен быть асинхронным.
+        # Но для временного решения используем создание задачи.
+        return asyncio.run_coroutine_threadsafe(coro, loop).result()
+    else:
+        return loop.run_until_complete(coro)

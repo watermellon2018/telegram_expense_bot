@@ -28,7 +28,7 @@ async def setup_monthly_reminder(update: Update, context: ContextTypes.DEFAULT_T
         "Мы работаем над добавлением автоматической отправки статистики в будущих обновлениях."
     )
     
-    update.message.reply_text(message)
+    await update.message.reply_text(message)
 
 async def remind_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """
@@ -56,7 +56,7 @@ async def remind_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         "Мы работаем над добавлением автоматической отправки статистики в будущих обновлениях."
     )
     
-    update.message.reply_text(message)
+    await update.message.reply_text(message)
 
 async def end_of_month_stats(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """
@@ -72,7 +72,7 @@ async def end_of_month_stats(update: Update, context: ContextTypes.DEFAULT_TYPE)
     month_name = helpers.get_month_name(month)
     
     # Получаем статистику расходов
-    expenses = excel.get_month_expenses(user_id, month, year)
+    expenses = await excel.get_month_expenses(user_id, month, year)
     
     # Формируем отчет
     report = (
@@ -81,7 +81,7 @@ async def end_of_month_stats(update: Update, context: ContextTypes.DEFAULT_TYPE)
     
     if not expenses or expenses['total'] == 0:
         report += f"В {month_name} {year} года расходов не было."
-        update.message.reply_text(report)
+        await update.message.reply_text(report)
         return
     
     # Добавляем общую статистику
@@ -105,17 +105,17 @@ async def end_of_month_stats(update: Update, context: ContextTypes.DEFAULT_TYPE)
         report += f"{emoji} {category}: {amount:.2f} ({percentage:.1f}%)\n"
     
     # Добавляем статус бюджета
-    budget_status = helpers.format_budget_status(user_id, month, year)
+    budget_status = await helpers.format_budget_status(user_id, month, year)
     report += f"\n{budget_status}"
     
     # Отправляем отчет
-    update.message.reply_text(report)
+    await update.message.reply_text(report)
     
     # Отправляем круговую диаграмму
-    chart_path = visualization.create_monthly_pie_chart(user_id, month, year)
+    chart_path = await visualization.create_monthly_pie_chart(user_id, month, year)
     if chart_path and os.path.exists(chart_path):
         with open(chart_path, 'rb') as photo:
-            update.message.reply_photo(photo=photo, caption="Распределение расходов по категориям")
+            await update.message.reply_photo(photo=photo, caption="Распределение расходов по категориям")
     
     # Отправляем сравнение с предыдущим месяцем, если возможно
     prev_month = month - 1
@@ -124,7 +124,7 @@ async def end_of_month_stats(update: Update, context: ContextTypes.DEFAULT_TYPE)
         prev_month = 12
         prev_year = year - 1
     
-    prev_expenses = excel.get_month_expenses(user_id, prev_month, prev_year)
+    prev_expenses = await excel.get_month_expenses(user_id, prev_month, prev_year)
     if prev_expenses and prev_expenses['total'] > 0:
         prev_month_name = helpers.get_month_name(prev_month)
         diff = expenses['total'] - prev_expenses['total']
@@ -139,7 +139,7 @@ async def end_of_month_stats(update: Update, context: ContextTypes.DEFAULT_TYPE)
         else:
             comparison += f"Уменьшение расходов: {diff:.2f} ({diff_percentage:.1f}%)"
         
-        update.message.reply_text(comparison)
+        await update.message.reply_text(comparison)
 
 def register_reminder_handlers(application):
     """

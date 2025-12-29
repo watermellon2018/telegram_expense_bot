@@ -13,7 +13,7 @@ import datetime
 from utils import excel
 import config
 
-def create_monthly_pie_chart(user_id, month=None, year=None, save_path=None, project_id=None):
+async def create_monthly_pie_chart(user_id, month=None, year=None, save_path=None, project_id=None):
     """
     Создает круговую диаграмму расходов по категориям за указанный месяц
     Если project_id указан, создает диаграмму для проекта
@@ -24,7 +24,7 @@ def create_monthly_pie_chart(user_id, month=None, year=None, save_path=None, pro
         year = datetime.datetime.now().year
     
     # Получаем данные о расходах
-    expenses = excel.get_month_expenses(user_id, month, year, project_id)
+    expenses = await excel.get_month_expenses(user_id, month, year, project_id)
     
     if not expenses or expenses['total'] == 0:
         return None
@@ -79,7 +79,7 @@ def create_monthly_pie_chart(user_id, month=None, year=None, save_path=None, pro
     
     return save_path
 
-def create_monthly_bar_chart(user_id, year=None, save_path=None):
+async def create_monthly_bar_chart(user_id, year=None, save_path=None):
     """
     Создает столбчатую диаграмму расходов по месяцам за указанный год
     """
@@ -87,7 +87,7 @@ def create_monthly_bar_chart(user_id, year=None, save_path=None):
         year = datetime.datetime.now().year
 
     # Получаем данные о расходах из БД через excel.get_all_expenses
-    expenses_df = excel.get_all_expenses(user_id, year)
+    expenses_df = await excel.get_all_expenses(user_id, year)
 
     if expenses_df is None or expenses_df.empty:
         return None
@@ -136,7 +136,7 @@ def create_monthly_bar_chart(user_id, year=None, save_path=None):
     
     return save_path
 
-def create_category_trend_chart(user_id, category, year=None, save_path=None):
+async def create_category_trend_chart(user_id, category, year=None, save_path=None):
     """
     Создает график тренда расходов по указанной категории за год
     """
@@ -144,7 +144,7 @@ def create_category_trend_chart(user_id, category, year=None, save_path=None):
         year = datetime.datetime.now().year
     
     # Получаем данные о расходах по категории
-    category_data = excel.get_category_expenses(user_id, category, year)
+    category_data = await excel.get_category_expenses(user_id, category, year)
     
     if not category_data or category_data['total'] == 0:
         return None
@@ -186,7 +186,7 @@ def create_category_trend_chart(user_id, category, year=None, save_path=None):
     
     return save_path
 
-def create_budget_comparison_chart(user_id, year=None, save_path=None):
+async def create_budget_comparison_chart(user_id, year=None, save_path=None):
     """
     Создает график сравнения бюджета и фактических расходов по месяцам
     """
@@ -194,9 +194,9 @@ def create_budget_comparison_chart(user_id, year=None, save_path=None):
         year = datetime.datetime.now().year
     
     # Получаем данные о бюджете из БД
-    async def _fetch_budget():
-        from utils import db
+    from utils import db
 
+    try:
         rows = await db.fetch(
             """
             SELECT month, budget, actual
@@ -208,12 +208,10 @@ def create_budget_comparison_chart(user_id, year=None, save_path=None):
             str(user_id),
         )
         if not rows:
-            return None
-        data = [dict(r) for r in rows]
-        return pd.DataFrame(data)
-
-    try:
-        budget_df = excel.db.run_async(_fetch_budget())
+            budget_df = None
+        else:
+            data = [dict(r) for r in rows]
+            budget_df = pd.DataFrame(data)
     except Exception as e:
         print(f"Ошибка при получении данных бюджета из БД: {e}")
         budget_df = None
@@ -266,7 +264,7 @@ def create_budget_comparison_chart(user_id, year=None, save_path=None):
     
     return save_path
 
-def create_category_distribution_chart(user_id, year=None, save_path=None):
+async def create_category_distribution_chart(user_id, year=None, save_path=None):
     """
     Создает горизонтальную столбчатую диаграмму распределения расходов по категориям за год
     """
@@ -274,7 +272,7 @@ def create_category_distribution_chart(user_id, year=None, save_path=None):
         year = datetime.datetime.now().year
     
     # Получаем данные о расходах из БД
-    expenses_df = excel.get_all_expenses(user_id, year)
+    expenses_df = await excel.get_all_expenses(user_id, year)
 
     if expenses_df is None or expenses_df.empty:
         return None

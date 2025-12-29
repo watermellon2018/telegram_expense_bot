@@ -32,7 +32,7 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         print('user_id', user_id)
         
         # Добавляем расход
-        excel.add_expense(
+        await excel.add_expense(
             user_id,
             expense_data['amount'],
             expense_data['category'],
@@ -55,7 +55,7 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         # Добавляем информацию о проекте
         if project_id is not None:
             from utils import projects
-            project = projects.get_project_by_id(user_id, project_id)
+            project = await projects.get_project_by_id(user_id, project_id)
             if project:
                 confirmation += f"\n📁 Проект: {project['project_name']}"
         else:
@@ -96,7 +96,7 @@ async def add_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
         project_id = context.user_data.get('active_project_id')
         
         # Добавляем расход
-        excel.add_expense(
+        await excel.add_expense(
             user_id,
             expense_data['amount'],
             expense_data['category'],
@@ -119,7 +119,7 @@ async def add_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
         # Добавляем информацию о проекте
         if project_id is not None:
             from utils import projects
-            project = projects.get_project_by_id(user_id, project_id)
+            project = await projects.get_project_by_id(user_id, project_id)
             if project:
                 confirmation += f"\n📁 Проект: {project['project_name']}"
         else:
@@ -237,7 +237,7 @@ async def handle_description(update: Update, context: ContextTypes.DEFAULT_TYPE)
         description = text
 
     # Добавляем расход
-    excel.add_expense(user_id, amount, category, description, project_id)
+    await excel.add_expense(user_id, amount, category, description, project_id)
 
     # Отправляем подтверждение
     category_emoji = config.DEFAULT_CATEGORIES[category]

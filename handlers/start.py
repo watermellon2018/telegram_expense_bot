@@ -25,6 +25,14 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     ]
     reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
     
+    # Инициализируем активный проект из БД
+    from utils import projects
+    active_project = await projects.get_active_project(user_id)
+    if active_project:
+        context.user_data['active_project_id'] = active_project['project_id']
+    else:
+        context.user_data['active_project_id'] = None
+
     # Отправляем приветственное сообщение
     message = (
         f"👋 Привет, {first_name}!\n\n"

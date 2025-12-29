@@ -9,13 +9,6 @@ from utils import excel
 def parse_add_command(text):
     """
     Парсит команду добавления расхода
-    Форматы:
-    - /add 100 продукты
-    - /add 100 продукты комментарий
-    - 100 продукты
-    - 100 продукты комментарий
-    
-    Возвращает словарь с полями amount, category, description или None, если парсинг не удался
     """
     # Удаляем команду /add, если она есть
     if text.startswith('/add '):
@@ -47,7 +40,7 @@ def format_month_expenses(expenses, month=None, year=None):
     if year is None:
         year = datetime.datetime.now().year
     
-    month_name = datetime.date(year, month, 1).strftime('%B')
+    month_name = get_month_name(month)
     
     if not expenses or expenses['total'] == 0:
         return f"В {month_name} {year} года расходов не было."
@@ -95,7 +88,7 @@ def format_category_expenses(category_data, category, year=None):
     
     # Выводим расходы по месяцам
     for month in range(1, 13):
-        month_name = datetime.date(year, month, 1).strftime('%B')
+        month_name = get_month_name(month)
         amount = category_data['by_month'].get(month, 0)
         report += f"{month_name}: {amount:.2f}\n"
     
@@ -111,7 +104,7 @@ def get_month_name(month):
     ]
     return months[month - 1]
 
-def format_budget_status(user_id, month=None, year=None):
+async def format_budget_status(user_id, month=None, year=None):
     """
     Форматирует статус бюджета на месяц
     """
@@ -120,11 +113,9 @@ def format_budget_status(user_id, month=None, year=None):
     if year is None:
         year = datetime.datetime.now().year
 
-    # Теперь бюджет храним в Postgres.
-    # Используем ту же семантику: если строки нет или budget == 0 -> "не установлен".
-    async def _do():
-        from utils import db
+    from utils import db
 
+    try:
         row = await db.fetchrow(
             """
             SELECT budget, actual
@@ -136,10 +127,6 @@ def format_budget_status(user_id, month=None, year=None):
             str(user_id),
             month,
         )
-        return row
-
-    try:
-        row = excel.db.run_async(_do())
     except Exception as e:
         print(f"Ошибка при получении статуса бюджета из БД: {e}")
         row = None
@@ -177,9 +164,6 @@ def format_day_expenses(expenses, date=None):
     if date is None:
         date = datetime.datetime.now().strftime('%Y-%m-%d')
     
-    if expenses['status'] == False:
-        return expenses['note']
-        
     if not expenses or expenses['total'] == 0:
         return f"Расходов за {date} не было."
     

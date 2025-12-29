@@ -7,20 +7,9 @@ import asyncio
 import logging
 import os
 
-# Патчим get_localzone ДО импорта Application, чтобы APScheduler использовал pytz timezone
-import pytz
-
-# Monkey-patch get_localzone чтобы возвращать pytz timezone
-# Это нужно для APScheduler, который требует pytz timezone на Windows
-def _patched_get_localzone():
-    return pytz.UTC
-
-# Патчим tzlocal.get_localzone
-try:
-    import tzlocal
-    tzlocal.get_localzone = _patched_get_localzone
-except ImportError:
-    pass
+# APScheduler и часовые пояса: в новых версиях рекомендуется использовать стандартный ZoneInfo или оставить по умолчанию.
+# Если возникают проблемы с pytz, лучше использовать UTC напрямую через datetime.timezone.utc.
+import datetime
 
 from telegram.ext import Application, JobQueue
 
@@ -47,18 +36,11 @@ async def main():
     logger.info("Пул соединений с БД инициализирован")
 
     try:
-        # Создаём JobQueue вручную с явным указанием pytz timezone
-        # Это нужно, потому что JobQueue создаётся автоматически при Application.builder()
-        # и пытается использовать системный timezone, который несовместим с pytz на Windows
-        job_queue = JobQueue()
-        # Настраиваем timezone сразу после создания
-        job_queue.scheduler.configure(timezone=pytz.UTC)
-        
-        # Создаём приложение с предварительно настроенным JobQueue
+        # Создаём приложение. JobQueue будет создан автоматически.
+        # Если возникнут проблемы с таймзонами, APScheduler можно настроить через job_queue.scheduler.configure
         application = (
             Application.builder()
             .token(config.TOKEN)
-            .job_queue(job_queue)
             .build()
         )
 

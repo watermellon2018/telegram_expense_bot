@@ -1,16 +1,10 @@
 """
 Утилиты для работы с проектами
 Теперь все данные хранятся в Postgres вместо Excel.
-
-Требования к схеме БД:
-- Таблица projects: project_id, user_id, project_name, created_date, is_active
-- Таблица users должна иметь колонку active_project_id (INTEGER, может быть NULL)
-  Если колонки нет, выполните: ALTER TABLE users ADD COLUMN active_project_id INTEGER;
 """
 
 import os
 import datetime
-import shutil
 import pandas as pd
 import config
 from typing import Optional
@@ -28,7 +22,7 @@ async def cmd_create_project(update: Update, context: ContextTypes.DEFAULT_TYPE)
     
     project_name = " ".join(context.args)
     
-    result = create_project(user_id, project_name)
+    result = await create_project(user_id, project_name)
     
     if result['success']:
         await update.message.reply_text(f"Проект создан!\nID: {result['project_id']}\nНазвание: {result['project_name']}")
@@ -123,6 +117,22 @@ async def get_project_by_id(user_id: int, project_id: int) -> Optional[dict]:
         'is_active': row['is_active'],
     }
 
+async def get_project_by_name(user_id: int, project_name: str) -> Optional[dict]:
+    row = await db.fetchrow(
+        """SELECT project_id, project_name, created_date, is_active
+           FROM projects WHERE user_id = $1 AND LOWER(project_name) = LOWER($2) AND is_active = TRUE""",
+        str(user_id), project_name
+    )
+    if not row:
+        return None
+    
+    return {
+        'project_id': row['project_id'],
+        'project_name': row['project_name'],
+        'created_date': row['created_date'].strftime('%Y-%m-%d') if row['created_date'] else None,
+        'is_active': row['is_active'],
+    }
+
 
 async def set_active_project(user_id: int, project_id: Optional[int]) -> dict:
     await db.execute(
@@ -166,3 +176,46 @@ async def get_active_project(user_id: int) -> Optional[dict]:
         return None
     
     return await get_project_by_id(user_id, row['active_project_id'])
+
+async def get_project_stats(user_id: int, project_id: int) -> dict:
+    row = await db.fetchrow(
+        """SELECT COUNT(*) as count, COALESCE(SUM(amount), 0) as total
+           FROM expenses WHERE user_id = $1 AND project_id = $2""",
+        str(user_id), project_id
+    )
+    return {
+        'count': row['count'],
+        'total': float(row['total'])
+    }
+
+async def delete_project(user_id: int, project_id: int) -> dict:
+    # Проверяем существование
+    project = await get_project_by_id(user_id, project_id)
+    if not project:
+        return {'success': False, 'message': "Проект не найден"}
+    
+    # Удаляем расходы проекта
+    await db.execute(
+        "DELETE FROM expenses WHERE user_id = $1 AND project_id = $2",
+        str(user_id), project_id
+    )
+    
+    # Удаляем бюджеты проекта
+    await db.execute(
+        "DELETE FROM budget WHERE user_id = $1 AND project_id = $2",
+        str(user_id), project_id
+    )
+    
+    # Помечаем проект как неактивный (или удаляем)
+    await db.execute(
+        "DELETE FROM projects WHERE user_id = $1 AND project_id = $2",
+        str(user_id), project_id
+    )
+    
+    # Если проект был активным у пользователя, сбрасываем
+    await db.execute(
+        "UPDATE users SET active_project_id = NULL WHERE user_id = $1 AND active_project_id = $2",
+        str(user_id), project_id
+    )
+    
+    return {'success': True, 'message': f"Проект '{project['project_name']}' удален"}

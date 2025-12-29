@@ -1,7 +1,7 @@
 """
 Утилиты для работы с данными расходов.
 Изначально все хранилось в Excel, теперь вся логика чтения/записи переведена на Postgres.
-Публичный API модуля (add_expense, get_month_expenses и т.п.) сохранён, чтобы не трогать обработчики.
+Публичный API модуля (add_expense, get_month_expenses и т.п.) сохранён, но теперь функции асинхронные.
 """
 
 import os
@@ -34,7 +34,7 @@ def _normalize_project_id(project_id):
     return int(project_id)
 
 
-def add_expense(user_id, amount, category, description: str = "", project_id=None):
+async def add_expense(user_id, amount, category, description: str = "", project_id=None):
     """
     Добавляет новый расход в БД.
     Если project_id указан, добавляет расход в проект.
@@ -46,7 +46,7 @@ def add_expense(user_id, amount, category, description: str = "", project_id=Non
     category = category.lower()
     project_id = _normalize_project_id(project_id)
 
-    async def _do():
+    try:
         # 1. Убедимся, что пользователь существует
         await db.execute(
             "INSERT INTO users(user_id) VALUES($1) ON CONFLICT (user_id) DO NOTHING",
@@ -101,25 +101,21 @@ def add_expense(user_id, amount, category, description: str = "", project_id=Non
             project_id,
             month,
         )
-
-    try:
-        db.run_async(_do())
         return True
     except Exception as e:
         print(f"Ошибка при добавлении расхода в БД: {e}")
         return False
 
 
-def get_month_expenses(user_id, month=None, year=None, project_id=None):
+async def get_month_expenses(user_id, month=None, year=None, project_id=None):
     """
     Возвращает статистику расходов за указанный месяц.
-    year сейчас не используется на уровне БД (таблица expenses без поля года, он в date).
     """
     if month is None:
         month = datetime.datetime.now().month
     project_id = _normalize_project_id(project_id)
 
-    async def _do():
+    try:
         rows = await db.fetch(
             """
             SELECT amount, category
@@ -152,24 +148,20 @@ def get_month_expenses(user_id, month=None, year=None, project_id=None):
             "by_category": by_category,
             "count": len(rows),
         }
-
-    try:
-        return db.run_async(_do())
     except Exception as e:
         print(f"Ошибка при получении статистики за месяц из БД: {e}")
         return None
 
 
-def set_budget(user_id, amount, month=None, year=None, project_id=None):
+async def set_budget(user_id, amount, month=None, year=None, project_id=None):
     """
     Устанавливает бюджет на указанный месяц.
-    year игнорируем, так как в таблице budget он не хранится.
     """
     if month is None:
         month = datetime.datetime.now().month
     project_id = _normalize_project_id(project_id)
 
-    async def _do():
+    try:
         await db.execute(
             """
             INSERT INTO budget(user_id, project_id, month, budget, actual)
@@ -182,26 +174,22 @@ def set_budget(user_id, amount, month=None, year=None, project_id=None):
             month,
             float(amount),
         )
-
-    try:
-        db.run_async(_do())
         return True
     except Exception as e:
         print(f"Ошибка при установке бюджета в БД: {e}")
         return False
 
 
-def get_category_expenses(user_id, category, year=None, project_id=None):
+async def get_category_expenses(user_id, category, year=None, project_id=None):
     """
     Возвращает статистику расходов по указанной категории за год.
-    Фильтруем по полю date по году.
     """
     if year is None:
         year = datetime.datetime.now().year
     project_id = _normalize_project_id(project_id)
     category = category.lower()
 
-    async def _do():
+    try:
         rows = await db.fetch(
             """
             SELECT amount, month
@@ -236,24 +224,20 @@ def get_category_expenses(user_id, category, year=None, project_id=None):
             "by_month": by_month,
             "count": len(rows),
         }
-
-    try:
-        return db.run_async(_do())
     except Exception as e:
         print(f"Ошибка при получении статистики по категории из БД: {e}")
         return None
 
 
-def get_all_expenses(user_id, year=None, project_id=None):
+async def get_all_expenses(user_id, year=None, project_id=None):
     """
     Возвращает все расходы за указанный год в виде pandas.DataFrame.
-    Если project_id указан, фильтруем по проекту.
     """
     if year is None:
         year = datetime.datetime.now().year
     project_id = _normalize_project_id(project_id)
 
-    async def _do():
+    try:
         rows = await db.fetch(
             """
             SELECT date, time, amount, category, description, month, project_id
@@ -272,18 +256,14 @@ def get_all_expenses(user_id, year=None, project_id=None):
 
         data = [dict(r) for r in rows]
         return pd.DataFrame(data)
-
-    try:
-        return db.run_async(_do())
     except Exception as e:
         print(f"Ошибка при получении всех расходов из БД: {e}")
         return None
 
 
-def get_day_expenses(user_id, date=None, project_id=None):
+async def get_day_expenses(user_id, date=None, project_id=None):
     """
     Возвращает статистику расходов за указанный день.
-    Формат результата сохранён таким же, как и при работе с Excel.
     """
     if date is None:
         date = datetime.datetime.now().strftime("%Y-%m-%d")
@@ -291,7 +271,7 @@ def get_day_expenses(user_id, date=None, project_id=None):
     project_id = _normalize_project_id(project_id)
     target_date = datetime.datetime.strptime(date, "%Y-%m-%d").date()
 
-    async def _do():
+    try:
         rows = await db.fetch(
             """
             SELECT amount, category
@@ -304,8 +284,6 @@ def get_day_expenses(user_id, date=None, project_id=None):
             target_date,
             project_id,
         )
-        # Если в старой логике не было столбца date – возвращали status False.
-        # Сейчас столбец всегда есть, поэтому просто смотрим на наличие строк.
         if not rows:
             return {
                 "status": True,
@@ -328,9 +306,6 @@ def get_day_expenses(user_id, date=None, project_id=None):
             "by_category": by_category,
             "count": len(rows),
         }
-
-    try:
-        return db.run_async(_do())
     except Exception as e:
         print(f"Error getting daily statistics from DB: {e}")
         return None
