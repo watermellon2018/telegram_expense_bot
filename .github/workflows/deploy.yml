@@ -1,5 +1,9 @@
 name: Deploy to Local Server
 
+permissions:
+  contents: read
+  packages: write  # ← это даёт GITHUB_TOKEN права на write в packages
+  
 on:
   push:
     branches:
