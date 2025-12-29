@@ -1,8 +1,7 @@
 services:
-  bot:
-    image: ghcr.io/watermellon2018/money_bot:v1.0
+  money_bot:
+    image: ghcr.io/watermellon2018/money_bot:latest
     container_name: money_bot
-    build: .
     restart: always
     env_file:
       - .env
@@ -10,6 +9,12 @@ services:
       - /home/matafix/analitycs_money/telegram_bot_data/users:/app/data/users
     networks:
       - postgres_net
+    healthcheck:
+      test: ["CMD", "python", "-c", "import sys; sys.exit(0)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
 
 networks:
   postgres_net:
