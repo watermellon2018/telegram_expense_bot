@@ -2,8 +2,9 @@
 Обработчики команд для получения статистики и анализа расходов
 """
 
-from telegram import Update, ParseMode, ReplyKeyboardMarkup
-from telegram.ext import CallbackContext, CommandHandler, Filters, MessageHandler, ConversationHandler, CallbackQueryHandler
+from telegram import Update, ReplyKeyboardMarkup
+from telegram.constants import ParseMode
+from telegram.ext import ContextTypes, CommandHandler, filters, MessageHandler, ConversationHandler, CallbackQueryHandler
 from utils import excel, helpers, visualization
 import config
 import os
@@ -12,7 +13,7 @@ import datetime
 # Состояния для ConversationHandler
 CHOOSING_CATEGORY, ENTERING_BUDGET = range(2)
 
-def month_command(update: Update, context: CallbackContext) -> None:
+async def month_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """
     Обрабатывает команду /month для получения статистики за текущий месяц
     """
@@ -54,7 +55,7 @@ def month_command(update: Update, context: CallbackContext) -> None:
             with open(chart_path, 'rb') as photo:
                 update.message.reply_photo(photo=photo, caption="Распределение расходов по категориям")
 
-def category_command(update: Update, context: CallbackContext) -> None:
+async def category_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """
     Обрабатывает команду /category для получения статистики по категории
     """
@@ -114,7 +115,7 @@ def category_command(update: Update, context: CallbackContext) -> None:
             with open(chart_path, 'rb') as photo:
                 update.message.reply_photo(photo=photo, caption=f"Тренд расходов на {category} за {year} год")
 
-def stats_command(update: Update, context: CallbackContext) -> None:
+async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """
     Обрабатывает команду /stats для получения общей статистики расходов
     """
@@ -143,7 +144,7 @@ def stats_command(update: Update, context: CallbackContext) -> None:
             update.message.reply_photo(photo=photo, caption=f"Сравнение бюджета и фактических расходов за {year} год")
 
 
-def handle_category_choice(update: Update, context: CallbackContext) -> int:
+async def handle_category_choice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """
     Обрабатывает выбор категории для построения тренда
     """
@@ -172,7 +173,7 @@ def handle_category_choice(update: Update, context: CallbackContext) -> int:
 
     return ConversationHandler.END
 
-def budget_command(update: Update, context: CallbackContext) -> int:
+async def budget_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """
     Обрабатывает команду /budget для установки бюджета на месяц
     """
@@ -219,7 +220,7 @@ def budget_command(update: Update, context: CallbackContext) -> int:
 
     return ENTERING_BUDGET
 
-def handle_budget_amount(update: Update, context: CallbackContext) -> int:
+async def handle_budget_amount(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """
     Обрабатывает ввод суммы бюджета
     """
@@ -253,11 +254,11 @@ def handle_budget_amount(update: Update, context: CallbackContext) -> int:
 
 
 # Отмена (необязательно)
-def cancel(update: Update, context: CallbackContext):
+async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     update.message.reply_text("Действие отменено.")
     return ConversationHandler.END
 
-def day_command(update: Update, context: CallbackContext) -> None:
+async def day_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """
     Команда /day для получения статистики за текущий день
     """
@@ -288,23 +289,23 @@ def day_command(update: Update, context: CallbackContext) -> None:
     update.message.reply_text(report)
     
 
-def register_stats_handlers(dp):
+def register_stats_handlers(application):
     """
     Регистрирует обработчики команд для получения статистики и анализа
     """
 
-    dp.add_handler(CommandHandler("month", month_command))
-    dp.add_handler(CommandHandler("category", category_command))
-    dp.add_handler(CommandHandler("stats", stats_command))
-    dp.add_handler(CommandHandler("day", day_command))
+    application.add_handler(CommandHandler("month", month_command))
+    application.add_handler(CommandHandler("category", category_command))
+    application.add_handler(CommandHandler("stats", stats_command))
+    application.add_handler(CommandHandler("day", day_command))
 
     # Регистрируем ConversationHandler для команды /budget
     budget_conv_handler = ConversationHandler(
         entry_points=[CommandHandler("budget", budget_command)],
         states={
-            ENTERING_BUDGET: [MessageHandler(Filters.text & ~Filters.command, handle_budget_amount)],
+            ENTERING_BUDGET: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_budget_amount)],
         },
         fallbacks=[CommandHandler("cancel", lambda u, c: ConversationHandler.END)],
     )
 
-    dp.add_handler(budget_conv_handler)
+    application.add_handler(budget_conv_handler)

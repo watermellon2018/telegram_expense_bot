@@ -5,7 +5,7 @@ import config
 from utils.export import get_month_name
 
 from telegram import Update
-from telegram.ext import CallbackContext, CommandHandler
+from telegram.ext import ContextTypes, CommandHandler
 from utils import excel
 import os
 import tempfile
@@ -13,7 +13,7 @@ import shutil
 import pandas as pd
 
 
-def export_excel_command(update: Update, context: CallbackContext) -> None:
+async def export_excel_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """
     Обрабатывает команду /export для отправки Excel файла с данными пользователя
     """
@@ -91,7 +91,7 @@ def export_excel_command(update: Update, context: CallbackContext) -> None:
                 pass
 
 
-def export_stats_command(update: Update, context: CallbackContext) -> None:
+async def export_stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """
     Обрабатывает команду /export_stats для отправки Excel файла со статистикой
     Поддерживает: /export_stats [год] [месяц]
@@ -234,9 +234,9 @@ def export_stats_command(update: Update, context: CallbackContext) -> None:
                 pass
 
 
-def register_export_handlers(dp):
+def register_export_handlers(application):
     """
     Регистрирует обработчики команд для экспорта
     """
-    dp.add_handler(CommandHandler("export", export_excel_command))
-    dp.add_handler(CommandHandler("export_stats", export_stats_command))
+    application.add_handler(CommandHandler("export", export_excel_command))
+    application.add_handler(CommandHandler("export_stats", export_stats_command))

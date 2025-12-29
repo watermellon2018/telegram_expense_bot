@@ -3,12 +3,13 @@
 """
 
 import datetime
-from telegram import Update, ParseMode
-from telegram.ext import CallbackContext, CommandHandler
+from telegram import Update
+from telegram.constants import ParseMode
+from telegram.ext import ContextTypes, CommandHandler
 from utils import excel, helpers, visualization
 import os
 
-def setup_monthly_reminder(update: Update, context: CallbackContext) -> None:
+async def setup_monthly_reminder(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """
     Настраивает напоминание о необходимости запросить статистику в конце месяца
     """
@@ -29,7 +30,7 @@ def setup_monthly_reminder(update: Update, context: CallbackContext) -> None:
     
     update.message.reply_text(message)
 
-def remind_command(update: Update, context: CallbackContext) -> None:
+async def remind_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """
     Отправляет инструкции по настройке напоминаний
     """
@@ -57,7 +58,7 @@ def remind_command(update: Update, context: CallbackContext) -> None:
     
     update.message.reply_text(message)
 
-def end_of_month_stats(update: Update, context: CallbackContext) -> None:
+async def end_of_month_stats(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """
     Отправляет полную статистику за месяц по запросу
     Имитирует функцию, которая должна была бы выполняться автоматически в конце месяца
@@ -140,10 +141,10 @@ def end_of_month_stats(update: Update, context: CallbackContext) -> None:
         
         update.message.reply_text(comparison)
 
-def register_reminder_handlers(dp):
+def register_reminder_handlers(application):
     """
     Регистрирует обработчики команд для напоминаний и альтернативных решений
     """
-    dp.add_handler(CommandHandler("autostat", setup_monthly_reminder))
-    dp.add_handler(CommandHandler("remind", remind_command))
-    dp.add_handler(CommandHandler("monthend", end_of_month_stats))
+    application.add_handler(CommandHandler("autostat", setup_monthly_reminder))
+    application.add_handler(CommandHandler("remind", remind_command))
+    application.add_handler(CommandHandler("monthend", end_of_month_stats))

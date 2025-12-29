@@ -3,11 +3,11 @@
 """
 
 from telegram import Update, ReplyKeyboardMarkup
-from telegram.ext import CallbackContext, CommandHandler, Filters, MessageHandler
+from telegram.ext import ContextTypes, CommandHandler, filters, MessageHandler
 from utils import excel
 import config
 
-def start(update: Update, context: CallbackContext) -> None:
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """
     Обрабатывает команду /start
     """
@@ -44,7 +44,7 @@ def start(update: Update, context: CallbackContext) -> None:
     
     update.message.reply_text(message, reply_markup=reply_markup)
 
-def help_command(update: Update, context: CallbackContext) -> None:
+async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """
     Обрабатывает команду /help
     """
@@ -84,7 +84,7 @@ def help_command(update: Update, context: CallbackContext) -> None:
     
     update.message.reply_text(message)
 
-def projects_menu(update: Update, context: CallbackContext) -> None:
+async def projects_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """
     Отображает меню управления проектами
     """
@@ -103,7 +103,7 @@ def projects_menu(update: Update, context: CallbackContext) -> None:
         reply_markup=reply_markup
     )
 
-def main_menu(update: Update, context: CallbackContext) -> None:
+async def main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """
     Возвращает в главное меню
     """
@@ -119,13 +119,13 @@ def main_menu(update: Update, context: CallbackContext) -> None:
         reply_markup=reply_markup
     )
 
-def register_start_handlers(dp):
+def register_start_handlers(application):
     """
     Регистрирует обработчики команд /start и /help
     """
-    dp.add_handler(CommandHandler("start", start))
-    dp.add_handler(CommandHandler("help", help_command))
+    application.add_handler(CommandHandler("start", start))
+    application.add_handler(CommandHandler("help", help_command))
     
     # Обработчики для кнопок меню
-    dp.add_handler(MessageHandler(Filters.regex('^📁 Проекты$'), projects_menu))
-    dp.add_handler(MessageHandler(Filters.regex('^⬅️ Главное меню$'), main_menu))
+    application.add_handler(MessageHandler(filters.Regex('^📁 Проекты$'), projects_menu))
+    application.add_handler(MessageHandler(filters.Regex('^⬅️ Главное меню$'), main_menu))

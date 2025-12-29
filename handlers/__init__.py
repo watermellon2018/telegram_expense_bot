@@ -9,17 +9,17 @@ from handlers.reminder import register_reminder_handlers
 from handlers.export import register_export_handlers
 from handlers.project import register_project_handlers
 
-def register_all_handlers(dp):
+def register_all_handlers(application):
     """
     Регистрирует все обработчики команд
     """
-    register_start_handlers(dp)
-    register_project_handlers(dp)
+    register_start_handlers(application)
+    register_project_handlers(application)
 
     # Важный порядок! В противном случае будет проблема с перехватом сообщений
     # Так как оба метода отслеживают ввод
-    register_stats_handlers(dp)
-    register_expense_handlers(dp)
-    register_export_handlers(dp)
+    register_stats_handlers(application)
+    register_expense_handlers(application)
+    register_export_handlers(application)
 
-    register_reminder_handlers(dp)
+    register_reminder_handlers(application)

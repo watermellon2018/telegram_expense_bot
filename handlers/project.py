@@ -3,7 +3,8 @@
 """
 
 from telegram import Update, ReplyKeyboardMarkup, ReplyKeyboardRemove
-from telegram.ext import CallbackContext, CommandHandler, Filters, MessageHandler, ConversationHandler
+from telegram.constants import ParseMode
+from telegram.ext import ContextTypes, CommandHandler, filters, MessageHandler, ConversationHandler
 from utils import projects
 import config
 
@@ -11,7 +12,7 @@ import config
 CONFIRMING_DELETE, ENTERING_PROJECT_NAME, ENTERING_PROJECT_TO_SELECT, ENTERING_PROJECT_TO_DELETE = range(4)
 
 
-def project_create_command(update: Update, context: CallbackContext) -> None:
+async def project_create_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """
     Обрабатывает команду /project_create для создания нового проекта
     """
@@ -50,7 +51,7 @@ def project_create_command(update: Update, context: CallbackContext) -> None:
         update.message.reply_text(f"❌ {result['message']}")
 
 
-def project_list_command(update: Update, context: CallbackContext) -> None:
+async def project_list_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """
     Обрабатывает команду /project_list для отображения списка проектов
     """
@@ -99,10 +100,10 @@ def project_list_command(update: Update, context: CallbackContext) -> None:
     else:
         message += f"📁 Текущий режим: Проект '{active_project['project_name']}'"
     
-    update.message.reply_text(message, parse_mode='Markdown')
+    update.message.reply_text(message, parse_mode=ParseMode.MARKDOWN)
 
 
-def project_select_command(update: Update, context: CallbackContext) -> None:
+async def project_select_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """
     Обрабатывает команду /project_select для переключения на проект
     """
@@ -156,7 +157,7 @@ def project_select_command(update: Update, context: CallbackContext) -> None:
         update.message.reply_text(f"❌ {result['message']}")
 
 
-def project_main_command(update: Update, context: CallbackContext) -> None:
+async def project_main_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """
     Обрабатывает команду /project_main для переключения на общие расходы
     """
@@ -177,7 +178,7 @@ def project_main_command(update: Update, context: CallbackContext) -> None:
         update.message.reply_text(f"❌ {result['message']}")
 
 
-def project_delete_start(update: Update, context: CallbackContext) -> int:
+async def project_delete_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """
     Начинает процесс удаления проекта
     """
@@ -239,7 +240,7 @@ def project_delete_start(update: Update, context: CallbackContext) -> int:
     return CONFIRMING_DELETE
 
 
-def project_delete_confirm(update: Update, context: CallbackContext) -> int:
+async def project_delete_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """
     Подтверждает удаление проекта
     """
@@ -289,7 +290,7 @@ def project_delete_confirm(update: Update, context: CallbackContext) -> int:
     return ConversationHandler.END
 
 
-def project_delete_cancel(update: Update, context: CallbackContext) -> int:
+async def project_delete_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """
     Отменяет удаление проекта
     """
@@ -305,7 +306,7 @@ def project_delete_cancel(update: Update, context: CallbackContext) -> int:
     return ConversationHandler.END
 
 
-def project_info_command(update: Update, context: CallbackContext) -> None:
+async def project_info_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """
     Обрабатывает команду /project_info для отображения информации о текущем проекте
     """
@@ -343,7 +344,7 @@ def project_info_command(update: Update, context: CallbackContext) -> None:
 
 # Интерактивные обработчики для кнопок меню
 
-def button_create_project_start(update: Update, context: CallbackContext) -> int:
+async def button_create_project_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """
     Начинает процесс создания проекта через кнопку
     """
@@ -356,7 +357,7 @@ def button_create_project_start(update: Update, context: CallbackContext) -> int
     )
     return ENTERING_PROJECT_NAME
 
-def button_create_project_finish(update: Update, context: CallbackContext) -> int:
+async def button_create_project_finish(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """
     Завершает создание проекта
     """
@@ -391,7 +392,7 @@ def button_create_project_finish(update: Update, context: CallbackContext) -> in
     
     return ConversationHandler.END
 
-def button_select_project_start(update: Update, context: CallbackContext) -> int:
+async def button_select_project_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """
     Начинает процесс выбора проекта
     """
@@ -417,7 +418,7 @@ def button_select_project_start(update: Update, context: CallbackContext) -> int
     update.message.reply_text(message, reply_markup=ReplyKeyboardRemove())
     return ENTERING_PROJECT_TO_SELECT
 
-def button_select_project_finish(update: Update, context: CallbackContext) -> int:
+async def button_select_project_finish(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """
     Завершает выбор проекта
     """
@@ -458,7 +459,7 @@ def button_select_project_finish(update: Update, context: CallbackContext) -> in
     
     return ConversationHandler.END
 
-def button_delete_project_start(update: Update, context: CallbackContext) -> int:
+async def button_delete_project_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """
     Начинает процесс удаления проекта
     """
@@ -483,7 +484,7 @@ def button_delete_project_start(update: Update, context: CallbackContext) -> int
     update.message.reply_text(message, reply_markup=ReplyKeyboardRemove())
     return ENTERING_PROJECT_TO_DELETE
 
-def button_delete_project_confirm(update: Update, context: CallbackContext) -> int:
+async def button_delete_project_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """
     Запрашивает подтверждение удаления
     """
@@ -534,7 +535,7 @@ def button_delete_project_confirm(update: Update, context: CallbackContext) -> i
     
     return CONFIRMING_DELETE
 
-def button_delete_project_finish(update: Update, context: CallbackContext) -> int:
+async def button_delete_project_finish(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """
     Завершает удаление проекта
     """
@@ -591,7 +592,7 @@ def button_delete_project_finish(update: Update, context: CallbackContext) -> in
     
     return ConversationHandler.END
 
-def conversation_cancel(update: Update, context: CallbackContext) -> int:
+async def conversation_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """
     Отменяет текущий диалог
     """
@@ -611,73 +612,73 @@ def conversation_cancel(update: Update, context: CallbackContext) -> int:
     return ConversationHandler.END
 
 
-def register_project_handlers(dp):
+def register_project_handlers(application):
     """
     Регистрирует обработчики команд для работы с проектами
     """
     # Регистрируем команды
-    dp.add_handler(CommandHandler("project_create", project_create_command))
-    dp.add_handler(CommandHandler("project_list", project_list_command))
-    dp.add_handler(CommandHandler("project_select", project_select_command))
-    dp.add_handler(CommandHandler("project_main", project_main_command))
-    dp.add_handler(CommandHandler("project_info", project_info_command))
+    application.add_handler(CommandHandler("project_create", project_create_command))
+    application.add_handler(CommandHandler("project_list", project_list_command))
+    application.add_handler(CommandHandler("project_select", project_select_command))
+    application.add_handler(CommandHandler("project_main", project_main_command))
+    application.add_handler(CommandHandler("project_info", project_info_command))
     
     # Регистрируем ConversationHandler для удаления проекта (команда)
     delete_conv_handler = ConversationHandler(
         entry_points=[CommandHandler("project_delete", project_delete_start)],
         states={
-            CONFIRMING_DELETE: [MessageHandler(Filters.text & ~Filters.command, project_delete_confirm)],
+            CONFIRMING_DELETE: [MessageHandler(filters.TEXT & ~filters.COMMAND, project_delete_confirm)],
         },
         fallbacks=[CommandHandler("cancel", project_delete_cancel)],
         name="delete_project_conversation",
         persistent=False
     )
-    dp.add_handler(delete_conv_handler)
+    application.add_handler(delete_conv_handler)
     
     # Регистрируем обработчики для кнопок меню
     
     # Кнопка "Список проектов"
-    dp.add_handler(MessageHandler(Filters.regex('^📋 Список проектов$'), project_list_command))
+    application.add_handler(MessageHandler(filters.Regex('^📋 Список проектов$'), project_list_command))
     
     # Кнопка "Общие расходы"
-    dp.add_handler(MessageHandler(Filters.regex('^📊 Общие расходы$'), project_main_command))
+    application.add_handler(MessageHandler(filters.Regex('^📊 Общие расходы$'), project_main_command))
     
     # Кнопка "Инфо о проекте"
-    dp.add_handler(MessageHandler(Filters.regex('^ℹ️ Инфо о проекте$'), project_info_command))
+    application.add_handler(MessageHandler(filters.Regex('^ℹ️ Инфо о проекте$'), project_info_command))
     
     # ConversationHandler для создания проекта (кнопка)
     create_conv_handler = ConversationHandler(
-        entry_points=[MessageHandler(Filters.regex('^🆕 Создать проект$'), button_create_project_start)],
+        entry_points=[MessageHandler(filters.Regex('^🆕 Создать проект$'), button_create_project_start)],
         states={
-            ENTERING_PROJECT_NAME: [MessageHandler(Filters.text & ~Filters.command, button_create_project_finish)],
+            ENTERING_PROJECT_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, button_create_project_finish)],
         },
         fallbacks=[CommandHandler("cancel", conversation_cancel)],
         name="create_project_button_conversation",
         persistent=False
     )
-    dp.add_handler(create_conv_handler)
+    application.add_handler(create_conv_handler)
     
     # ConversationHandler для выбора проекта (кнопка)
     select_conv_handler = ConversationHandler(
-        entry_points=[MessageHandler(Filters.regex('^🔄 Выбрать проект$'), button_select_project_start)],
+        entry_points=[MessageHandler(filters.Regex('^🔄 Выбрать проект$'), button_select_project_start)],
         states={
-            ENTERING_PROJECT_TO_SELECT: [MessageHandler(Filters.text & ~Filters.command, button_select_project_finish)],
+            ENTERING_PROJECT_TO_SELECT: [MessageHandler(filters.TEXT & ~filters.COMMAND, button_select_project_finish)],
         },
         fallbacks=[CommandHandler("cancel", conversation_cancel)],
         name="select_project_button_conversation",
         persistent=False
     )
-    dp.add_handler(select_conv_handler)
+    application.add_handler(select_conv_handler)
     
     # ConversationHandler для удаления проекта (кнопка)
     delete_button_conv_handler = ConversationHandler(
-        entry_points=[MessageHandler(Filters.regex('^🗑️ Удалить проект$'), button_delete_project_start)],
+        entry_points=[MessageHandler(filters.Regex('^🗑️ Удалить проект$'), button_delete_project_start)],
         states={
-            ENTERING_PROJECT_TO_DELETE: [MessageHandler(Filters.text & ~Filters.command, button_delete_project_confirm)],
-            CONFIRMING_DELETE: [MessageHandler(Filters.text & ~Filters.command, button_delete_project_finish)],
+            ENTERING_PROJECT_TO_DELETE: [MessageHandler(filters.TEXT & ~filters.COMMAND, button_delete_project_confirm)],
+            CONFIRMING_DELETE: [MessageHandler(filters.TEXT & ~filters.COMMAND, button_delete_project_finish)],
         },
         fallbacks=[CommandHandler("cancel", conversation_cancel)],
         name="delete_project_button_conversation",
         persistent=False
     )
-    dp.add_handler(delete_button_conv_handler)
+    application.add_handler(delete_button_conv_handler)

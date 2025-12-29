@@ -55,7 +55,7 @@ def parse_time(val):
 
 
 # --- Миграция одного пользователя ---
-async def migrate_user(conn, user_folder: Path):
+async def migrate_user(conn, user_folder: Path, skip_existing=False):
     user_id = user_folder.name
     print(f"Migrating user {user_id}")
     
@@ -176,6 +176,25 @@ async def main():
         print("Budget constraint checked/created successfully")
     except Exception as e:
         print(f"Warning: Could not create budget constraint: {e}")
+        print("Continuing migration anyway...")
+    
+    # Добавляем колонку active_project_id в users, если её еще нет
+    try:
+        await conn.execute("""
+            DO $$
+            BEGIN
+                IF NOT EXISTS (
+                    SELECT 1 FROM information_schema.columns 
+                    WHERE table_name = 'users' AND column_name = 'active_project_id'
+                ) THEN
+                    ALTER TABLE users
+                    ADD COLUMN active_project_id INTEGER;
+                END IF;
+            END $$;
+        """)
+        print("active_project_id column checked/created successfully")
+    except Exception as e:
+        print(f"Warning: Could not create active_project_id column: {e}")
         print("Continuing migration anyway...")
     
     users_path = Path(USERS_FOLDER)

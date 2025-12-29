@@ -3,7 +3,7 @@
 """
 
 from telegram import Update, ReplyKeyboardMarkup, ReplyKeyboardRemove
-from telegram.ext import CallbackContext, CommandHandler, Filters, MessageHandler, ConversationHandler
+from telegram.ext import ContextTypes, CommandHandler, filters, MessageHandler, ConversationHandler
 from utils import excel, helpers
 import config
 
@@ -11,7 +11,7 @@ import config
 ENTERING_AMOUNT, CHOOSING_CATEGORY, ENTERING_DESCRIPTION = range(3)
 
 
-def text_handler(update: Update, context: CallbackContext) -> None:
+async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """
     Обрабатывает текстовые сообщения, пытаясь распознать добавление расхода
     """
@@ -63,7 +63,7 @@ def text_handler(update: Update, context: CallbackContext) -> None:
 
         update.message.reply_text(confirmation)
 
-def add_command(update: Update, context: CallbackContext) -> int:
+async def add_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """
     Обрабатывает команду /add для начала диалога добавления расхода
     """
@@ -136,7 +136,7 @@ def add_command(update: Update, context: CallbackContext) -> int:
     return ENTERING_AMOUNT
 
 
-def handle_amount(update: Update, context: CallbackContext) -> int:
+async def handle_amount(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """
     Обрабатывает ввод суммы расхода
     """
@@ -180,7 +180,7 @@ def handle_amount(update: Update, context: CallbackContext) -> int:
         return ENTERING_AMOUNT
 
 
-def handle_category(update: Update, context: CallbackContext) -> int:
+async def handle_category(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """
     Обрабатывает выбор категории расхода
     """
@@ -218,7 +218,7 @@ def handle_category(update: Update, context: CallbackContext) -> int:
     return ENTERING_DESCRIPTION
 
 
-def handle_description(update: Update, context: CallbackContext) -> int:
+async def handle_description(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """
     Обрабатывает ввод описания расхода
     """
@@ -268,7 +268,7 @@ def handle_description(update: Update, context: CallbackContext) -> int:
     return ConversationHandler.END
 
 
-def cancel(update: Update, context: CallbackContext) -> int:
+async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """
     Отменяет диалог добавления расхода
     """
@@ -283,7 +283,7 @@ def cancel(update: Update, context: CallbackContext) -> int:
     return ConversationHandler.END
 
 
-def direct_amount_handler(update: Update, context: CallbackContext) -> int:
+async def direct_amount_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """
     Обрабатывает прямой ввод суммы без команды
     """
@@ -324,7 +324,7 @@ def direct_amount_handler(update: Update, context: CallbackContext) -> int:
         return ConversationHandler.END
 
 
-def register_expense_handlers(dp):
+def register_expense_handlers(application):
     """
     Регистрирует обработчики команд для добавления расходов
     """
@@ -332,14 +332,14 @@ def register_expense_handlers(dp):
     add_conv_handler = ConversationHandler(
         entry_points=[
             CommandHandler("add", add_command),
-            MessageHandler(Filters.regex(r'^\d+(\.\d+)?$') & ~Filters.command, direct_amount_handler)
+            MessageHandler(filters.Regex(r'^\d+(\.\d+)?$') & ~filters.COMMAND, direct_amount_handler)
         ],
         states={
-            ENTERING_AMOUNT: [MessageHandler(Filters.text & ~Filters.command, handle_amount)],
-            CHOOSING_CATEGORY: [MessageHandler(Filters.text & ~Filters.command, handle_category)],
+            ENTERING_AMOUNT: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_amount)],
+            CHOOSING_CATEGORY: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_category)],
             ENTERING_DESCRIPTION: [
                 CommandHandler("skip", handle_description),
-                MessageHandler(Filters.text & ~Filters.command, handle_description)
+                MessageHandler(filters.TEXT & ~filters.COMMAND, handle_description)
             ],
         },
         fallbacks=[CommandHandler("cancel", cancel)],
@@ -348,5 +348,5 @@ def register_expense_handlers(dp):
         # Устанавливаем persistent=False, чтобы разговор не сохранялся между перезапусками
         persistent=False
     )
-    dp.add_handler(add_conv_handler)
-    dp.add_handler(MessageHandler(Filters.text & ~Filters.command, text_handler))
+    application.add_handler(add_conv_handler)
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_handler))
