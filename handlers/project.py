@@ -459,10 +459,23 @@ async def project_info_command(update: Update, context: ContextTypes.DEFAULT_TYP
     
     if active_project is None:
         await update.message.reply_text(
-            "📊 Текущий режим: Общие расходы.\n"
-            "Нет активного проекта."
+            "📊 Текущий режим: Общие расходы\n\n"
+            "Все расходы записываются в общую базу.\n\n"
+            "Чтобы переключиться на проект, используйте:\n"
+            "/project_select <название или ID>"
         )
         return
+
+    # Получаем статистику по проекту
+    stats = await projects.get_project_stats(user_id, active_project['project_id'])
+    
+    message = f"📁 Текущий проект: {active_project['project_name']}\n\n"
+    message += f"ID: {active_project['project_id']}\n"
+    message += f"Создан: {active_project['created_date']}\n"
+    message += f"Расходов: {stats['count']}\n"
+    message += f"Общая сумма: {stats['total']:.2f}\n\n"
+    
+    await update.message.reply_text(message)
 
 def register_project_handlers(application):
     """
