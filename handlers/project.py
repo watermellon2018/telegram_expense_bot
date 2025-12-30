@@ -310,8 +310,10 @@ def register_project_handlers(application):
     """
     Регистрирует обработчики команд для работы с проектами
     """
+
     application.add_handler(CommandHandler("project_create", project_create_command))
     application.add_handler(CommandHandler("project_list", project_list_command))
+
     application.add_handler(CommandHandler("project_select", project_select_command))
     application.add_handler(CommandHandler("project_main", project_main_command))
     

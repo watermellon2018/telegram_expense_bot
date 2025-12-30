@@ -50,7 +50,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         f"Для получения справки используйте команду /help"
     )
     
-    update.message.reply_text(message, reply_markup=reply_markup)
+    await update.message.reply_text(message, reply_markup=reply_markup)
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """
@@ -90,7 +90,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         "Например: 100 продукты хлеб и молоко"
     )
     
-    update.message.reply_text(message)
+    await update.message.reply_text(message)
 
 async def projects_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """
@@ -105,7 +105,7 @@ async def projects_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     ]
     reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
     
-    update.message.reply_text(
+    await update.message.reply_text(
         "📁 Меню управления проектами:\n\n"
         "Выберите действие:",
         reply_markup=reply_markup
@@ -122,7 +122,7 @@ async def main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     ]
     reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
     
-    update.message.reply_text(
+    await update.message.reply_text(
         "✅ Возвращение в главное меню",
         reply_markup=reply_markup
     )

@@ -15,6 +15,7 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     """
     Обрабатывает текстовые сообщения, пытаясь распознать добавление расхода
     """
+    print("DEBUG: Сообщение ушло в EXPENSE")
     user_id = update.effective_user.id
     message_text = update.message.text
 
@@ -61,7 +62,7 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         else:
             confirmation += f"\n📊 Общие расходы"
 
-        update.message.reply_text(confirmation)
+        await update.message.reply_text(confirmation)
 
 async def add_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """
@@ -76,7 +77,7 @@ async def add_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
         expense_data = helpers.parse_add_command(message_text)
 
         if not expense_data:
-            update.message.reply_text(
+            await update.message.reply_text(
                 "❌ Неверный формат команды. Используйте:\n"
                 "/add <сумма> <категория> [описание]\n"
                 "Например: /add 100 продукты хлеб и молоко"
@@ -86,7 +87,7 @@ async def add_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
         # Проверяем, что категория существует
         if expense_data['category'] not in config.DEFAULT_CATEGORIES:
             categories_list = ", ".join(config.DEFAULT_CATEGORIES.keys())
-            update.message.reply_text(
+            await update.message.reply_text(
                 f"❌ Категория '{expense_data['category']}' не найдена.\n"
                 f"Доступные категории: {categories_list}"
             )
@@ -125,11 +126,11 @@ async def add_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
         else:
             confirmation += f"\n📊 Общие расходы"
 
-        update.message.reply_text(confirmation)
+        await update.message.reply_text(confirmation)
         return ConversationHandler.END
 
     # Если команда без аргументов, начинаем диалог
-    update.message.reply_text(
+    await update.message.reply_text(
         "Введите сумму расхода:"
     )
 
@@ -164,7 +165,7 @@ async def handle_amount(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
         keyboard.append(['Отмена'])
         reply_markup = ReplyKeyboardMarkup(keyboard, one_time_keyboard=True, resize_keyboard=True)
 
-        update.message.reply_text(
+        await update.message.reply_text(
             f"Сумма: {amount:.2f}\n\nВыберите категорию расхода:",
             reply_markup=reply_markup
         )
@@ -173,7 +174,7 @@ async def handle_amount(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
 
     except ValueError:
         # Если не удалось распарсить сумму, просим ввести снова
-        update.message.reply_text(
+        await update.message.reply_text(
             "❌ Неверный формат суммы. Пожалуйста, введите число.\n"
             "Например: 100.50"
         )
@@ -188,7 +189,7 @@ async def handle_category(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     text = update.message.text
 
     if text == 'Отмена':
-        update.message.reply_text(
+        await update.message.reply_text(
             "Добавление расхода отменено.",
             reply_markup=ReplyKeyboardRemove()
         )
@@ -200,7 +201,7 @@ async def handle_category(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     # Проверяем, что категория существует
     if category not in config.DEFAULT_CATEGORIES:
         categories_list = ", ".join(config.DEFAULT_CATEGORIES.keys())
-        update.message.reply_text(
+        await update.message.reply_text(
             f"❌ Категория '{category}' не найдена.\n"
             f"Доступные категории: {categories_list}"
         )
@@ -210,7 +211,7 @@ async def handle_category(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     context.user_data['category'] = category
 
     # Спрашиваем описание
-    update.message.reply_text(
+    await update.message.reply_text(
         "Введите описание расхода (или отправьте /skip, чтобы пропустить):",
         reply_markup=ReplyKeyboardRemove()
     )
@@ -254,16 +255,18 @@ async def handle_description(update: Update, context: ContextTypes.DEFAULT_TYPE)
     # Добавляем информацию о проекте
     if project_id is not None:
         from utils import projects
-        project = projects.get_project_by_id(user_id, project_id)
+        project = await projects.get_project_by_id(user_id, project_id)
         if project:
             confirmation += f"\n📁 Проект: {project['project_name']}"
     else:
         confirmation += f"\n📊 Общие расходы"
 
-    update.message.reply_text(confirmation)
+    await update.message.reply_text(confirmation)
 
     # Очищаем данные пользователя
-    context.user_data.clear()
+    # context.user_data.clear()
+    for key in ['amount', 'category']:
+        context.user_data.pop(key, None)
 
     return ConversationHandler.END
 
@@ -272,13 +275,15 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """
     Отменяет диалог добавления расхода
     """
-    update.message.reply_text(
+    await update.message.reply_text(
         "Добавление расхода отменено.",
         reply_markup=ReplyKeyboardRemove()
     )
 
     # Очищаем данные пользователя
-    context.user_data.clear()
+    # context.user_data.clear()
+    for key in ['amount', 'category']:
+        context.user_data.pop(key, None)
 
     return ConversationHandler.END
 
@@ -312,7 +317,7 @@ async def direct_amount_handler(update: Update, context: ContextTypes.DEFAULT_TY
         keyboard.append(['Отмена'])
         reply_markup = ReplyKeyboardMarkup(keyboard, one_time_keyboard=True, resize_keyboard=True)
 
-        update.message.reply_text(
+        await update.message.reply_text(
             f"Сумма: {amount:.2f}\n\nВыберите категорию расхода:",
             reply_markup=reply_markup
         )

@@ -1,18 +1,18 @@
-"""
-Главный файл Telegram-бота для анализа расходов
-(используется python-telegram-bot v22.5)
-"""
-
-import asyncio
 import logging
 import os
+import pytz
+import apscheduler.util
 
-# APScheduler и часовые пояса: в новых версиях рекомендуется использовать стандартный ZoneInfo или оставить по умолчанию.
-# Если возникают проблемы с pytz, лучше использовать UTC напрямую через datetime.timezone.utc.
-import datetime
+# 1. СТРОГИЙ ПАТЧ ТАЙМЗОНЫ (должен быть в самом верху)
+def patched_astimezone(obj):
+    if obj is None: return pytz.UTC
+    if hasattr(obj, 'localize'): return obj
+    return pytz.UTC
 
-from telegram.ext import Application, JobQueue
+apscheduler.util.astimezone = patched_astimezone
+apscheduler.util.get_localzone = lambda: pytz.UTC
 
+from telegram.ext import Application
 import config
 from handlers import register_all_handlers
 from utils.db import init_pool, close_pool
@@ -24,42 +24,42 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-
-async def error_handler(update: object, context):
-    logger.error("Необработанная ошибка:", exc_info=context.error)
-
-
-async def main():
+# Функция, которая выполнится ПЕРЕД стартом бота
+async def on_startup(application: Application):
     os.makedirs(config.DATA_DIR, exist_ok=True)
-
     await init_pool()
-    logger.info("Пул соединений с БД инициализирован")
+    logger.info("Пул соединений с БД инициализирован через post_init")
 
-    try:
-        # Создаём приложение. JobQueue будет создан автоматически.
-        # Если возникнут проблемы с таймзонами, APScheduler можно настроить через job_queue.scheduler.configure
-        application = (
-            Application.builder()
-            .token(config.TOKEN)
-            .build()
-        )
+# Функция, которая выполнится ПРИ ОСТАНОВКЕ бота
+async def on_shutdown(application: Application):
+    await close_pool()
+    logger.info("Пул соединений закрыт через post_stop")
 
-        register_all_handlers(application)
-        application.add_error_handler(error_handler)
+def main():
+    """Главная точка входа (НЕ асинхронная)"""
 
-        logger.info("Бот запущен и готов к работе")
+    # Собираем приложение
+    application = (
+        Application.builder()
+        .token(config.TOKEN)
+        .post_init(on_startup)  # Регистрируем запуск БД
+        .post_stop(on_shutdown) # Регистрируем закрытие БД
+        .build()
+    )
 
-        await application.run_polling(drop_pending_updates=True)
+    # Регистрация обработчиков
+    register_all_handlers(application)
 
-    finally:
-        await close_pool()
-        logger.info("Пул соединений закрыт")
+    logger.info("Инициализация системы завершена. Запуск polling...")
+
+    # run_polling САМ создаст и закроет event loop корректно
+    application.run_polling(drop_pending_updates=True)
 
 
 if __name__ == '__main__':
     try:
-        asyncio.run(main())
+        main()
     except KeyboardInterrupt:
         logger.info("Бот остановлен пользователем")
     except Exception as e:
-        logger.error(f"Критическая ошибка при запуске: {e}", exc_info=True)
+        logger.error(f"Критическая ошибка: {e}", exc_info=True)
