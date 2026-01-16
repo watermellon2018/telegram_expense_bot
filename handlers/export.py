@@ -5,7 +5,7 @@ import config
 from utils.export import get_month_name
 
 from telegram import Update
-from telegram.ext import CallbackContext, CommandHandler
+from telegram.ext import ContextTypes, CommandHandler
 from utils import excel
 import os
 import tempfile
@@ -13,7 +13,7 @@ import shutil
 import pandas as pd
 
 
-def export_excel_command(update: Update, context: CallbackContext) -> None:
+async def export_excel_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """
     Обрабатывает команду /export для отправки Excel файла с данными пользователя
     """
@@ -28,29 +28,35 @@ def export_excel_command(update: Update, context: CallbackContext) -> None:
         try:
             year = int(context.args[0])
         except ValueError:
-            update.message.reply_text(
+            await update.message.reply_text(
                 "❌ Неверный формат года. Используйте: /export [год]\n"
                 "Например: /export 2024"
             )
             return
     
-    # Получаем путь к Excel файлу
-    excel_path = excel.get_excel_path(user_id, year, project_id)
-    
-    # Проверяем, существует ли файл
-    if not os.path.exists(excel_path):
+    # Берём данные из БД и формируем временный Excel "на лету"
+    expenses_df = await excel.get_all_expenses(user_id, year, project_id)
+
+    if expenses_df is None or expenses_df.empty:
         if year:
-            update.message.reply_text(f"❌ Нет данных за {year} год.")
+            await update.message.reply_text(f"❌ Нет данных за {year} год.")
         else:
-            update.message.reply_text("❌ У вас пока нет данных о расходах.")
+            await update.message.reply_text("❌ У вас пока нет данных о расходах.")
         return
     
+    # Конвертируем amount в numeric, если это необходимо
+    if 'amount' in expenses_df.columns:
+        expenses_df['amount'] = pd.to_numeric(expenses_df['amount'], errors='coerce')
+
     try:
-        # Создаем временную копию файла для отправки
+        # Создаем временный Excel файл
         with tempfile.NamedTemporaryFile(delete=False, suffix='.xlsx') as tmp_file:
-            shutil.copy2(excel_path, tmp_file.name)
             tmp_path = tmp_file.name
-        
+
+        # Записываем данные в Excel
+        with pd.ExcelWriter(tmp_path, engine='openpyxl') as writer:
+            expenses_df.to_excel(writer, sheet_name='Expenses', index=False)
+
         # Отправляем файл
         with open(tmp_path, 'rb') as file:
             year_text = f" за {year} год" if year else ""
@@ -58,7 +64,7 @@ def export_excel_command(update: Update, context: CallbackContext) -> None:
             # Добавляем информацию о проекте
             if project_id is not None:
                 from utils import projects
-                project = projects.get_project_by_id(user_id, project_id)
+                project = await projects.get_project_by_id(user_id, project_id)
                 if project:
                     caption = f"📁 Проект: {project['project_name']}\n📊 Расходы{year_text}\n\nФайл содержит все записи о расходах проекта."
                 else:
@@ -66,7 +72,7 @@ def export_excel_command(update: Update, context: CallbackContext) -> None:
             else:
                 caption = f"📊 Общие расходы{year_text}\n\nФайл содержит все ваши записи о расходах с детальной статистикой."
             
-            update.message.reply_document(
+            await update.message.reply_document(
                 document=file,
                 filename=f"expenses{year_text}.xlsx",
                 caption=caption
@@ -76,7 +82,7 @@ def export_excel_command(update: Update, context: CallbackContext) -> None:
         os.unlink(tmp_path)
         
     except Exception as e:
-        update.message.reply_text(f"❌ Ошибка при отправке файла: {str(e)}")
+        await update.message.reply_text(f"❌ Ошибка при отправке файла: {str(e)}")
         # Очищаем временный файл в случае ошибки
         if 'tmp_path' in locals():
             try:
@@ -85,7 +91,7 @@ def export_excel_command(update: Update, context: CallbackContext) -> None:
                 pass
 
 
-def export_stats_command(update: Update, context: CallbackContext) -> None:
+async def export_stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """
     Обрабатывает команду /export_stats для отправки Excel файла со статистикой
     Поддерживает: /export_stats [год] [месяц]
@@ -101,7 +107,7 @@ def export_stats_command(update: Update, context: CallbackContext) -> None:
         try:
             year = int(context.args[0])
         except ValueError:
-            update.message.reply_text(
+            await update.message.reply_text(
                 "❌ Неверный формат года. Используйте: /export_stats [год] [месяц]\n"
                 "Например: /export_stats 2024 или /export_stats 2024 июнь"
             )
@@ -114,7 +120,7 @@ def export_stats_command(update: Update, context: CallbackContext) -> None:
         try:
             month = int(month_arg)
             if month < 1 or month > 12:
-                update.message.reply_text("❌ Месяц должен быть от 1 до 12.")
+                await update.message.reply_text("❌ Месяц должен быть от 1 до 12.")
                 return
         except ValueError:
             # Если не число, пытаемся найти в словаре названий
@@ -122,7 +128,7 @@ def export_stats_command(update: Update, context: CallbackContext) -> None:
                 month = config.MONTH_NAMES[month_arg]
             else:
                 available_months = ", ".join([f"{num} ({name})" for name, num in config.MONTH_NAMES.items() if len(name) > 3 or name=='май'])
-                update.message.reply_text(
+                await update.message.reply_text(
                     f"❌ Неизвестный месяц '{month_arg}'.\n"
                     f"Доступные варианты: {available_months}\n"
                     f"Или используйте числа от 1 до 12."
@@ -130,21 +136,25 @@ def export_stats_command(update: Update, context: CallbackContext) -> None:
                 return
     
     # Получаем все данные
-    expenses_df = excel.get_all_expenses(user_id, year)
+    expenses_df = await excel.get_all_expenses(user_id, year)
     
     if expenses_df is None or expenses_df.empty:
         if year:
-            update.message.reply_text(f"❌ Нет данных за {year} год.")
+            await update.message.reply_text(f"❌ Нет данных за {year} год.")
         else:
-            update.message.reply_text("❌ У вас пока нет данных о расходах.")
+            await update.message.reply_text("❌ У вас пока нет данных о расходах.")
         return
+    
+    # Конвертируем amount в numeric, если это необходимо
+    if 'amount' in expenses_df.columns:
+        expenses_df['amount'] = pd.to_numeric(expenses_df['amount'], errors='coerce')
     
     # Фильтруем по месяцу, если указан
     if month:
         expenses_df = expenses_df[expenses_df['month'] == month]
         if expenses_df.empty:
             month_name = get_month_name(month)
-            update.message.reply_text(f"❌ Нет данных за {month_name} {year} года.")
+            await update.message.reply_text(f"❌ Нет данных за {month_name} {year} года.")
             return
     
     try:
@@ -205,7 +215,7 @@ def export_stats_command(update: Update, context: CallbackContext) -> None:
                 filename = "expense_stats_all.xlsx"
                 caption = "📈 Статистика всех расходов\n\nФайл содержит детальную статистику ваших расходов."
             
-            update.message.reply_document(
+            await update.message.reply_document(
                 document=file,
                 filename=filename,
                 caption=caption
@@ -215,7 +225,7 @@ def export_stats_command(update: Update, context: CallbackContext) -> None:
         os.unlink(tmp_path)
         
     except Exception as e:
-        update.message.reply_text(f"❌ Ошибка при создании статистики: {str(e)}")
+        await update.message.reply_text(f"❌ Ошибка при создании статистики: {str(e)}")
         # Очищаем временный файл в случае ошибки
         if 'tmp_path' in locals():
             try:
@@ -224,9 +234,9 @@ def export_stats_command(update: Update, context: CallbackContext) -> None:
                 pass
 
 
-def register_export_handlers(dp):
+def register_export_handlers(application):
     """
     Регистрирует обработчики команд для экспорта
     """
-    dp.add_handler(CommandHandler("export", export_excel_command))
-    dp.add_handler(CommandHandler("export_stats", export_stats_command))
+    application.add_handler(CommandHandler("export", export_excel_command))
+    application.add_handler(CommandHandler("export_stats", export_stats_command))

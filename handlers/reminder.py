@@ -3,12 +3,13 @@
 """
 
 import datetime
-from telegram import Update, ParseMode
-from telegram.ext import CallbackContext, CommandHandler
+from telegram import Update
+from telegram.constants import ParseMode
+from telegram.ext import ContextTypes, CommandHandler
 from utils import excel, helpers, visualization
 import os
 
-def setup_monthly_reminder(update: Update, context: CallbackContext) -> None:
+async def setup_monthly_reminder(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """
     Настраивает напоминание о необходимости запросить статистику в конце месяца
     """
@@ -27,9 +28,9 @@ def setup_monthly_reminder(update: Update, context: CallbackContext) -> None:
         "Мы работаем над добавлением автоматической отправки статистики в будущих обновлениях."
     )
     
-    update.message.reply_text(message)
+    await update.message.reply_text(message)
 
-def remind_command(update: Update, context: CallbackContext) -> None:
+async def remind_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """
     Отправляет инструкции по настройке напоминаний
     """
@@ -55,9 +56,9 @@ def remind_command(update: Update, context: CallbackContext) -> None:
         "Мы работаем над добавлением автоматической отправки статистики в будущих обновлениях."
     )
     
-    update.message.reply_text(message)
+    await update.message.reply_text(message)
 
-def end_of_month_stats(update: Update, context: CallbackContext) -> None:
+async def end_of_month_stats(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """
     Отправляет полную статистику за месяц по запросу
     Имитирует функцию, которая должна была бы выполняться автоматически в конце месяца
@@ -71,7 +72,7 @@ def end_of_month_stats(update: Update, context: CallbackContext) -> None:
     month_name = helpers.get_month_name(month)
     
     # Получаем статистику расходов
-    expenses = excel.get_month_expenses(user_id, month, year)
+    expenses = await excel.get_month_expenses(user_id, month, year)
     
     # Формируем отчет
     report = (
@@ -80,7 +81,7 @@ def end_of_month_stats(update: Update, context: CallbackContext) -> None:
     
     if not expenses or expenses['total'] == 0:
         report += f"В {month_name} {year} года расходов не было."
-        update.message.reply_text(report)
+        await update.message.reply_text(report)
         return
     
     # Добавляем общую статистику
@@ -104,17 +105,17 @@ def end_of_month_stats(update: Update, context: CallbackContext) -> None:
         report += f"{emoji} {category}: {amount:.2f} ({percentage:.1f}%)\n"
     
     # Добавляем статус бюджета
-    budget_status = helpers.format_budget_status(user_id, month, year)
+    budget_status = await helpers.format_budget_status(user_id, month, year)
     report += f"\n{budget_status}"
     
     # Отправляем отчет
-    update.message.reply_text(report)
+    await update.message.reply_text(report)
     
     # Отправляем круговую диаграмму
-    chart_path = visualization.create_monthly_pie_chart(user_id, month, year)
+    chart_path = await visualization.create_monthly_pie_chart(user_id, month, year)
     if chart_path and os.path.exists(chart_path):
         with open(chart_path, 'rb') as photo:
-            update.message.reply_photo(photo=photo, caption="Распределение расходов по категориям")
+            await update.message.reply_photo(photo=photo, caption="Распределение расходов по категориям")
     
     # Отправляем сравнение с предыдущим месяцем, если возможно
     prev_month = month - 1
@@ -123,7 +124,7 @@ def end_of_month_stats(update: Update, context: CallbackContext) -> None:
         prev_month = 12
         prev_year = year - 1
     
-    prev_expenses = excel.get_month_expenses(user_id, prev_month, prev_year)
+    prev_expenses = await excel.get_month_expenses(user_id, prev_month, prev_year)
     if prev_expenses and prev_expenses['total'] > 0:
         prev_month_name = helpers.get_month_name(prev_month)
         diff = expenses['total'] - prev_expenses['total']
@@ -138,12 +139,12 @@ def end_of_month_stats(update: Update, context: CallbackContext) -> None:
         else:
             comparison += f"Уменьшение расходов: {diff:.2f} ({diff_percentage:.1f}%)"
         
-        update.message.reply_text(comparison)
+        await update.message.reply_text(comparison)
 
-def register_reminder_handlers(dp):
+def register_reminder_handlers(application):
     """
     Регистрирует обработчики команд для напоминаний и альтернативных решений
     """
-    dp.add_handler(CommandHandler("autostat", setup_monthly_reminder))
-    dp.add_handler(CommandHandler("remind", remind_command))
-    dp.add_handler(CommandHandler("monthend", end_of_month_stats))
+    application.add_handler(CommandHandler("autostat", setup_monthly_reminder))
+    application.add_handler(CommandHandler("remind", remind_command))
+    application.add_handler(CommandHandler("monthend", end_of_month_stats))
