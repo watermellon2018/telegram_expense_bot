@@ -161,6 +161,8 @@ async def project_main_command(update: Update, context: ContextTypes.DEFAULT_TYP
     """
     Обрабатывает команду /project_main для переключения на общие расходы
     """
+    from utils.helpers import get_main_menu_keyboard
+    
     user_id = update.effective_user.id
     
     # Переключаемся на общие расходы
@@ -172,10 +174,14 @@ async def project_main_command(update: Update, context: ContextTypes.DEFAULT_TYP
         
         await update.message.reply_text(
             f"✅ {result['message']}\n\n"
-            f"Теперь все расходы будут записываться в общие расходы."
+            f"Теперь все расходы будут записываться в общие расходы.",
+            reply_markup=get_main_menu_keyboard()
         )
     else:
-        await update.message.reply_text(f"❌ {result['message']}")
+        await update.message.reply_text(
+            f"❌ {result['message']}",
+            reply_markup=get_main_menu_keyboard()
+        )
 
 
 async def project_delete_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -253,9 +259,10 @@ async def project_delete_confirm(update: Update, context: ContextTypes.DEFAULT_T
         project_name = context.user_data.get('delete_project_name')
         
         if project_id is None:
+            from utils.helpers import get_main_menu_keyboard
             await update.message.reply_text(
                 "❌ Ошибка: проект не найден.",
-                reply_markup=ReplyKeyboardRemove()
+                reply_markup=get_main_menu_keyboard()
             )
             return ConversationHandler.END
         
@@ -267,20 +274,23 @@ async def project_delete_confirm(update: Update, context: ContextTypes.DEFAULT_T
             if context.user_data.get('active_project_id') == project_id:
                 context.user_data['active_project_id'] = None
             
+            from utils.helpers import get_main_menu_keyboard
             await update.message.reply_text(
                 f"✅ {result['message']}\n\n"
                 f"Все данные проекта '{project_name}' удалены.",
-                reply_markup=ReplyKeyboardRemove()
+                reply_markup=get_main_menu_keyboard()
             )
         else:
+            from utils.helpers import get_main_menu_keyboard
             await update.message.reply_text(
                 f"❌ {result['message']}",
-                reply_markup=ReplyKeyboardRemove()
+                reply_markup=get_main_menu_keyboard()
             )
     else:
+        from utils.helpers import get_main_menu_keyboard
         await update.message.reply_text(
             "Удаление проекта отменено.",
-            reply_markup=ReplyKeyboardRemove()
+            reply_markup=get_main_menu_keyboard()
         )
     
     # Очищаем данные пользователя
@@ -294,9 +304,11 @@ async def project_delete_cancel(update: Update, context: ContextTypes.DEFAULT_TY
     """
     Отменяет удаление проекта
     """
+    from utils.helpers import get_main_menu_keyboard
+    
     await update.message.reply_text(
         "Удаление проекта отменено.",
-        reply_markup=ReplyKeyboardRemove()
+        reply_markup=get_main_menu_keyboard()
     )
     
     # Очищаем данные пользователя
@@ -311,8 +323,7 @@ async def button_project_delete_start(update: Update, context: ContextTypes.DEFA
     """
     await update.message.reply_text(
         "❌ Укажите название или ID проекта для удаления:\n"
-        "Например: Отпуск или 1",
-        reply_markup=ReplyKeyboardRemove()
+        "Например: Отпуск или 1"
     )
     return ENTERING_PROJECT_TO_DELETE
 
@@ -367,8 +378,7 @@ async def button_project_create_start(update: Update, context: ContextTypes.DEFA
     Начинает создание проекта для кнопки (просит название)
     """
     await update.message.reply_text(
-        "🆕 Введите название нового проекта:",
-        reply_markup=ReplyKeyboardRemove()
+        "🆕 Введите название нового проекта:"
     )
     return ENTERING_PROJECT_NAME
 
@@ -385,13 +395,20 @@ async def button_project_create_confirm(update: Update, context: ContextTypes.DE
     if result['success']:
         await projects.set_active_project(user_id, result['project_id'])
         context.user_data['active_project_id'] = result['project_id']
+        
+        from utils.helpers import get_main_menu_keyboard
         await update.message.reply_text(
             f"✅ {result['message']}\n"
             f"📁 Проект '{project_name}' активирован\n\n"
-            f"Теперь все расходы будут записываться в этот проект."
+            f"Теперь все расходы будут записываться в этот проект.",
+            reply_markup=get_main_menu_keyboard()
         )
     else:
-        await update.message.reply_text(f"❌ {result['message']}")
+        from utils.helpers import get_main_menu_keyboard
+        await update.message.reply_text(
+            f"❌ {result['message']}",
+            reply_markup=get_main_menu_keyboard()
+        )
     
     return ConversationHandler.END
 
@@ -402,8 +419,7 @@ async def button_project_select_start(update: Update, context: ContextTypes.DEFA
     """
     await update.message.reply_text(
         "🔄 Укажите название или ID проекта для выбора:\n"
-        "Например: Отпуск или 1",
-        reply_markup=ReplyKeyboardRemove()
+        "Например: Отпуск или 1"
     )
     return ENTERING_PROJECT_TO_SELECT
 
