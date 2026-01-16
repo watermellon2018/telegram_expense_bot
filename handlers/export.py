@@ -98,6 +98,9 @@ async def export_stats_command(update: Update, context: ContextTypes.DEFAULT_TYP
     """
     user_id = update.effective_user.id
     
+    # Получаем активный проект
+    project_id = context.user_data.get('active_project_id')
+    
     # Получаем год и месяц из аргументов команды
     year = None
     month = None
@@ -135,7 +138,7 @@ async def export_stats_command(update: Update, context: ContextTypes.DEFAULT_TYP
                 return
     
     # Получаем все данные
-    expenses_df = await excel.get_all_expenses(user_id, year)
+    expenses_df = await excel.get_all_expenses(user_id, year, project_id)
     
     if expenses_df is None or expenses_df.empty:
         if year:
@@ -205,14 +208,22 @@ async def export_stats_command(update: Update, context: ContextTypes.DEFAULT_TYP
         with open(tmp_path, 'rb') as file:
             if month:
                 month_name = get_month_name(month)
-                filename = f"expense_stats_{year}_{month:02d}.xlsx"
+                filename = f"Статистика расходов за {month:02d}.{year}.xlsx"
                 caption = f"📈 Статистика расходов за {month_name} {year} года\n\nФайл содержит детальную статистику ваших расходов."
             elif year:
-                filename = f"expense_stats_{year}.xlsx"
+                filename = f"Статистика расходов за {year} год.xlsx"
                 caption = f"📈 Статистика расходов за {year} год\n\nФайл содержит детальную статистику ваших расходов."
             else:
-                filename = "expense_stats_all.xlsx"
+                filename = "Общая статистика расходов.xlsx"
                 caption = "📈 Статистика всех расходов\n\nФайл содержит детальную статистику ваших расходов."
+            
+            # Добавляем информацию о проекте
+            if project_id is not None:
+                project = await projects.get_project_by_id(user_id, project_id)
+                if project:
+                    caption = f"📁 Проект: {project['project_name']}\n\n{caption}"
+            else:
+                caption = f"📊 Общие расходы\n\n{caption}"
             
             await update.message.reply_document(
                 document=file,
