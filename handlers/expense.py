@@ -184,9 +184,10 @@ async def handle_category(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     text = update.message.text
 
     if text == 'Отмена':
+        from utils.helpers import get_main_menu_keyboard
         await update.message.reply_text(
             "Добавление расхода отменено.",
-            reply_markup=ReplyKeyboardRemove()
+            reply_markup=get_main_menu_keyboard()
         )
         return ConversationHandler.END
 
@@ -207,8 +208,7 @@ async def handle_category(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
     # Спрашиваем описание
     await update.message.reply_text(
-        "Введите описание расхода (или отправьте /skip, чтобы пропустить):",
-        reply_markup=ReplyKeyboardRemove()
+        "Введите описание расхода (или отправьте /skip, чтобы пропустить):"
     )
 
     return ENTERING_DESCRIPTION
@@ -255,7 +255,7 @@ async def handle_description(update: Update, context: ContextTypes.DEFAULT_TYPE)
     else:
         confirmation += f"\n📊 Общие расходы"
 
-    await update.message.reply_text(confirmation)
+    await update.message.reply_text(confirmation, reply_markup=helpers.get_main_menu_keyboard())
 
     # Очищаем данные пользователя
     # context.user_data.clear()

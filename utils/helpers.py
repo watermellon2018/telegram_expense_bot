@@ -195,7 +195,7 @@ def format_day_expenses(expenses, date=None):
     return report
 
 
-async def cancel_conversation(update: Update, context: ContextTypes.DEFAULT_TYPE, message: str = "Операция отменена.", clear_data: bool = False) -> int:
+async def cancel_conversation(update: Update, context: ContextTypes.DEFAULT_TYPE, message: str = "Операция отменена.", clear_data: bool = False, restore_keyboard: bool = True) -> int:
     """
     Универсальная функция для отмены ConversationHandler.
     
@@ -204,11 +204,17 @@ async def cancel_conversation(update: Update, context: ContextTypes.DEFAULT_TYPE
         context: Контекст бота
         message: Сообщение пользователю (по умолчанию "Операция отменена.")
         clear_data: Очистить ли context.user_data (по умолчанию False)
+        restore_keyboard: Восстановить ли главное меню после отмены (по умолчанию True)
     
     Returns:
         ConversationHandler.END
     """
-    await update.message.reply_text(message, reply_markup=ReplyKeyboardRemove())
+    if restore_keyboard:
+        reply_markup = get_main_menu_keyboard()
+    else:
+        reply_markup = ReplyKeyboardRemove()
+    
+    await update.message.reply_text(message, reply_markup=reply_markup)
     
     if clear_data:
         context.user_data.clear()
@@ -235,3 +241,19 @@ async def add_project_context_to_report(report: str, user_id: int, project_id: i
             return f"📁 Проект: {project['project_name']}\n\n{report}"
     
     return f"📊 Общие расходы\n\n{report}"
+
+
+def get_main_menu_keyboard():
+    """
+    Возвращает клавиатуру главного меню.
+    
+    Returns:
+        ReplyKeyboardMarkup с кнопками главного меню
+    """
+    from telegram import ReplyKeyboardMarkup
+    keyboard = [
+        ['/add', '/month', '/day', '/stats'],
+        ['/category', '/budget', '/export'],
+        ['📁 Проекты', '/help']
+    ]
+    return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
