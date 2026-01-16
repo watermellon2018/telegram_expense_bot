@@ -4,7 +4,7 @@
 
 from telegram import Update, ReplyKeyboardMarkup
 from telegram.ext import ContextTypes, CommandHandler, filters, MessageHandler
-from utils import excel
+from utils import excel, projects
 import config
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -26,7 +26,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
     
     # Инициализируем активный проект из БД
-    from utils import projects
     active_project = await projects.get_active_project(user_id)
     if active_project:
         context.user_data['active_project_id'] = active_project['project_id']

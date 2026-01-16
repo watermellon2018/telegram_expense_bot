@@ -7,9 +7,12 @@
 import os
 import datetime
 import pandas as pd
+import logging
 
 import config
 from . import db
+
+logger = logging.getLogger(__name__)
 
 
 def create_user_dir(user_id):
@@ -103,7 +106,7 @@ async def add_expense(user_id, amount, category, description: str = "", project_
         )
         return True
     except Exception as e:
-        print(f"Ошибка при добавлении расхода в БД: {e}")
+        logger.error(f"Ошибка при добавлении расхода в БД: {e}")
         return False
 
 
@@ -149,7 +152,7 @@ async def get_month_expenses(user_id, month=None, year=None, project_id=None):
             "count": len(rows),
         }
     except Exception as e:
-        print(f"Ошибка при получении статистики за месяц из БД: {e}")
+        logger.error(f"Ошибка при получении статистики за месяц из БД: {e}")
         return None
 
 
@@ -176,7 +179,7 @@ async def set_budget(user_id, amount, month=None, year=None, project_id=None):
         )
         return True
     except Exception as e:
-        print(f"Ошибка при установке бюджета в БД: {e}")
+        logger.error(f"Ошибка при установке бюджета в БД: {e}")
         return False
 
 
@@ -225,7 +228,7 @@ async def get_category_expenses(user_id, category, year=None, project_id=None):
             "count": len(rows),
         }
     except Exception as e:
-        print(f"Ошибка при получении статистики по категории из БД: {e}")
+        logger.error(f"Ошибка при получении статистики по категории из БД: {e}")
         return None
 
 
@@ -257,7 +260,7 @@ async def get_all_expenses(user_id, year=None, project_id=None):
         data = [dict(r) for r in rows]
         return pd.DataFrame(data)
     except Exception as e:
-        print(f"Ошибка при получении всех расходов из БД: {e}")
+        logger.error(f"Ошибка при получении всех расходов из БД: {e}")
         return None
 
 
@@ -307,5 +310,5 @@ async def get_day_expenses(user_id, date=None, project_id=None):
             "count": len(rows),
         }
     except Exception as e:
-        print(f"Error getting daily statistics from DB: {e}")
+        logger.error(f"Error getting daily statistics from DB: {e}")
         return None

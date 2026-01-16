@@ -6,7 +6,7 @@ from utils.export import get_month_name
 
 from telegram import Update
 from telegram.ext import ContextTypes, CommandHandler
-from utils import excel
+from utils import excel, projects
 import os
 import tempfile
 import shutil
@@ -63,7 +63,6 @@ async def export_excel_command(update: Update, context: ContextTypes.DEFAULT_TYP
             
             # Добавляем информацию о проекте
             if project_id is not None:
-                from utils import projects
                 project = await projects.get_project_by_id(user_id, project_id)
                 if project:
                     caption = f"📁 Проект: {project['project_name']}\n📊 Расходы{year_text}\n\nФайл содержит все записи о расходах проекта."

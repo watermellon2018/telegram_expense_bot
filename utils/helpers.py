@@ -4,7 +4,12 @@
 
 import re
 import datetime
+import logging
 from utils import excel
+from telegram import Update, ReplyKeyboardRemove
+from telegram.ext import ContextTypes, ConversationHandler
+
+logger = logging.getLogger(__name__)
 
 def parse_add_command(text):
     """
@@ -128,7 +133,7 @@ async def format_budget_status(user_id, month=None, year=None):
             month,
         )
     except Exception as e:
-        print(f"Ошибка при получении статуса бюджета из БД: {e}")
+        logger.error(f"Ошибка при получении статуса бюджета из БД: {e}")
         row = None
 
     if not row or float(row["budget"]) == 0:
@@ -188,3 +193,45 @@ def format_day_expenses(expenses, date=None):
         report += f"{emoji} {category.title()}: {amount:.2f} ({percentage:.1f}%)\n"
     
     return report
+
+
+async def cancel_conversation(update: Update, context: ContextTypes.DEFAULT_TYPE, message: str = "Операция отменена.", clear_data: bool = False) -> int:
+    """
+    Универсальная функция для отмены ConversationHandler.
+    
+    Args:
+        update: Telegram Update объект
+        context: Контекст бота
+        message: Сообщение пользователю (по умолчанию "Операция отменена.")
+        clear_data: Очистить ли context.user_data (по умолчанию False)
+    
+    Returns:
+        ConversationHandler.END
+    """
+    await update.message.reply_text(message, reply_markup=ReplyKeyboardRemove())
+    
+    if clear_data:
+        context.user_data.clear()
+    
+    return ConversationHandler.END
+
+
+async def add_project_context_to_report(report: str, user_id: int, project_id: int = None) -> str:
+    """
+    Добавляет информацию о текущем проекте в начало отчета.
+    
+    Args:
+        report: Исходный текст отчета
+        user_id: ID пользователя
+        project_id: ID активного проекта (None для общих расходов)
+    
+    Returns:
+        Отчет с добавленной информацией о проекте
+    """
+    if project_id is not None:
+        from utils import projects
+        project = await projects.get_project_by_id(user_id, project_id)
+        if project:
+            return f"📁 Проект: {project['project_name']}\n\n{report}"
+    
+    return f"📊 Общие расходы\n\n{report}"

@@ -446,9 +446,8 @@ async def project_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     """
     Общий отменитель для всех conversations
     """
-    await update.message.reply_text("Операция отменена.", reply_markup=ReplyKeyboardRemove())
-    context.user_data.clear()  # Очистка на всякий случай
-    return ConversationHandler.END
+    from utils import helpers
+    return await helpers.cancel_conversation(update, context, "Операция отменена.", clear_data=True)
 
 async def project_info_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """
