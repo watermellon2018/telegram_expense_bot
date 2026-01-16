@@ -7,12 +7,13 @@
 import os
 import datetime
 import pandas as pd
-import logging
+import time
 
 import config
 from . import db
+from utils.logger import get_logger, log_event, log_error
 
-logger = logging.getLogger(__name__)
+logger = get_logger("utils.excel")
 
 
 def create_user_dir(user_id):
@@ -42,12 +43,21 @@ async def add_expense(user_id, amount, category, description: str = "", project_
     Добавляет новый расход в БД.
     Если project_id указан, добавляет расход в проект.
     """
+    import time
+    from utils.logger import get_logger, log_event, log_error
+    
+    expense_logger = get_logger("utils.excel")
+    start_time = time.time()
+    
     now = datetime.datetime.now()
     month = now.month
     date_val = now.date()
     time_val = now.time().replace(microsecond=0)
     category = category.lower()
     project_id = _normalize_project_id(project_id)
+
+    log_event(expense_logger, "add_expense_start", user_id=user_id, project_id=project_id,
+             amount=amount, category=category)
 
     try:
         # 1. Убедимся, что пользователь существует
@@ -104,9 +114,15 @@ async def add_expense(user_id, amount, category, description: str = "", project_
             project_id,
             month,
         )
+        
+        duration = time.time() - start_time
+        log_event(expense_logger, "add_expense_success", user_id=user_id, project_id=project_id,
+                 amount=amount, category=category, duration=duration)
         return True
     except Exception as e:
-        logger.error(f"Ошибка при добавлении расхода в БД: {e}")
+        duration = time.time() - start_time
+        log_error(expense_logger, e, "add_expense_error", user_id=user_id, project_id=project_id,
+                 amount=amount, category=category, duration=duration)
         return False
 
 
@@ -146,13 +162,18 @@ async def get_month_expenses(user_id, month=None, year=None, project_id=None):
             total += amt
             by_category[cat] = by_category.get(cat, 0.0) + amt
 
-        return {
+        result = {
             "total": total,
             "by_category": by_category,
             "count": len(rows),
         }
+        log_event(logger, "get_month_expenses_success", user_id=user_id, 
+                 month=month, year=year, project_id=project_id,
+                 total=total, count=len(rows), categories_count=len(by_category))
+        return result
     except Exception as e:
-        logger.error(f"Ошибка при получении статистики за месяц из БД: {e}")
+        log_error(logger, e, "get_month_expenses_error", user_id=user_id,
+                 month=month, year=year, project_id=project_id)
         return None
 
 
@@ -177,9 +198,12 @@ async def set_budget(user_id, amount, month=None, year=None, project_id=None):
             month,
             float(amount),
         )
+        log_event(logger, "set_budget_success", user_id=user_id, 
+                 amount=amount, month=month, year=year, project_id=project_id)
         return True
     except Exception as e:
-        logger.error(f"Ошибка при установке бюджета в БД: {e}")
+        log_error(logger, e, "set_budget_error", user_id=user_id,
+                 amount=amount, month=month, year=year, project_id=project_id)
         return False
 
 
@@ -222,13 +246,18 @@ async def get_category_expenses(user_id, category, year=None, project_id=None):
             total += amt
             by_month[m] = by_month.get(m, 0.0) + amt
 
-        return {
+        result = {
             "total": total,
             "by_month": by_month,
             "count": len(rows),
         }
+        log_event(logger, "get_category_expenses_success", user_id=user_id,
+                 category=category, year=year, project_id=project_id,
+                 total=total, count=len(rows))
+        return result
     except Exception as e:
-        logger.error(f"Ошибка при получении статистики по категории из БД: {e}")
+        log_error(logger, e, "get_category_expenses_error", user_id=user_id,
+                 category=category, year=year, project_id=project_id)
         return None
 
 
@@ -255,12 +284,18 @@ async def get_all_expenses(user_id, year=None, project_id=None):
             project_id,
         )
         if not rows:
+            log_event(logger, "get_all_expenses_empty", user_id=user_id,
+                     year=year, project_id=project_id)
             return None
 
         data = [dict(r) for r in rows]
-        return pd.DataFrame(data)
+        result = pd.DataFrame(data)
+        log_event(logger, "get_all_expenses_success", user_id=user_id,
+                 year=year, project_id=project_id, rows_count=len(result))
+        return result
     except Exception as e:
-        logger.error(f"Ошибка при получении всех расходов из БД: {e}")
+        log_error(logger, e, "get_all_expenses_error", user_id=user_id,
+                 year=year, project_id=project_id)
         return None
 
 
@@ -303,12 +338,17 @@ async def get_day_expenses(user_id, date=None, project_id=None):
             total += amt
             by_category[cat] = by_category.get(cat, 0.0) + amt
 
-        return {
+        result = {
             "status": True,
             "total": total,
             "by_category": by_category,
             "count": len(rows),
         }
+        log_event(logger, "get_day_expenses_success", user_id=user_id,
+                 date=str(target_date), project_id=project_id,
+                 total=total, count=len(rows))
+        return result
     except Exception as e:
-        logger.error(f"Error getting daily statistics from DB: {e}")
+        log_error(logger, e, "get_day_expenses_error", user_id=user_id,
+                 date=str(target_date), project_id=project_id)
         return None

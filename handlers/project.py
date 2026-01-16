@@ -6,7 +6,11 @@ from telegram import Update, ReplyKeyboardMarkup, ReplyKeyboardRemove
 from telegram.constants import ParseMode
 from telegram.ext import ContextTypes, CommandHandler, filters, MessageHandler, ConversationHandler
 from utils import projects
+from utils.logger import get_logger, log_command, log_event, log_error
 import config
+import time
+
+logger = get_logger("handlers.project")
 
 # Состояния для ConversationHandler
 CONFIRMING_DELETE, ENTERING_PROJECT_NAME, ENTERING_PROJECT_TO_SELECT, ENTERING_PROJECT_TO_DELETE = range(4)
@@ -18,37 +22,65 @@ async def project_create_command(update: Update, context: ContextTypes.DEFAULT_T
     """
     user_id = update.effective_user.id
     message_text = update.message.text
+    start_time = time.time()
     
-    # Проверяем, содержит ли команда название проекта
-    parts = message_text.split(maxsplit=1)
+    log_command(logger, "project_create", user_id=user_id, command_text=message_text)
     
-    if len(parts) < 2:
-        await update.message.reply_text(
-            "❌ Укажите название проекта.\n"
-            "Используйте: /project_create <название>\n"
-            "Например: /project_create Отпуск"
-        )
-        return
-    
-    project_name = parts[1].strip()
-    
-    # Создаем проект
-    result = await projects.create_project(user_id, project_name)
-    
-    if result['success']:
-        # Автоматически переключаемся на созданный проект
-        await projects.set_active_project(user_id, result['project_id'])
+    try:
+        # Проверяем, содержит ли команда название проекта
+        parts = message_text.split(maxsplit=1)
         
-        # Сохраняем в контексте пользователя
-        context.user_data['active_project_id'] = result['project_id']
+        if len(parts) < 2:
+            log_event(logger, "project_create_no_name", user_id=user_id, 
+                     reason="name_not_provided")
+            await update.message.reply_text(
+                "❌ Укажите название проекта.\n"
+                "Используйте: /project_create <название>\n"
+                "Например: /project_create Отпуск"
+            )
+            return
         
-        await update.message.reply_text(
-            f"✅ {result['message']}\n"
-            f"📁 Проект '{project_name}' активирован\n\n"
-            f"Теперь все расходы будут записываться в этот проект."
-        )
-    else:
-        await update.message.reply_text(f"❌ {result['message']}")
+        project_name = parts[1].strip()
+        
+        if not project_name:
+            log_event(logger, "project_create_empty_name", user_id=user_id, 
+                     reason="empty_name")
+            await update.message.reply_text("❌ Название проекта не может быть пустым.")
+            return
+        
+        log_event(logger, "project_create_start", user_id=user_id, project_name=project_name)
+        
+        # Создаем проект
+        result = await projects.create_project(user_id, project_name)
+        
+        if result['success']:
+            project_id = result['project_id']
+            
+            # Автоматически переключаемся на созданный проект
+            await projects.set_active_project(user_id, project_id)
+            
+            # Сохраняем в контексте пользователя
+            context.user_data['active_project_id'] = project_id
+            
+            duration = time.time() - start_time
+            log_event(logger, "project_create_success", user_id=user_id, 
+                     project_id=project_id, project_name=project_name, duration=duration)
+            
+            await update.message.reply_text(
+                f"✅ {result['message']}\n"
+                f"📁 Проект '{project_name}' активирован\n\n"
+                f"Теперь все расходы будут записываться в этот проект."
+            )
+        else:
+            duration = time.time() - start_time
+            log_event(logger, "project_create_failed", user_id=user_id, 
+                     project_name=project_name, reason=result.get('message'), duration=duration)
+            await update.message.reply_text(f"❌ {result['message']}")
+            
+    except Exception as e:
+        duration = time.time() - start_time
+        log_error(logger, e, "project_create_error", user_id=user_id, duration=duration)
+        await update.message.reply_text("❌ Произошла ошибка при создании проекта.")
 
 
 async def project_list_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -56,51 +88,65 @@ async def project_list_command(update: Update, context: ContextTypes.DEFAULT_TYP
     Обрабатывает команду /project_list для отображения списка проектов
     """
     user_id = update.effective_user.id
+    start_time = time.time()
     
-    # Получаем список проектов
-    all_projects = await projects.get_all_projects(user_id)
+    log_command(logger, "project_list", user_id=user_id)
     
-    if not all_projects:
-        await update.message.reply_text(
-            "📋 У вас пока нет проектов.\n\n"
-            "Создайте проект командой:\n"
-            "/project_create <название>"
-        )
-        return
-    
-    # Получаем активный проект
-    active_project = await projects.get_active_project(user_id)
-    active_project_id = active_project['project_id'] if active_project else None
-    
-    # Формируем список
-    message = "📋 Ваши проекты:\n\n"
-    
-    for project in all_projects:
-        project_id = project['project_id']
-        project_name = project['project_name']
-        created_date = project['created_date']
+    try:
+        # Получаем список проектов
+        all_projects = await projects.get_all_projects(user_id)
         
-        # Получаем статистику по проекту
-        stats = await projects.get_project_stats(user_id, project_id)
+        if not all_projects:
+            log_event(logger, "project_list_empty", user_id=user_id)
+            await update.message.reply_text(
+                "📋 У вас пока нет проектов.\n\n"
+                "Создайте проект командой:\n"
+                "/project_create <название>"
+            )
+            return
+    
+        # Получаем активный проект
+        active_project = await projects.get_active_project(user_id)
+        active_project_id = active_project['project_id'] if active_project else None
         
-        # Отмечаем активный проект
-        if project_id == active_project_id:
-            message += f"📁 *{project_name}* (активен)\n"
+        # Формируем список
+        message = "📋 Ваши проекты:\n\n"
+        
+        for project in all_projects:
+            project_id = project['project_id']
+            project_name = project['project_name']
+            created_date = project['created_date']
+            
+            # Получаем статистику по проекту
+            stats = await projects.get_project_stats(user_id, project_id)
+            
+            # Отмечаем активный проект
+            if project_id == active_project_id:
+                message += f"📁 *{project_name}* (активен)\n"
+            else:
+                message += f"📁 {project_name}\n"
+            
+            message += f"   ID: {project_id}\n"
+            message += f"   Создан: {created_date}\n"
+            message += f"   Расходов: {stats['count']}\n"
+            message += f"   Сумма: {stats['total']:.2f}\n\n"
+        
+        # Показываем текущий режим
+        if active_project_id is None:
+            message += "📊 Текущий режим: Общие расходы"
         else:
-            message += f"📁 {project_name}\n"
+            message += f"📁 Текущий режим: Проект '{active_project['project_name']}'"
         
-        message += f"   ID: {project_id}\n"
-        message += f"   Создан: {created_date}\n"
-        message += f"   Расходов: {stats['count']}\n"
-        message += f"   Сумма: {stats['total']:.2f}\n\n"
-    
-    # Показываем текущий режим
-    if active_project_id is None:
-        message += "📊 Текущий режим: Общие расходы"
-    else:
-        message += f"📁 Текущий режим: Проект '{active_project['project_name']}'"
-    
-    await update.message.reply_text(message, parse_mode=ParseMode.MARKDOWN)
+        await update.message.reply_text(message, parse_mode=ParseMode.MARKDOWN)
+        
+        duration = time.time() - start_time
+        log_event(logger, "project_list_success", user_id=user_id, 
+                 projects_count=len(all_projects), active_project_id=active_project_id, duration=duration)
+        
+    except Exception as e:
+        duration = time.time() - start_time
+        log_error(logger, e, "project_list_error", user_id=user_id, duration=duration)
+        await update.message.reply_text("❌ Произошла ошибка при получении списка проектов.")
 
 
 async def project_select_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:

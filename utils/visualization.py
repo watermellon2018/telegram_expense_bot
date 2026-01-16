@@ -216,7 +216,8 @@ async def create_budget_comparison_chart(user_id, year=None, save_path=None):
             data = [dict(r) for r in rows]
             budget_df = pd.DataFrame(data)
     except Exception as e:
-        logger.error(f"Ошибка при получении данных бюджета из БД: {e}")
+        log_error(logger, e, "get_budget_data_error", user_id=user_id,
+                 month=month, year=year, project_id=project_id)
         budget_df = None
 
     if budget_df is None or budget_df.empty:

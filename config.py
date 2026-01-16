@@ -11,7 +11,6 @@ load_dotenv()
 # Токен Telegram-бота (заменить на реальный токен при запуске)
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "YOUR_TELEGRAM_BOT_TOKEN")
 
-
 # Настройки для хранения данных
 DATA_DIR = "data/users"
 
@@ -87,3 +86,11 @@ TIME_FORMAT = "%H:%M:%S"
 
 # Максимальное количество категорий для отображения на графиках
 MAX_CATEGORIES_ON_CHART = 8
+
+# Настройки логирования
+LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
+JSON_LOG_FORMAT = os.getenv("JSON_LOG_FORMAT", "false").lower() == "true"  # JSON формат для production
+LOG_FILE = os.getenv("LOG_FILE", None)  # Путь к файлу логов (если None - только консоль)
+
+# Пороги производительности для логирования БД операций
+SLOW_DB_QUERY_THRESHOLD = 0.01  # Секунды - для INSERT/UPDATE на служебных таблицах
