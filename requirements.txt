@@ -6,3 +6,4 @@ matplotlib
 seaborn
 python-dotenv
 pytz
+apscheduler==3.6.3
