@@ -13,87 +13,10 @@ import shutil
 import pandas as pd
 
 
-async def export_excel_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """
-    Обрабатывает команду /export для отправки Excel файла с данными пользователя
-    """
-    user_id = update.effective_user.id
-    
-    # Получаем активный проект
-    project_id = context.user_data.get('active_project_id')
-    
-    # Получаем год из аргументов команды или используем текущий
-    year = None
-    if context.args:
-        try:
-            year = int(context.args[0])
-        except ValueError:
-            await update.message.reply_text(
-                "❌ Неверный формат года. Используйте: /export [год]\n"
-                "Например: /export 2024"
-            )
-            return
-    
-    # Берём данные из БД и формируем временный Excel "на лету"
-    expenses_df = await excel.get_all_expenses(user_id, year, project_id)
-
-    if expenses_df is None or expenses_df.empty:
-        if year:
-            await update.message.reply_text(f"❌ Нет данных за {year} год.")
-        else:
-            await update.message.reply_text("❌ У вас пока нет данных о расходах.")
-        return
-    
-    # Конвертируем amount в numeric, если это необходимо
-    if 'amount' in expenses_df.columns:
-        expenses_df['amount'] = pd.to_numeric(expenses_df['amount'], errors='coerce')
-
-    try:
-        # Создаем временный Excel файл
-        with tempfile.NamedTemporaryFile(delete=False, suffix='.xlsx') as tmp_file:
-            tmp_path = tmp_file.name
-
-        # Записываем данные в Excel
-        with pd.ExcelWriter(tmp_path, engine='openpyxl') as writer:
-            expenses_df.to_excel(writer, sheet_name='Expenses', index=False)
-
-        # Отправляем файл
-        with open(tmp_path, 'rb') as file:
-            year_text = f" за {year} год" if year else ""
-            
-            # Добавляем информацию о проекте
-            if project_id is not None:
-                project = await projects.get_project_by_id(user_id, project_id)
-                if project:
-                    caption = f"📁 Проект: {project['project_name']}\n📊 Расходы{year_text}\n\nФайл содержит все записи о расходах проекта."
-                else:
-                    caption = f"📊 Ваши расходы{year_text}\n\nФайл содержит все ваши записи о расходах с детальной статистикой."
-            else:
-                caption = f"📊 Общие расходы{year_text}\n\nФайл содержит все ваши записи о расходах с детальной статистикой."
-            
-            await update.message.reply_document(
-                document=file,
-                filename=f"expenses{year_text}.xlsx",
-                caption=caption
-            )
-        
-        # Удаляем временный файл
-        os.unlink(tmp_path)
-        
-    except Exception as e:
-        await update.message.reply_text(f"❌ Ошибка при отправке файла: {str(e)}")
-        # Очищаем временный файл в случае ошибки
-        if 'tmp_path' in locals():
-            try:
-                os.unlink(tmp_path)
-            except:
-                pass
-
-
 async def export_stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """
-    Обрабатывает команду /export_stats для отправки Excel файла со статистикой
-    Поддерживает: /export_stats [год] [месяц]
+    Обрабатывает команду /export для отправки Excel файла со статистикой
+    Поддерживает: /export [год] [месяц]
     Месяц можно указать числом (1-12) или названием (январь, февраль, март, и т.д.)
     """
     user_id = update.effective_user.id
@@ -110,8 +33,8 @@ async def export_stats_command(update: Update, context: ContextTypes.DEFAULT_TYP
             year = int(context.args[0])
         except ValueError:
             await update.message.reply_text(
-                "❌ Неверный формат года. Используйте: /export_stats [год] [месяц]\n"
-                "Например: /export_stats 2024 или /export_stats 2024 июнь"
+                "❌ Неверный формат года. Используйте: /export [год] [месяц]\n"
+                "Например: /export 2024 или /export 2024 июнь"
             )
             return
     
@@ -248,5 +171,4 @@ def register_export_handlers(application):
     """
     Регистрирует обработчики команд для экспорта
     """
-    application.add_handler(CommandHandler("export", export_excel_command))
-    application.add_handler(CommandHandler("export_stats", export_stats_command))
+    application.add_handler(CommandHandler("export", export_stats_command))
