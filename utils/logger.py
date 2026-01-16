@@ -13,7 +13,7 @@ class StructuredFormatter(logging.Formatter):
     Форматтер для структурированного логирования
     Поддерживает как читаемый, так и JSON формат
     """
-    def __init__(self, json_format: bool = False):
+    def __init__(self, json_format: bool = True):
         super().__init__()
         self.json_format = json_format
     
