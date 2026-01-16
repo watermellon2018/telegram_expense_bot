@@ -10,8 +10,11 @@ import matplotlib
 matplotlib.use('Agg')  # Использование не-интерактивного бэкенда
 import seaborn as sns
 import datetime
+import logging
 from utils import excel
 import config
+
+logger = logging.getLogger(__name__)
 
 async def create_monthly_pie_chart(user_id, month=None, year=None, save_path=None, project_id=None):
     """
@@ -213,7 +216,7 @@ async def create_budget_comparison_chart(user_id, year=None, save_path=None):
             data = [dict(r) for r in rows]
             budget_df = pd.DataFrame(data)
     except Exception as e:
-        print(f"Ошибка при получении данных бюджета из БД: {e}")
+        logger.error(f"Ошибка при получении данных бюджета из БД: {e}")
         budget_df = None
 
     if budget_df is None or budget_df.empty:

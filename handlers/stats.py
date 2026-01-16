@@ -5,7 +5,7 @@
 from telegram import Update, ReplyKeyboardMarkup
 from telegram.constants import ParseMode
 from telegram.ext import ContextTypes, CommandHandler, filters, MessageHandler, ConversationHandler, CallbackQueryHandler
-from utils import excel, helpers, visualization
+from utils import excel, helpers, visualization, projects
 import config
 import os
 import datetime
@@ -34,13 +34,7 @@ async def month_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     report = helpers.format_month_expenses(expenses, month, year)
     
     # Добавляем информацию о проекте
-    if project_id is not None:
-        from utils import projects
-        project = await projects.get_project_by_id(user_id, project_id)
-        if project:
-            report = f"📁 Проект: {project['project_name']}\n\n" + report
-    else:
-        report = f"📊 Общие расходы\n\n" + report
+    report = await helpers.add_project_context_to_report(report, user_id, project_id)
 
     # Отправляем отчет
     await update.message.reply_text(report)
@@ -97,13 +91,7 @@ async def category_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     report = helpers.format_category_expenses(category_data, category, year)
     
     # Добавляем информацию о проекте
-    if project_id is not None:
-        from utils import projects
-        project = await projects.get_project_by_id(user_id, project_id)
-        if project:
-            report = f"📁 Проект: {project['project_name']}\n\n" + report
-    else:
-        report = f"📊 Общие расходы\n\n" + report
+    report = await helpers.add_project_context_to_report(report, user_id, project_id)
 
     # Отправляем отчет
     await update.message.reply_text(report)
@@ -255,8 +243,7 @@ async def handle_budget_amount(update: Update, context: ContextTypes.DEFAULT_TYP
 
 # Отмена (необязательно)
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Действие отменено.")
-    return ConversationHandler.END
+    return await helpers.cancel_conversation(update, context, "Действие отменено.")
 
 async def day_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """
@@ -277,13 +264,7 @@ async def day_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     report = helpers.format_day_expenses(expenses, date)
     
     # Добавляем информацию о проекте
-    if project_id is not None:
-        from utils import projects
-        project = await projects.get_project_by_id(user_id, project_id)
-        if project:
-            report = f"📁 Проект: {project['project_name']}\n\n" + report
-    else:
-        report = f"📊 Общие расходы\n\n" + report
+    report = await helpers.add_project_context_to_report(report, user_id, project_id)
     
     # Отправляем отчет
     await update.message.reply_text(report)

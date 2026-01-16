@@ -4,7 +4,7 @@
 
 from telegram import Update, ReplyKeyboardMarkup
 from telegram.ext import ContextTypes, CommandHandler, filters, MessageHandler
-from utils import excel
+from utils import excel, projects
 import config
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -20,13 +20,12 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     # Создаем клавиатуру с основными командами
     keyboard = [
         ['/add', '/month', '/day', '/stats'],
-        ['/category', '/budget', '/export', '/export_stats'],
+        ['/category', '/budget', '/export'],
         ['📁 Проекты', '/help']
     ]
     reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
     
     # Инициализируем активный проект из БД
-    from utils import projects
     active_project = await projects.get_active_project(user_id)
     if active_project:
         context.user_data['active_project_id'] = active_project['project_id']
@@ -74,8 +73,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         "• /budget <сумма> - установить бюджет на месяц\n"
         "• /category - перечень всех возможных категорий\n"
         "• /category <название> - расходы по категории\n"
-        "• /export - экспорт всех расходов в Excel\n"
-        "• /export_stats - экспорт детальной статистики\n"
+        "• /export - экспорт детальной статистики в Excel\n"
         "• /help - показать эту справку\n\n"
         "📊 Доступные категории расходов:\n"
     )
@@ -117,7 +115,7 @@ async def main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """
     keyboard = [
         ['/add', '/month', '/day', '/stats'],
-        ['/category', '/budget', '/export', '/export_stats'],
+        ['/category', '/budget', '/export'],
         ['📁 Проекты', '/help']
     ]
     reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)

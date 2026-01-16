@@ -4,7 +4,7 @@
 
 from telegram import Update, ReplyKeyboardMarkup, ReplyKeyboardRemove
 from telegram.ext import ContextTypes, CommandHandler, filters, MessageHandler, ConversationHandler
-from utils import excel, helpers
+from utils import excel, helpers, projects
 import config
 
 # Состояния для ConversationHandler
@@ -15,7 +15,6 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     """
     Обрабатывает текстовые сообщения, пытаясь распознать добавление расхода
     """
-    print("DEBUG: Сообщение ушло в EXPENSE")
     user_id = update.effective_user.id
     message_text = update.message.text
 
@@ -29,8 +28,6 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
         # Получаем активный проект
         project_id = context.user_data.get('active_project_id')
-        print('project_id:', project_id)
-        print('user_id', user_id)
         
         # Добавляем расход
         await excel.add_expense(
@@ -55,7 +52,6 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         
         # Добавляем информацию о проекте
         if project_id is not None:
-            from utils import projects
             project = await projects.get_project_by_id(user_id, project_id)
             if project:
                 confirmation += f"\n📁 Проект: {project['project_name']}"
@@ -119,7 +115,6 @@ async def add_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
         
         # Добавляем информацию о проекте
         if project_id is not None:
-            from utils import projects
             project = await projects.get_project_by_id(user_id, project_id)
             if project:
                 confirmation += f"\n📁 Проект: {project['project_name']}"
@@ -189,9 +184,10 @@ async def handle_category(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     text = update.message.text
 
     if text == 'Отмена':
+        from utils.helpers import get_main_menu_keyboard
         await update.message.reply_text(
             "Добавление расхода отменено.",
-            reply_markup=ReplyKeyboardRemove()
+            reply_markup=get_main_menu_keyboard()
         )
         return ConversationHandler.END
 
@@ -212,8 +208,7 @@ async def handle_category(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
     # Спрашиваем описание
     await update.message.reply_text(
-        "Введите описание расхода (или отправьте /skip, чтобы пропустить):",
-        reply_markup=ReplyKeyboardRemove()
+        "Введите описание расхода (или отправьте /skip, чтобы пропустить):"
     )
 
     return ENTERING_DESCRIPTION
@@ -254,14 +249,13 @@ async def handle_description(update: Update, context: ContextTypes.DEFAULT_TYPE)
     
     # Добавляем информацию о проекте
     if project_id is not None:
-        from utils import projects
         project = await projects.get_project_by_id(user_id, project_id)
         if project:
             confirmation += f"\n📁 Проект: {project['project_name']}"
     else:
         confirmation += f"\n📊 Общие расходы"
 
-    await update.message.reply_text(confirmation)
+    await update.message.reply_text(confirmation, reply_markup=helpers.get_main_menu_keyboard())
 
     # Очищаем данные пользователя
     # context.user_data.clear()
@@ -275,17 +269,11 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """
     Отменяет диалог добавления расхода
     """
-    await update.message.reply_text(
-        "Добавление расхода отменено.",
-        reply_markup=ReplyKeyboardRemove()
-    )
-
     # Очищаем данные пользователя
-    # context.user_data.clear()
     for key in ['amount', 'category']:
         context.user_data.pop(key, None)
-
-    return ConversationHandler.END
+    
+    return await helpers.cancel_conversation(update, context, "Добавление расхода отменено.")
 
 
 async def direct_amount_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
