@@ -9,13 +9,6 @@ from utils import excel
 def parse_add_command(text):
     """
     Парсит команду добавления расхода
-    Форматы:
-    - /add 100 продукты
-    - /add 100 продукты комментарий
-    - 100 продукты
-    - 100 продукты комментарий
-    
-    Возвращает словарь с полями amount, category, description или None, если парсинг не удался
     """
     # Удаляем команду /add, если она есть
     if text.startswith('/add '):
@@ -47,7 +40,7 @@ def format_month_expenses(expenses, month=None, year=None):
     if year is None:
         year = datetime.datetime.now().year
     
-    month_name = datetime.date(year, month, 1).strftime('%B')
+    month_name = get_month_name(month)
     
     if not expenses or expenses['total'] == 0:
         return f"В {month_name} {year} года расходов не было."
@@ -95,7 +88,7 @@ def format_category_expenses(category_data, category, year=None):
     
     # Выводим расходы по месяцам
     for month in range(1, 13):
-        month_name = datetime.date(year, month, 1).strftime('%B')
+        month_name = get_month_name(month)
         amount = category_data['by_month'].get(month, 0)
         report += f"{month_name}: {amount:.2f}\n"
     
@@ -111,7 +104,7 @@ def get_month_name(month):
     ]
     return months[month - 1]
 
-def format_budget_status(user_id, month=None, year=None):
+async def format_budget_status(user_id, month=None, year=None):
     """
     Форматирует статус бюджета на месяц
     """
@@ -119,25 +112,30 @@ def format_budget_status(user_id, month=None, year=None):
         month = datetime.datetime.now().month
     if year is None:
         year = datetime.datetime.now().year
-    
-    excel_path = excel.get_excel_path(user_id, year)
-    
-    # Проверяем, существует ли файл
-    if not excel.os.path.exists(excel_path):
+
+    from utils import db
+
+    try:
+        row = await db.fetchrow(
+            """
+            SELECT budget, actual
+            FROM budget
+            WHERE user_id = $1
+              AND project_id IS NULL
+              AND month = $2
+            """,
+            str(user_id),
+            month,
+        )
+    except Exception as e:
+        print(f"Ошибка при получении статуса бюджета из БД: {e}")
+        row = None
+
+    if not row or float(row["budget"]) == 0:
         return f"Бюджет на {get_month_name(month)} {year} года не установлен."
-    
-    # Загружаем данные
-    import pandas as pd
-    budget_df = pd.read_excel(excel_path, sheet_name='Budget')
-    
-    # Получаем данные о бюджете
-    month_budget = budget_df[budget_df['month'] == month]
-    
-    if month_budget.empty or month_budget['budget'].values[0] == 0:
-        return f"Бюджет на {get_month_name(month)} {year} года не установлен."
-    
-    budget = month_budget['budget'].values[0]
-    actual = month_budget['actual'].values[0]
+
+    budget = float(row["budget"])
+    actual = float(row["actual"])
     
     # Рассчитываем процент использования бюджета
     if budget > 0:
@@ -166,9 +164,6 @@ def format_day_expenses(expenses, date=None):
     if date is None:
         date = datetime.datetime.now().strftime('%Y-%m-%d')
     
-    if expenses['status'] == False:
-        return expenses['note']
-        
     if not expenses or expenses['total'] == 0:
         return f"Расходов за {date} не было."
     
