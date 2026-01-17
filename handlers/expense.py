@@ -5,7 +5,10 @@
 from telegram import Update, ReplyKeyboardMarkup, ReplyKeyboardRemove
 from telegram.ext import ContextTypes, CommandHandler, filters, MessageHandler, ConversationHandler
 from utils import excel, helpers, projects
+from utils.logger import get_logger, log_command, log_event, log_error
 import config
+
+logger = get_logger("handlers.expense")
 
 # Состояния для ConversationHandler
 ENTERING_AMOUNT, CHOOSING_CATEGORY, ENTERING_DESCRIPTION = range(3)
@@ -15,8 +18,15 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     """
     Обрабатывает текстовые сообщения, пытаясь распознать добавление расхода
     """
+    import time
+    start_time = time.time()
+    
     user_id = update.effective_user.id
     message_text = update.message.text
+    request_id = context.user_data.get('request_id')
+
+    log_event(logger, "text_message_processing", request_id=request_id, 
+             user_id=user_id, text_preview=message_text[:100], text_length=len(message_text))
 
     # Пытаемся распарсить как команду добавления расхода
     expense_data = helpers.parse_add_command(message_text)
@@ -24,19 +34,35 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     if expense_data:
         # Проверяем, что категория существует
         if expense_data['category'] not in config.DEFAULT_CATEGORIES:
+            log_event(logger, "invalid_category_in_text", user_id=user_id, 
+                     category=expense_data['category'], 
+                     message="Category not found in text message")
             return  # Не отвечаем, если категория не найдена в обычном сообщении
 
         # Получаем активный проект
         project_id = context.user_data.get('active_project_id')
         
+        log_event(logger, "expense_parsed_from_text", user_id=user_id, 
+                 amount=expense_data['amount'], category=expense_data['category'],
+                 has_description=bool(expense_data['description']), project_id=project_id)
+        
         # Добавляем расход
-        await excel.add_expense(
+        success = await excel.add_expense(
             user_id,
             expense_data['amount'],
             expense_data['category'],
             expense_data['description'],
             project_id
         )
+
+        if not success:
+            duration_ms = (time.time() - start_time) * 1000
+            log_error(logger, Exception("Failed to add expense from text"), 
+                     "expense_add_failed_from_text", request_id=request_id,
+                     duration_ms=duration_ms, user_id=user_id,
+                     amount=expense_data['amount'], category=expense_data['category'])
+            await update.message.reply_text("❌ Ошибка при добавлении расхода. Попробуйте еще раз.")
+            return
 
         # Отправляем подтверждение
         category_emoji = config.DEFAULT_CATEGORIES[expense_data['category']]
@@ -52,13 +78,31 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         
         # Добавляем информацию о проекте
         if project_id is not None:
-            project = await projects.get_project_by_id(user_id, project_id)
-            if project:
-                confirmation += f"\n📁 Проект: {project['project_name']}"
+            try:
+                project = await projects.get_project_by_id(user_id, project_id)
+                if project:
+                    confirmation += f"\n📁 Проект: {project['project_name']}"
+                    duration_ms = (time.time() - start_time) * 1000
+                    log_event(logger, "expense_added_from_text", request_id=request_id,
+                             status="success", duration_ms=duration_ms, user_id=user_id,
+                             amount=expense_data['amount'], category=expense_data['category'],
+                             project_id=project_id, project_name=project['project_name'])
+            except Exception as e:
+                duration_ms = (time.time() - start_time) * 1000
+                log_error(logger, e, "get_project_error_in_text_handler", request_id=request_id,
+                         duration_ms=duration_ms, user_id=user_id, project_id=project_id)
         else:
             confirmation += f"\n📊 Общие расходы"
+            duration_ms = (time.time() - start_time) * 1000
+            log_event(logger, "expense_added_from_text", request_id=request_id,
+                     status="success", duration_ms=duration_ms, user_id=user_id,
+                     amount=expense_data['amount'], category=expense_data['category'])
 
         await update.message.reply_text(confirmation)
+    else:
+        log_event(logger, "text_not_parsed_as_expense", request_id=request_id,
+                 status="skipped", user_id=user_id, 
+                 text_preview=message_text[:50], reason="parse_failed")
 
 async def add_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """
@@ -73,6 +117,8 @@ async def add_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
         expense_data = helpers.parse_add_command(message_text)
 
         if not expense_data:
+            log_event(logger, "invalid_command_format", user_id=user_id,
+                     command_text=message_text, reason="parse_failed")
             await update.message.reply_text(
                 "❌ Неверный формат команды. Используйте:\n"
                 "/add <сумма> <категория> [описание]\n"
@@ -83,6 +129,9 @@ async def add_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
         # Проверяем, что категория существует
         if expense_data['category'] not in config.DEFAULT_CATEGORIES:
             categories_list = ", ".join(config.DEFAULT_CATEGORIES.keys())
+            log_event(logger, "invalid_category_in_command", user_id=user_id,
+                     category=expense_data['category'], amount=expense_data['amount'],
+                     reason="category_not_found")
             await update.message.reply_text(
                 f"❌ Категория '{expense_data['category']}' не найдена.\n"
                 f"Доступные категории: {categories_list}"
@@ -138,13 +187,25 @@ async def handle_amount(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
     """
     user_id = update.effective_user.id
     text = update.message.text
+    project_id = context.user_data.get('active_project_id')
+
+    log_event(logger, "amount_input_received", user_id=user_id, 
+             input_text=text, project_id=project_id)
 
     try:
         # Пытаемся распарсить сумму
         amount = float(text)
+        
+        if amount <= 0:
+            log_event(logger, "invalid_amount", user_id=user_id, amount=amount, 
+                     reason="amount_negative_or_zero")
+            await update.message.reply_text("❌ Сумма должна быть больше нуля. Введите сумму:")
+            return ENTERING_AMOUNT
 
         # Сохраняем сумму в контексте
         context.user_data['amount'] = amount
+        
+        log_event(logger, "amount_validated", user_id=user_id, amount=amount)
 
         # Отправляем клавиатуру с категориями
         keyboard = []
@@ -168,11 +229,16 @@ async def handle_amount(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
         return CHOOSING_CATEGORY
 
     except ValueError:
-        # Если не удалось распарсить сумму, просим ввести снова
+        log_event(logger, "invalid_amount_format", user_id=user_id, 
+                 input_text=text, reason="not_a_number")
         await update.message.reply_text(
             "❌ Неверный формат суммы. Пожалуйста, введите число.\n"
             "Например: 100.50"
         )
+        return ENTERING_AMOUNT
+    except Exception as e:
+        log_error(logger, e, "amount_processing_error", user_id=user_id, input_text=text)
+        await update.message.reply_text("❌ Произошла ошибка. Попробуйте еще раз.")
         return ENTERING_AMOUNT
 
 
@@ -196,6 +262,10 @@ async def handle_category(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
     # Проверяем, что категория существует
     if category not in config.DEFAULT_CATEGORIES:
+        amount = context.user_data.get('amount')
+        log_event(logger, "invalid_category_selected", user_id=user_id,
+                 category=category, amount=amount, input_text=text,
+                 reason="category_not_in_list")
         categories_list = ", ".join(config.DEFAULT_CATEGORIES.keys())
         await update.message.reply_text(
             f"❌ Категория '{category}' не найдена.\n"
@@ -204,7 +274,11 @@ async def handle_category(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         return CHOOSING_CATEGORY
 
     # Сохраняем категорию в контексте
+    amount = context.user_data.get('amount')
+    project_id = context.user_data.get('active_project_id')
     context.user_data['category'] = category
+    
+    log_event(logger, "category_validated", user_id=user_id, category=category, amount=amount, project_id=project_id)
 
     # Спрашиваем описание
     await update.message.reply_text(
@@ -233,7 +307,14 @@ async def handle_description(update: Update, context: ContextTypes.DEFAULT_TYPE)
         description = text
 
     # Добавляем расход
-    await excel.add_expense(user_id, amount, category, description, project_id)
+    success = await excel.add_expense(user_id, amount, category, description, project_id)
+    
+    if success:
+        log_event(logger, "expense_added", user_id=user_id, project_id=project_id,
+                 amount=amount, category=category, has_description=bool(description))
+    else:
+        log_error(logger, Exception("Failed to add expense"), "expense_add_failed",
+                 user_id=user_id, project_id=project_id, amount=amount, category=category)
 
     # Отправляем подтверждение
     category_emoji = config.DEFAULT_CATEGORIES[category]
