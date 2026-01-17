@@ -12,6 +12,9 @@ import tempfile
 import shutil
 import pandas as pd
 import datetime
+from utils.logger import get_logger, log_event, log_error
+
+logger = get_logger("handlers.export")
 
 
 async def get_available_years(user_id: int, project_id: int = None) -> list:
@@ -33,10 +36,13 @@ async def get_available_years(user_id: int, project_id: int = None) -> list:
             project_id,
         )
         if not rows:
+            log_event(logger, "get_years_empty", user_id=user_id, project_id=project_id)
             return []
-        return [int(row['year']) for row in rows]
+        years = [int(row['year']) for row in rows]
+        log_event(logger, "get_years_success", user_id=user_id, project_id=project_id, count=len(years))
+        return years
     except Exception as e:
-        logging.getLogger(__name__).error(f"Ошибка при получении доступных годов: {e}")
+        log_error(logger, e, "get_years_error", user_id=user_id, project_id=project_id)
         return []
 
 
@@ -98,8 +104,12 @@ async def export_stats_command(update: Update, context: ContextTypes.DEFAULT_TYP
     Если вызвана без аргументов - показывает интерактивное меню.
     Если вызвана с аргументами - выполняет экспорт напрямую.
     """
+    from utils.logger import log_command
+    
     user_id = update.effective_user.id
     project_id = context.user_data.get('active_project_id')
+    
+    log_command(logger, "export", user_id=user_id, project_id=project_id, has_args=bool(context.args))
     
     # Если есть аргументы - обрабатываем как раньше (для обратной совместимости)
     if context.args:
@@ -150,6 +160,11 @@ async def perform_export(update: Update, user_id: int, project_id: int, year: in
     """
     Выполняет экспорт данных в Excel файл
     """
+    import time
+    start_time = time.time()
+    
+    log_event(logger, "export_start", user_id=user_id, project_id=project_id, year=year, month=month)
+    
     # Определяем, откуда пришел запрос - из сообщения или callback query
     if update.callback_query:
         message = update.callback_query.message
@@ -160,6 +175,7 @@ async def perform_export(update: Update, user_id: int, project_id: int, year: in
     expenses_df = await excel.get_all_expenses(user_id, year, project_id)
     
     if expenses_df is None or expenses_df.empty:
+        log_event(logger, "export_no_data", user_id=user_id, project_id=project_id, year=year, month=month)
         if year:
             await message.reply_text(f"❌ Нет данных за {year} год.")
         else:
@@ -253,7 +269,14 @@ async def perform_export(update: Update, user_id: int, project_id: int, year: in
         # Удаляем временный файл
         os.unlink(tmp_path)
         
+        duration = time.time() - start_time
+        log_event(logger, "export_success", user_id=user_id, project_id=project_id, 
+                 year=year, month=month, duration=duration, filename=filename)
+        
     except Exception as e:
+        duration = time.time() - start_time
+        log_error(logger, e, "export_error", user_id=user_id, project_id=project_id, 
+                 year=year, month=month, duration=duration)
         await message.reply_text(f"❌ Ошибка при создании статистики: {str(e)}")
         # Очищаем временный файл в случае ошибки
         if 'tmp_path' in locals():

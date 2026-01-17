@@ -6,9 +6,13 @@ from telegram import Update, ReplyKeyboardMarkup
 from telegram.constants import ParseMode
 from telegram.ext import ContextTypes, CommandHandler, filters, MessageHandler, ConversationHandler, CallbackQueryHandler
 from utils import excel, helpers, visualization, projects
+from utils.logger import get_logger, log_command, log_event, log_error
 import config
 import os
 import datetime
+import time
+
+logger = get_logger("handlers.stats")
 
 # Состояния для ConversationHandler
 CHOOSING_CATEGORY, ENTERING_BUDGET = range(2)
@@ -18,36 +22,70 @@ async def month_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     Обрабатывает команду /month для получения статистики за текущий месяц
     """
     user_id = update.effective_user.id
-
-    # Получаем текущий месяц и год
-    now = datetime.datetime.now()
-    month = now.month
-    year = now.year
-
-    # Получаем активный проект
-    project_id = context.user_data.get('active_project_id')
-
-    # Получаем статистику расходов
-    expenses = await excel.get_month_expenses(user_id, month, year, project_id)
-
-    # Форматируем отчет
-    report = helpers.format_month_expenses(expenses, month, year)
+    start_time = time.time()
     
-    # Добавляем информацию о проекте
-    report = await helpers.add_project_context_to_report(report, user_id, project_id)
+    try:
+        # Получаем текущий месяц и год
+        now = datetime.datetime.now()
+        month = now.month
+        year = now.year
 
-    # Отправляем отчет
-    await update.message.reply_text(report)
+        # Получаем активный проект
+        project_id = context.user_data.get('active_project_id')
+        
+        log_event(logger, "month_stats_requested", user_id=user_id, 
+                 project_id=project_id, month=month, year=year)
 
-    # Если есть расходы, отправляем круговую диаграмму
-    if expenses and expenses['total'] > 0:
-        chart_path = await visualization.create_monthly_pie_chart(user_id,
-                                                            month=month,
-                                                            year=year,
-                                                            project_id=project_id)
-        if chart_path and os.path.exists(chart_path):
-            with open(chart_path, 'rb') as photo:
-                await update.message.reply_photo(photo=photo, caption="Распределение расходов по категориям")
+        # Получаем статистику расходов
+        expenses = await excel.get_month_expenses(user_id, month, year, project_id)
+        
+        if not expenses or expenses.get('total', 0) == 0:
+            log_event(logger, "month_stats_empty", user_id=user_id, 
+                     project_id=project_id, month=month, year=year)
+
+        # Форматируем отчет
+        report = helpers.format_month_expenses(expenses, month, year)
+        
+        # Добавляем информацию о проекте
+        report = await helpers.add_project_context_to_report(report, user_id, project_id)
+
+        # Отправляем отчет
+        await update.message.reply_text(report)
+        
+        total = expenses.get('total', 0) if expenses else 0
+        count = expenses.get('count', 0) if expenses else 0
+        log_event(logger, "month_stats_sent", user_id=user_id, 
+                 project_id=project_id, month=month, year=year,
+                 total=total, count=count)
+
+        # Если есть расходы, отправляем круговую диаграмму
+        if expenses and expenses['total'] > 0:
+            chart_start = time.time()
+            chart_path = await visualization.create_monthly_pie_chart(user_id,
+                                                                month=month,
+                                                                year=year,
+                                                                project_id=project_id)
+            chart_duration = time.time() - chart_start
+            
+            if chart_path and os.path.exists(chart_path):
+                with open(chart_path, 'rb') as photo:
+                    await update.message.reply_photo(photo=photo, caption="Распределение расходов по категориям")
+                log_event(logger, "month_chart_sent", user_id=user_id, 
+                         project_id=project_id, month=month, year=year,
+                         duration=chart_duration)
+            else:
+                log_event(logger, "month_chart_failed", user_id=user_id, 
+                         project_id=project_id, month=month, year=year,
+                         reason="chart_not_created")
+        
+        duration = time.time() - start_time
+        log_event(logger, "month_command_success", user_id=user_id, 
+                 project_id=project_id, duration=duration)
+        
+    except Exception as e:
+        duration = time.time() - start_time
+        log_error(logger, e, "month_command_error", user_id=user_id, duration=duration)
+        await update.message.reply_text("❌ Произошла ошибка при получении статистики.")
 
 async def category_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """
