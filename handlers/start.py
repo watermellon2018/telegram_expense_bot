@@ -24,9 +24,9 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         
         # Создаем клавиатуру с основными командами
         keyboard = [
-            ['/add', '/month', '/day', '/stats'],
-            ['/category', '/budget', '/export'],
-            ['📁 Проекты', '/help']
+            ['Добавить', 'Месяц', 'День', 'Статистика'],
+            ['Категории', '/budget', 'Экспорт'],
+            ['📁 Проекты', 'Помощь']
         ]
         reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
         
@@ -149,9 +149,9 @@ async def main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     Возвращает в главное меню
     """
     keyboard = [
-        ['/add', '/month', '/day', '/stats'],
-        ['/category', '/budget', '/export'],
-        ['📁 Проекты', '/help']
+        ['Добавить', 'Месяц', 'День', 'Статистика'],
+        ['Категории', '/budget', 'Экспорт'],
+        ['📁 Проекты', 'Помощь']
     ]
     reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
     
@@ -170,3 +170,4 @@ def register_start_handlers(application):
     # Обработчики для кнопок меню
     application.add_handler(MessageHandler(filters.Regex('^📁 Проекты$'), projects_menu))
     application.add_handler(MessageHandler(filters.Regex('^⬅️ Главное меню$'), main_menu))
+    application.add_handler(MessageHandler(filters.Regex('^Помощь$'), help_command))

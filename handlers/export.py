@@ -260,10 +260,12 @@ async def perform_export(update: Update, user_id: int, project_id: int, year: in
             else:
                 caption = f"📊 Общие расходы\n\n{caption}"
             
+            from utils import helpers
             await message.reply_document(
                 document=file,
                 filename=filename,
-                caption=caption
+                caption=caption,
+                reply_markup=helpers.get_main_menu_keyboard()
             )
         
         # Удаляем временный файл
@@ -368,4 +370,5 @@ def register_export_handlers(application):
     Регистрирует обработчики команд для экспорта
     """
     application.add_handler(CommandHandler("export", export_stats_command))
+    application.add_handler(MessageHandler(filters.Regex('^Экспорт$'), export_stats_command))
     application.add_handler(CallbackQueryHandler(handle_export_callback, pattern="^export:"))
