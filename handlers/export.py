@@ -13,6 +13,7 @@ import shutil
 import pandas as pd
 import datetime
 from utils.logger import get_logger, log_event, log_error
+from utils.helpers import main_menu_button_regex
 
 logger = get_logger("handlers.export")
 
@@ -370,5 +371,5 @@ def register_export_handlers(application):
     Регистрирует обработчики команд для экспорта
     """
     application.add_handler(CommandHandler("export", export_stats_command))
-    application.add_handler(MessageHandler(filters.Regex('^📤 Экспорт$'), export_stats_command))
+    application.add_handler(MessageHandler(filters.Regex(main_menu_button_regex("export")), export_stats_command))
     application.add_handler(CallbackQueryHandler(handle_export_callback, pattern="^export:"))

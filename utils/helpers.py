@@ -246,14 +246,26 @@ async def add_project_context_to_report(report: str, user_id: int, project_id: i
 def get_main_menu_keyboard():
     """
     Возвращает клавиатуру главного меню.
-    
-    Returns:
-        ReplyKeyboardMarkup с кнопками главного меню
+    Тексты кнопок берутся из config.MAIN_MENU_BUTTONS.
     """
+    import config
     from telegram import ReplyKeyboardMarkup
+    btn = config.MAIN_MENU_BUTTONS
     keyboard = [
-        ['➕ Добавить', '📅 Месяц', '📆 День', '📈 Статистика'],
-        ['📂 Категории', '💸 Бюджет', '📤 Экспорт'],
-        ['📁 Проекты', '❓ Помощь']
+        [btn["add"], btn["month"], btn["day"], btn["stats"]],
+        [btn["categories"], btn["budget"], btn["export"]],
+        [btn["projects"], btn["help"]],
     ]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+
+
+def main_menu_button_regex(key: str) -> str:
+    """Точное совпадение с кнопкой главного меню (для filters.Regex)."""
+    import config
+    return "^" + re.escape(config.MAIN_MENU_BUTTONS[key]) + "$"
+
+
+def project_menu_button_regex(key: str) -> str:
+    """Точное совпадение с кнопкой меню проектов (для filters.Regex)."""
+    import config
+    return "^" + re.escape(config.PROJECT_MENU_BUTTONS[key]) + "$"

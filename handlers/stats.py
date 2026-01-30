@@ -6,6 +6,7 @@ from telegram import Update, ReplyKeyboardMarkup
 from telegram.constants import ParseMode
 from telegram.ext import ContextTypes, CommandHandler, filters, MessageHandler, ConversationHandler, CallbackQueryHandler
 from utils import excel, helpers, visualization, projects
+from utils.helpers import main_menu_button_regex
 from utils.logger import get_logger, log_command, log_event, log_error
 import config
 import os
@@ -313,19 +314,19 @@ def register_stats_handlers(application):
     Регистрирует обработчики команд для получения статистики и анализа
     """
     application.add_handler(CommandHandler("month", month_command))
-    application.add_handler(MessageHandler(filters.Regex('^📅 Месяц$'), month_command))
+    application.add_handler(MessageHandler(filters.Regex(main_menu_button_regex("month")), month_command))
     application.add_handler(CommandHandler("category", category_command))
-    application.add_handler(MessageHandler(filters.Regex('^📂 Категории$'), category_command))
+    application.add_handler(MessageHandler(filters.Regex(main_menu_button_regex("categories")), category_command))
     application.add_handler(CommandHandler("stats", stats_command))
-    application.add_handler(MessageHandler(filters.Regex('^📈 Статистика$'), stats_command))
+    application.add_handler(MessageHandler(filters.Regex(main_menu_button_regex("stats")), stats_command))
     application.add_handler(CommandHandler("day", day_command))
-    application.add_handler(MessageHandler(filters.Regex('^📆 День$'), day_command))
+    application.add_handler(MessageHandler(filters.Regex(main_menu_button_regex("day")), day_command))
 
     # Регистрируем ConversationHandler для команды /budget
     budget_conv_handler = ConversationHandler(
         entry_points=[
             CommandHandler("budget", budget_command),
-            MessageHandler(filters.Regex('^💸 Бюджет$'), budget_command),
+            MessageHandler(filters.Regex(main_menu_button_regex("budget")), budget_command),
         ],
         states={
             ENTERING_BUDGET: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_budget_amount)],

@@ -5,6 +5,7 @@
 from telegram import Update, ReplyKeyboardMarkup, ReplyKeyboardRemove
 from telegram.ext import ContextTypes, CommandHandler, filters, MessageHandler, ConversationHandler
 from utils import excel, helpers, projects
+from utils.helpers import main_menu_button_regex
 from utils.logger import get_logger, log_command, log_event, log_error
 import config
 
@@ -406,7 +407,7 @@ def register_expense_handlers(application):
     add_conv_handler = ConversationHandler(
         entry_points=[
             CommandHandler("add", add_command),
-            MessageHandler(filters.Regex('^➕ Добавить$'), add_command),
+            MessageHandler(filters.Regex(main_menu_button_regex("add")), add_command),
             MessageHandler(filters.Regex(r'^\d+(\.\d+)?$') & ~filters.COMMAND, direct_amount_handler)
         ],
         states={
