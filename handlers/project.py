@@ -5,7 +5,8 @@
 from telegram import Update, ReplyKeyboardMarkup, ReplyKeyboardRemove
 from telegram.constants import ParseMode
 from telegram.ext import ContextTypes, CommandHandler, filters, MessageHandler, ConversationHandler
-from utils import projects
+from utils import projects, helpers
+from utils.helpers import project_menu_button_regex
 from utils.logger import get_logger, log_command, log_event, log_error
 import config
 import time
@@ -554,7 +555,7 @@ def register_project_handlers(application):
     delete_conv_handler = ConversationHandler(
         entry_points=[
             CommandHandler("project_delete", project_delete_start),
-            MessageHandler(filters.Regex('^🗑️ Удалить проект$'), button_project_delete_start)
+            MessageHandler(filters.Regex(project_menu_button_regex("delete")), button_project_delete_start)
         ],
         states={
             ENTERING_PROJECT_TO_DELETE: [MessageHandler(filters.TEXT & ~filters.COMMAND, lambda u, c: handle_delete_identifier(u, c))],
@@ -571,7 +572,7 @@ def register_project_handlers(application):
 
     # Conversation для создания (кнопка)
     create_conv_handler = ConversationHandler(
-        entry_points=[MessageHandler(filters.Regex('^🆕 Создать проект$'), button_project_create_start)],
+        entry_points=[MessageHandler(filters.Regex(project_menu_button_regex("create")), button_project_create_start)],
         states={
             ENTERING_PROJECT_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, button_project_create_confirm)],
         },
@@ -583,7 +584,7 @@ def register_project_handlers(application):
 
     # Conversation для выбора (кнопка)
     select_conv_handler = ConversationHandler(
-        entry_points=[MessageHandler(filters.Regex('^🔄 Выбрать проект$'), button_project_select_start)],
+        entry_points=[MessageHandler(filters.Regex(project_menu_button_regex("select")), button_project_select_start)],
         states={
             ENTERING_PROJECT_TO_SELECT: [MessageHandler(filters.TEXT & ~filters.COMMAND, button_project_select_confirm)],
         },
@@ -594,7 +595,7 @@ def register_project_handlers(application):
     application.add_handler(select_conv_handler)
 
     # Простые кнопки (без ввода)
-    application.add_handler(MessageHandler(filters.Regex('^📋 Список проектов$'), project_list_command))
-    application.add_handler(MessageHandler(filters.Regex('^📊 Общие расходы$'), project_main_command))
-    application.add_handler(MessageHandler(filters.Regex('^ℹ️ Инфо о проекте$'), project_info_command))  # Для info
+    application.add_handler(MessageHandler(filters.Regex(project_menu_button_regex("list")), project_list_command))
+    application.add_handler(MessageHandler(filters.Regex(project_menu_button_regex("all_expenses")), project_main_command))
+    application.add_handler(MessageHandler(filters.Regex(project_menu_button_regex("info")), project_info_command))
 

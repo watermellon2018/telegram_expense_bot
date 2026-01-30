@@ -6,6 +6,7 @@ from telegram import Update, ReplyKeyboardMarkup
 from telegram.constants import ParseMode
 from telegram.ext import ContextTypes, CommandHandler, filters, MessageHandler, ConversationHandler, CallbackQueryHandler
 from utils import excel, helpers, visualization, projects
+from utils.helpers import main_menu_button_regex
 from utils.logger import get_logger, log_command, log_event, log_error
 import config
 import os
@@ -50,7 +51,7 @@ async def month_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         report = await helpers.add_project_context_to_report(report, user_id, project_id)
 
         # Отправляем отчет
-        await update.message.reply_text(report)
+        await update.message.reply_text(report, reply_markup=helpers.get_main_menu_keyboard())
         
         total = expenses.get('total', 0) if expenses else 0
         count = expenses.get('count', 0) if expenses else 0
@@ -132,7 +133,7 @@ async def category_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     report = await helpers.add_project_context_to_report(report, user_id, project_id)
 
     # Отправляем отчет
-    await update.message.reply_text(report)
+    await update.message.reply_text(report, reply_markup=helpers.get_main_menu_keyboard())
 
     # Если есть расходы, отправляем график тренда
     if category_data and category_data['total'] > 0:
@@ -305,22 +306,28 @@ async def day_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     report = await helpers.add_project_context_to_report(report, user_id, project_id)
     
     # Отправляем отчет
-    await update.message.reply_text(report)
+    await update.message.reply_text(report, reply_markup=helpers.get_main_menu_keyboard())
     
 
 def register_stats_handlers(application):
     """
     Регистрирует обработчики команд для получения статистики и анализа
     """
-
     application.add_handler(CommandHandler("month", month_command))
+    application.add_handler(MessageHandler(filters.Regex(main_menu_button_regex("month")), month_command))
     application.add_handler(CommandHandler("category", category_command))
+    application.add_handler(MessageHandler(filters.Regex(main_menu_button_regex("categories")), category_command))
     application.add_handler(CommandHandler("stats", stats_command))
+    application.add_handler(MessageHandler(filters.Regex(main_menu_button_regex("stats")), stats_command))
     application.add_handler(CommandHandler("day", day_command))
+    application.add_handler(MessageHandler(filters.Regex(main_menu_button_regex("day")), day_command))
 
     # Регистрируем ConversationHandler для команды /budget
     budget_conv_handler = ConversationHandler(
-        entry_points=[CommandHandler("budget", budget_command)],
+        entry_points=[
+            CommandHandler("budget", budget_command),
+            MessageHandler(filters.Regex(main_menu_button_regex("budget")), budget_command),
+        ],
         states={
             ENTERING_BUDGET: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_budget_amount)],
         },

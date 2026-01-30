@@ -4,9 +4,10 @@
 
 from telegram import Update, ReplyKeyboardMarkup
 from telegram.ext import ContextTypes, CommandHandler, filters, MessageHandler
-from utils import excel, projects
+from utils import excel, projects, helpers
 from utils.logger import get_logger, log_command, log_event, log_error
 import config
+from utils import helpers as btn_helpers
 
 logger = get_logger("handlers.start")
 
@@ -22,13 +23,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         excel.create_user_dir(user_id)
         log_event(logger, "user_dir_created", user_id=user_id)
         
-        # Создаем клавиатуру с основными командами
-        keyboard = [
-            ['/add', '/month', '/day', '/stats'],
-            ['/category', '/budget', '/export'],
-            ['📁 Проекты', '/help']
-        ]
-        reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+        reply_markup = helpers.get_main_menu_keyboard()
         
         # Инициализируем активный проект из БД
         try:
@@ -126,12 +121,12 @@ async def projects_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     log_event(logger, "projects_menu_opened", user_id=user_id)
     
     try:
-        # Создаем клавиатуру с функциями проектов
+        btn = config.PROJECT_MENU_BUTTONS
         keyboard = [
-            ['🆕 Создать проект', '📋 Список проектов'],
-            ['🔄 Выбрать проект', '📊 Общие расходы'],
-            ['ℹ️ Инфо о проекте', '🗑️ Удалить проект'],
-            ['⬅️ Главное меню']
+            [btn["create"], btn["list"]],
+            [btn["select"], btn["all_expenses"]],
+            [btn["info"], btn["delete"]],
+            [btn["main_menu"]],
         ]
         reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
         
@@ -148,12 +143,7 @@ async def main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """
     Возвращает в главное меню
     """
-    keyboard = [
-        ['/add', '/month', '/day', '/stats'],
-        ['/category', '/budget', '/export'],
-        ['📁 Проекты', '/help']
-    ]
-    reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+    reply_markup = helpers.get_main_menu_keyboard()
     
     await update.message.reply_text(
         "✅ Возвращение в главное меню",
@@ -167,6 +157,7 @@ def register_start_handlers(application):
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("help", help_command))
     
-    # Обработчики для кнопок меню
-    application.add_handler(MessageHandler(filters.Regex('^📁 Проекты$'), projects_menu))
-    application.add_handler(MessageHandler(filters.Regex('^⬅️ Главное меню$'), main_menu))
+    # Обработчики для кнопок меню (тексты из config.MAIN_MENU_BUTTONS)
+    application.add_handler(MessageHandler(filters.Regex(btn_helpers.main_menu_button_regex("projects")), projects_menu))
+    application.add_handler(MessageHandler(filters.Regex(btn_helpers.main_menu_button_regex("main_menu")), main_menu))
+    application.add_handler(MessageHandler(filters.Regex(btn_helpers.main_menu_button_regex("help")), help_command))
