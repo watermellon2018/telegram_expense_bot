@@ -252,8 +252,8 @@ def get_main_menu_keyboard():
     """
     from telegram import ReplyKeyboardMarkup
     keyboard = [
-        ['/add', '/month', '/day', '/stats'],
-        ['/category', '/budget', '/export'],
-        ['📁 Проекты', '/help']
+        ['➕ Добавить', '📅 Месяц', '📆 День', '📈 Статистика'],
+        ['📂 Категории', '💸 Бюджет', '📤 Экспорт'],
+        ['📁 Проекты', '❓ Помощь']
     ]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)

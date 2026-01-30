@@ -273,7 +273,7 @@ async def perform_export(update: Update, user_id: int, project_id: int, year: in
         
         duration = time.time() - start_time
         log_event(logger, "export_success", user_id=user_id, project_id=project_id, 
-                 year=year, month=month, duration=duration, filename=filename)
+                 year=year, month=month, duration=duration, export_filename=filename)
         
     except Exception as e:
         duration = time.time() - start_time

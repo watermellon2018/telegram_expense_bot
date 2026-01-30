@@ -111,8 +111,8 @@ async def add_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
     user_id = update.effective_user.id
     message_text = update.message.text
 
-    # Проверяем, содержит ли команда аргументы
-    if len(message_text.split()) > 1:
+    # Проверяем, содержит ли команда аргументы (только для /add ...; кнопка "➕ Добавить" — без аргументов)
+    if message_text.strip().startswith("/add") and len(message_text.split()) > 1:
         # Если команда содержит аргументы, обрабатываем как раньше
         expense_data = helpers.parse_add_command(message_text)
 

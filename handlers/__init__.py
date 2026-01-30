@@ -15,8 +15,7 @@ def register_all_handlers(application):
     register_project_handlers(application)
     register_start_handlers(application)
 
-    # Важный порядок! В противном случае будет проблема с перехватом сообщений
-    # Так как оба метода отслеживают ввод
+    # Важный порядок! Экспорт и другие кнопки меню — до expense.text_handler (который ловит любой текст)
+    register_export_handlers(application)
     register_stats_handlers(application)
     register_expense_handlers(application)
-    register_export_handlers(application)
