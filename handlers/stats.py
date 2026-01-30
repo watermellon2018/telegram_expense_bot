@@ -313,17 +313,20 @@ def register_stats_handlers(application):
     Регистрирует обработчики команд для получения статистики и анализа
     """
     application.add_handler(CommandHandler("month", month_command))
-    application.add_handler(MessageHandler(filters.Regex('^Месяц$'), month_command))
+    application.add_handler(MessageHandler(filters.Regex('^📅 Месяц$'), month_command))
     application.add_handler(CommandHandler("category", category_command))
-    application.add_handler(MessageHandler(filters.Regex('^Категории$'), category_command))
+    application.add_handler(MessageHandler(filters.Regex('^📂 Категории$'), category_command))
     application.add_handler(CommandHandler("stats", stats_command))
-    application.add_handler(MessageHandler(filters.Regex('^Статистика$'), stats_command))
+    application.add_handler(MessageHandler(filters.Regex('^📈 Статистика$'), stats_command))
     application.add_handler(CommandHandler("day", day_command))
-    application.add_handler(MessageHandler(filters.Regex('^День$'), day_command))
+    application.add_handler(MessageHandler(filters.Regex('^📆 День$'), day_command))
 
     # Регистрируем ConversationHandler для команды /budget
     budget_conv_handler = ConversationHandler(
-        entry_points=[CommandHandler("budget", budget_command)],
+        entry_points=[
+            CommandHandler("budget", budget_command),
+            MessageHandler(filters.Regex('^💸 Бюджет$'), budget_command),
+        ],
         states={
             ENTERING_BUDGET: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_budget_amount)],
         },

@@ -5,7 +5,7 @@ import config
 from utils.export import get_month_name
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import ContextTypes, CommandHandler, CallbackQueryHandler
+from telegram.ext import ContextTypes, CommandHandler, CallbackQueryHandler, MessageHandler, filters
 from utils import excel, projects, db
 import os
 import tempfile
@@ -370,5 +370,5 @@ def register_export_handlers(application):
     Регистрирует обработчики команд для экспорта
     """
     application.add_handler(CommandHandler("export", export_stats_command))
-    application.add_handler(MessageHandler(filters.Regex('^Экспорт$'), export_stats_command))
+    application.add_handler(MessageHandler(filters.Regex('^📤 Экспорт$'), export_stats_command))
     application.add_handler(CallbackQueryHandler(handle_export_callback, pattern="^export:"))

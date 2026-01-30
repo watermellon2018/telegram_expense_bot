@@ -406,7 +406,7 @@ def register_expense_handlers(application):
     add_conv_handler = ConversationHandler(
         entry_points=[
             CommandHandler("add", add_command),
-            MessageHandler(filters.Regex('^Добавить$'), add_command),
+            MessageHandler(filters.Regex('^➕ Добавить$'), add_command),
             MessageHandler(filters.Regex(r'^\d+(\.\d+)?$') & ~filters.COMMAND, direct_amount_handler)
         ],
         states={

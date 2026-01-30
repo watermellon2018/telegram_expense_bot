@@ -4,7 +4,7 @@
 
 from telegram import Update, ReplyKeyboardMarkup
 from telegram.ext import ContextTypes, CommandHandler, filters, MessageHandler
-from utils import excel, projects
+from utils import excel, projects, helpers
 from utils.logger import get_logger, log_command, log_event, log_error
 import config
 
@@ -22,13 +22,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         excel.create_user_dir(user_id)
         log_event(logger, "user_dir_created", user_id=user_id)
         
-        # Создаем клавиатуру с основными командами
-        keyboard = [
-            ['Добавить', 'Месяц', 'День', 'Статистика'],
-            ['Категории', '/budget', 'Экспорт'],
-            ['📁 Проекты', 'Помощь']
-        ]
-        reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+        reply_markup = helpers.get_main_menu_keyboard()
         
         # Инициализируем активный проект из БД
         try:
@@ -148,12 +142,7 @@ async def main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """
     Возвращает в главное меню
     """
-    keyboard = [
-        ['Добавить', 'Месяц', 'День', 'Статистика'],
-        ['Категории', '/budget', 'Экспорт'],
-        ['📁 Проекты', 'Помощь']
-    ]
-    reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+    reply_markup = helpers.get_main_menu_keyboard()
     
     await update.message.reply_text(
         "✅ Возвращение в главное меню",
@@ -170,4 +159,4 @@ def register_start_handlers(application):
     # Обработчики для кнопок меню
     application.add_handler(MessageHandler(filters.Regex('^📁 Проекты$'), projects_menu))
     application.add_handler(MessageHandler(filters.Regex('^⬅️ Главное меню$'), main_menu))
-    application.add_handler(MessageHandler(filters.Regex('^Помощь$'), help_command))
+    application.add_handler(MessageHandler(filters.Regex('^❓ Помощь$'), help_command))
