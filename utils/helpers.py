@@ -66,7 +66,7 @@ def format_month_expenses(expenses, month=None, year=None):
     
     for category, amount in sorted_categories:
         from config import DEFAULT_CATEGORIES
-        emoji = DEFAULT_CATEGORIES.get(category, "")
+        emoji = DEFAULT_CATEGORIES.get(category, "📦")  # 📦 default for custom categories
         report += f"{emoji} {category.title()}: {amount:.2f}\n"
     
     return report
@@ -83,7 +83,7 @@ def format_category_expenses(category_data, category, year=None):
     
     # Формируем отчет
     from config import DEFAULT_CATEGORIES
-    emoji = DEFAULT_CATEGORIES.get(category.lower(), "")
+    emoji = DEFAULT_CATEGORIES.get(category.lower(), "📦")  # 📦 default for custom categories
     
     report = f"📊 Статистика расходов по категории {emoji} {category} за {year} год:\n\n"
     report += f"💰 Общая сумма: {category_data['total']:.2f}\n"
@@ -188,7 +188,7 @@ def format_day_expenses(expenses, date=None):
     
     for category, amount in sorted_categories:
         from config import DEFAULT_CATEGORIES
-        emoji = DEFAULT_CATEGORIES.get(category, "")
+        emoji = DEFAULT_CATEGORIES.get(category, "📦")  # 📦 default for custom categories
         percentage = (amount / expenses['total']) * 100
         report += f"{emoji} {category.title()}: {amount:.2f} ({percentage:.1f}%)\n"
     
@@ -253,7 +253,7 @@ def get_main_menu_keyboard():
     btn = config.MAIN_MENU_BUTTONS
     keyboard = [
         [btn["add"], btn["month"], btn["day"], btn["stats"]],
-        [btn["categories"], btn["budget"], btn["export"]],
+        [btn["categories"], btn["export"]],
         [btn["projects"], btn["help"]],
     ]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
@@ -263,6 +263,12 @@ def main_menu_button_regex(key: str) -> str:
     """Точное совпадение с кнопкой главного меню (для filters.Regex)."""
     import config
     return "^" + re.escape(config.MAIN_MENU_BUTTONS[key]) + "$"
+
+
+def category_menu_button_regex(key: str) -> str:
+    """Точное совпадение с кнопкой меню категорий (для filters.Regex)."""
+    import config
+    return "^" + re.escape(config.CATEGORY_MENU_BUTTONS[key]) + "$"
 
 
 def project_menu_button_regex(key: str) -> str:
