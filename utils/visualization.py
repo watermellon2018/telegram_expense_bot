@@ -50,18 +50,20 @@ async def create_monthly_pie_chart(user_id, month=None, year=None, save_path=Non
         other_sum = sum(item[1] for item in sorted_categories[config.MAX_CATEGORIES_ON_CHART-1:])
         
         for category, amount in main_categories:
-            categories.append(f"{category} ({config.DEFAULT_CATEGORIES.get(category, '')})")
+            emoji = config.DEFAULT_CATEGORIES.get(category, "📦")
+            categories.append(f"{emoji} {category}" if emoji else category)
             amounts.append(amount)
             colors.append(config.COLORS.get(category, "#9E9E9E"))
         
         # Добавляем "Прочее"
         if other_sum > 0:
-            categories.append("прочее")
+            categories.append("📦 прочее")
             amounts.append(other_sum)
             colors.append("#9E9E9E")
     else:
         for category, amount in sorted_categories:
-            categories.append(f"{category} ({config.DEFAULT_CATEGORIES.get(category, '')})")
+            emoji = config.DEFAULT_CATEGORIES.get(category, "📦")
+            categories.append(f"{emoji} {category}" if emoji else category)
             amounts.append(amount)
             colors.append(config.COLORS.get(category, "#9E9E9E"))
     
@@ -301,7 +303,7 @@ async def create_category_distribution_chart(user_id, year=None, save_path=None)
     colors = [config.COLORS.get(cat, "#9E9E9E") for cat in category_expenses.index]
     
     # Добавляем эмодзи к названиям категорий
-    categories_with_emoji = [f"{cat} ({config.DEFAULT_CATEGORIES.get(cat, '')})" for cat in category_expenses.index]
+    categories_with_emoji = [f"{config.DEFAULT_CATEGORIES.get(cat, '📦')} {cat}" for cat in category_expenses.index]
     
     bars = plt.barh(categories_with_emoji, category_expenses.values, color=colors)
     
