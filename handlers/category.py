@@ -1,0 +1,354 @@
+"""
+Обработчики команд для управления категориями
+"""
+
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import ContextTypes, CommandHandler, CallbackQueryHandler, ConversationHandler, MessageHandler, filters
+from utils import categories, helpers
+from utils.logger import get_logger, log_event, log_error
+import config
+
+logger = get_logger("handlers.category")
+
+# Состояния для ConversationHandler
+CHOOSING_CATEGORY_TO_DELETE, CONFIRMING_DELETE, CONFIRMING_DELETE_WITH_EXPENSES = range(3)
+
+
+async def delete_category_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """
+    Обрабатывает команду /delete_category для начала процесса удаления категории
+    """
+    user_id = update.effective_user.id
+    project_id = context.user_data.get('active_project_id')
+    
+    log_event(logger, "delete_category_start", user_id=user_id, project_id=project_id)
+    
+    # Получаем все категории пользователя (включая неактивные для отображения)
+    await categories.ensure_system_categories_exist(user_id)
+    
+    # Получаем только активные категории для выбора
+    cats = await categories.get_categories_for_user_project(user_id, project_id)
+    
+    if not cats:
+        await update.message.reply_text(
+            "❌ Нет доступных категорий для удаления."
+        )
+        return ConversationHandler.END
+    
+    # Фильтруем: показываем только пользовательские категории (не системные)
+    user_categories = [cat for cat in cats if not cat['is_system']]
+    
+    if not user_categories:
+        await update.message.reply_text(
+            "ℹ️ Системные категории нельзя удалить.\n"
+            "Вы можете удалять только созданные вами категории."
+        )
+        return ConversationHandler.END
+    
+    # Создаем inline клавиатуру с категориями для удаления
+    keyboard = []
+    row = []
+    
+    for i, cat in enumerate(user_categories):
+        emoji = config.DEFAULT_CATEGORIES.get(cat['name'], '📦')
+        button_text = f"{emoji} {cat['name']}"
+        
+        row.append(InlineKeyboardButton(
+            button_text,
+            callback_data=f"delcat_{cat['category_id']}"
+        ))
+        
+        # По 2 кнопки в ряд
+        if (i + 1) % 2 == 0 or i == len(user_categories) - 1:
+            keyboard.append(row)
+            row = []
+    
+    keyboard.append([InlineKeyboardButton("❌ Отмена", callback_data="delcat_cancel")])
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    await update.message.reply_text(
+        "🗑️ Выберите категорию для удаления:\n\n"
+        "ℹ️ Если категория используется в расходах, они будут перенесены в категорию 'Прочее'.",
+        reply_markup=reply_markup
+    )
+    
+    return CHOOSING_CATEGORY_TO_DELETE
+
+
+async def handle_category_delete_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """
+    Обрабатывает выбор категории для удаления через callback
+    """
+    query = update.callback_query
+    await query.answer()
+    
+    user_id = update.effective_user.id
+    callback_data = query.data
+    
+    if callback_data == "delcat_cancel":
+        await query.edit_message_text("❌ Удаление категории отменено.")
+        return ConversationHandler.END
+    
+    # Извлекаем category_id из callback_data
+    if not callback_data.startswith("delcat_"):
+        await query.edit_message_text("❌ Ошибка выбора категории.")
+        return ConversationHandler.END
+    
+    try:
+        category_id = int(callback_data.split("_")[1])
+    except (ValueError, IndexError):
+        await query.edit_message_text("❌ Ошибка выбора категории.")
+        return ConversationHandler.END
+    
+    # Получаем информацию о категории
+    category = await categories.get_category_by_id(user_id, category_id)
+    if not category:
+        await query.edit_message_text("❌ Категория не найдена.")
+        return ConversationHandler.END
+    
+    # Проверяем, что это не системная категория
+    if category['is_system']:
+        await query.edit_message_text(
+            "❌ Системные категории нельзя удалить."
+        )
+        return ConversationHandler.END
+    
+    # Сохраняем category_id в контексте
+    context.user_data['delete_category_id'] = category_id
+    context.user_data['delete_category_name'] = category['name']
+    
+    # Проверяем использование категории
+    from utils import db
+    usage_count = await db.fetchval(
+        """
+        SELECT COUNT(*) FROM expenses
+        WHERE category_id = $1 AND user_id = $2
+        """,
+        category_id,
+        str(user_id)
+    )
+    
+    # Сохраняем количество использований в контексте
+    context.user_data['delete_category_usage_count'] = usage_count or 0
+    
+    emoji = config.DEFAULT_CATEGORIES.get(category['name'], '📦')
+    
+    if usage_count > 0:
+        # Если есть расходы, показываем специальное подтверждение с предупреждением о переносе
+        keyboard = [
+            [
+                InlineKeyboardButton("✅ Да, удалить и перенести", callback_data="delcat_confirm_with_transfer"),
+                InlineKeyboardButton("❌ Отмена", callback_data="delcat_cancel")
+            ]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await query.edit_message_text(
+            f"⚠️ Категория {emoji} {category['name']} используется в {usage_count} расходах.\n\n"
+            f"При удалении все расходы будут автоматически перенесены в категорию '📦 Прочее'.\n\n"
+            f"Вы уверены, что хотите удалить категорию?",
+            reply_markup=reply_markup
+        )
+        
+        return CONFIRMING_DELETE_WITH_EXPENSES
+    else:
+        # Если расходов нет, обычное подтверждение
+        keyboard = [
+            [
+                InlineKeyboardButton("✅ Да, удалить", callback_data="delcat_confirm"),
+                InlineKeyboardButton("❌ Отмена", callback_data="delcat_cancel")
+            ]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await query.edit_message_text(
+            f"⚠️ Вы уверены, что хотите удалить категорию?\n\n"
+            f"{emoji} {category['name']}\n\n"
+            f"Это действие нельзя отменить.",
+            reply_markup=reply_markup
+        )
+        
+        return CONFIRMING_DELETE
+
+
+async def confirm_category_delete(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """
+    Подтверждает удаление категории (без расходов)
+    """
+    query = update.callback_query
+    await query.answer()
+    
+    user_id = update.effective_user.id
+    callback_data = query.data
+    
+    if callback_data == "delcat_cancel":
+        await query.edit_message_text("❌ Удаление категории отменено.")
+        # Очищаем контекст
+        context.user_data.pop('delete_category_id', None)
+        context.user_data.pop('delete_category_name', None)
+        context.user_data.pop('delete_category_usage_count', None)
+        return ConversationHandler.END
+    
+    if callback_data != "delcat_confirm":
+        await query.edit_message_text("❌ Неверная команда.")
+        return ConversationHandler.END
+    
+    category_id = context.user_data.get('delete_category_id')
+    category_name = context.user_data.get('delete_category_name')
+    
+    if not category_id:
+        await query.edit_message_text("❌ Ошибка: категория не выбрана.")
+        return ConversationHandler.END
+    
+    # Выполняем удаление (деактивацию)
+    result = await categories.deactivate_category(user_id, category_id)
+    
+    # Очищаем контекст
+    context.user_data.pop('delete_category_id', None)
+    context.user_data.pop('delete_category_name', None)
+    context.user_data.pop('delete_category_usage_count', None)
+    
+    if result['success']:
+        emoji = config.DEFAULT_CATEGORIES.get(category_name, '📦')
+        log_event(logger, "category_deleted", user_id=user_id, 
+                 category_id=category_id, category_name=category_name)
+        await query.edit_message_text(
+            f"✅ Категория {emoji} {category_name} успешно удалена."
+        )
+    else:
+        log_error(logger, Exception(result.get('message', 'Unknown error')), 
+                 "category_delete_failed", user_id=user_id, category_id=category_id)
+        await query.edit_message_text(
+            f"❌ {result['message']}"
+        )
+    
+    return ConversationHandler.END
+
+
+async def confirm_category_delete_with_transfer(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """
+    Подтверждает удаление категории с переносом расходов в 'Прочее'
+    """
+    query = update.callback_query
+    await query.answer()
+    
+    user_id = update.effective_user.id
+    callback_data = query.data
+    
+    if callback_data == "delcat_cancel":
+        await query.edit_message_text("❌ Удаление категории отменено.")
+        # Очищаем контекст
+        context.user_data.pop('delete_category_id', None)
+        context.user_data.pop('delete_category_name', None)
+        context.user_data.pop('delete_category_usage_count', None)
+        return ConversationHandler.END
+    
+    if callback_data != "delcat_confirm_with_transfer":
+        await query.edit_message_text("❌ Неверная команда.")
+        return ConversationHandler.END
+    
+    category_id = context.user_data.get('delete_category_id')
+    category_name = context.user_data.get('delete_category_name')
+    usage_count = context.user_data.get('delete_category_usage_count', 0)
+    
+    if not category_id:
+        await query.edit_message_text("❌ Ошибка: категория не выбрана.")
+        return ConversationHandler.END
+    
+    # Убеждаемся, что категория 'Прочее' существует
+    await categories.ensure_system_categories_exist(user_id)
+    
+    # Находим категорию 'Прочее'
+    project_id = context.user_data.get('active_project_id')
+    all_cats = await categories.get_categories_for_user_project(user_id, project_id)
+    prochee_category = None
+    
+    # Ищем в категориях проекта
+    for cat in all_cats:
+        if cat['name'].lower() == 'прочее':
+            prochee_category = cat
+            break
+    
+    # Если не найдено в проекте, ищем в глобальных
+    if not prochee_category:
+        global_cats = await categories.get_categories_for_user_project(user_id, None)
+        for cat in global_cats:
+            if cat['name'].lower() == 'прочее':
+                prochee_category = cat
+                break
+    
+    if not prochee_category:
+        log_error(logger, Exception("Прочее category not found"), 
+                 "delete_category_prochee_not_found", user_id=user_id)
+        await query.edit_message_text(
+            "❌ Ошибка: категория 'Прочее' не найдена. Попробуйте позже."
+        )
+        return ConversationHandler.END
+    
+    # Выполняем удаление с переносом расходов
+    result = await categories.delete_category_with_transfer(
+        user_id, 
+        category_id, 
+        prochee_category['category_id']
+    )
+    
+    # Очищаем контекст
+    context.user_data.pop('delete_category_id', None)
+    context.user_data.pop('delete_category_name', None)
+    context.user_data.pop('delete_category_usage_count', None)
+    
+    if result['success']:
+        emoji = config.DEFAULT_CATEGORIES.get(category_name, '📦')
+        log_event(logger, "category_deleted_with_transfer", user_id=user_id,
+                 category_id=category_id, category_name=category_name,
+                 transferred_count=result.get('transferred_count', 0))
+        await query.edit_message_text(
+            f"✅ Категория {emoji} {category_name} удалена.\n\n"
+            f"📦 {result.get('transferred_count', usage_count)} расходов перенесено в 'Прочее'."
+        )
+    else:
+        log_error(logger, Exception(result.get('message', 'Unknown error')), 
+                 "category_delete_with_transfer_failed", user_id=user_id, category_id=category_id)
+        await query.edit_message_text(
+            f"❌ {result['message']}"
+        )
+    
+    return ConversationHandler.END
+
+
+async def cancel_category_delete(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """
+    Отменяет процесс удаления категории
+    """
+    # Очищаем контекст
+    context.user_data.pop('delete_category_id', None)
+    context.user_data.pop('delete_category_name', None)
+    context.user_data.pop('delete_category_usage_count', None)
+    
+    return await helpers.cancel_conversation(update, context, "Удаление категории отменено.")
+
+
+def register_category_handlers(application):
+    """
+    Регистрирует обработчики команд для управления категориями
+    """
+    delete_conv_handler = ConversationHandler(
+        entry_points=[
+            CommandHandler("delete_category", delete_category_command),
+        ],
+        states={
+            CHOOSING_CATEGORY_TO_DELETE: [
+                CallbackQueryHandler(handle_category_delete_callback, pattern=r'^delcat_')
+            ],
+            CONFIRMING_DELETE: [
+                CallbackQueryHandler(confirm_category_delete, pattern=r'^delcat_(confirm|cancel)$')
+            ],
+            CONFIRMING_DELETE_WITH_EXPENSES: [
+                CallbackQueryHandler(confirm_category_delete_with_transfer, pattern=r'^delcat_(confirm_with_transfer|cancel)$')
+            ],
+        },
+        fallbacks=[CommandHandler("cancel", cancel_category_delete)],
+        name="delete_category_conversation",
+        persistent=False
+    )
+    application.add_handler(delete_conv_handler)

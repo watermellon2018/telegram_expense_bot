@@ -125,8 +125,8 @@ async def create_category(
             str(user_id)
         )
         
-        # Проверяем на дубликат (case-insensitive)
-        existing = await db.fetchrow(
+        # Проверяем на дубликат среди активных категорий (case-insensitive)
+        existing_active = await db.fetchrow(
             """
             SELECT category_id FROM categories
             WHERE user_id = $1
@@ -139,13 +139,52 @@ async def create_category(
             name.strip()
         )
         
-        if existing:
+        if existing_active:
             return {
                 'success': False,
                 'message': f"Категория '{name}' уже существует в этом проекте"
             }
         
-        # Создаем категорию
+        # Проверяем, есть ли неактивная категория с таким же именем
+        existing_inactive = await db.fetchrow(
+            """
+            SELECT category_id FROM categories
+            WHERE user_id = $1
+              AND ((project_id IS NULL AND $2::int IS NULL) OR project_id = $2)
+              AND LOWER(name) = LOWER($3)
+              AND is_active = FALSE
+            """,
+            str(user_id),
+            project_id,
+            name.strip()
+        )
+        
+        if existing_inactive:
+            # Реактивируем существующую категорию
+            category_id = existing_inactive['category_id']
+            await db.execute(
+                """
+                UPDATE categories
+                SET is_active = TRUE, is_system = $1
+                WHERE category_id = $2 AND user_id = $3
+                """,
+                is_system,
+                category_id,
+                str(user_id)
+            )
+            
+            log_event(logger, "create_category_reactivated", user_id=user_id,
+                     category_id=category_id, category_name=name, project_id=project_id, is_system=is_system)
+            
+            return {
+                'success': True,
+                'category_id': category_id,
+                'name': name.strip(),
+                'project_id': project_id,
+                'message': f"Категория '{name}' восстановлена"
+            }
+        
+        # Создаем новую категорию
         category_id = await db.fetchval(
             """
             INSERT INTO categories(user_id, project_id, name, is_system, is_active, created_at)
@@ -174,6 +213,94 @@ async def create_category(
         return {
             'success': False,
             'message': f"Ошибка при создании категории: {str(e)}"
+        }
+
+
+async def delete_category_with_transfer(user_id: int, category_id: int, target_category_id: int) -> Dict:
+    """
+    Удаляет категорию, перенося все расходы в другую категорию.
+    
+    Args:
+        user_id: ID пользователя
+        category_id: ID удаляемой категории
+        target_category_id: ID категории, в которую переносятся расходы
+    
+    Returns:
+        Словарь с результатом операции
+    """
+    try:
+        # Проверяем, что категория принадлежит пользователю
+        category = await get_category_by_id(user_id, category_id)
+        if not category:
+            return {
+                'success': False,
+                'message': "Категория не найдена"
+            }
+        
+        # Проверяем целевую категорию
+        target_category = await get_category_by_id(user_id, target_category_id)
+        if not target_category:
+            return {
+                'success': False,
+                'message': "Целевая категория не найдена"
+            }
+        
+        # Переносим расходы
+        from utils import db
+        
+        # Сначала получаем количество расходов для переноса
+        transferred_count = await db.fetchval(
+            """
+            SELECT COUNT(*) FROM expenses
+            WHERE category_id = $1 AND user_id = $2
+            """,
+            category_id,
+            str(user_id)
+        )
+        
+        if transferred_count is None:
+            transferred_count = 0
+        
+        # Переносим расходы
+        if transferred_count > 0:
+            await db.execute(
+                """
+                UPDATE expenses
+                SET category_id = $1
+                WHERE category_id = $2 AND user_id = $3
+                """,
+                target_category_id,
+                category_id,
+                str(user_id)
+            )
+        
+        # Деактивируем категорию
+        await db.execute(
+            """
+            UPDATE categories
+            SET is_active = FALSE
+            WHERE category_id = $1 AND user_id = $2
+            """,
+            category_id,
+            str(user_id)
+        )
+        
+        log_event(logger, "delete_category_with_transfer_success", user_id=user_id,
+                 category_id=category_id, target_category_id=target_category_id,
+                 transferred_count=transferred_count)
+        
+        return {
+            'success': True,
+            'message': f"Категория '{category['name']}' удалена. {transferred_count} расходов перенесено в '{target_category['name']}'.",
+            'transferred_count': transferred_count
+        }
+        
+    except Exception as e:
+        log_error(logger, e, "delete_category_with_transfer_error", user_id=user_id,
+                 category_id=category_id, target_category_id=target_category_id)
+        return {
+            'success': False,
+            'message': f"Ошибка при удалении категории: {str(e)}"
         }
 
 
