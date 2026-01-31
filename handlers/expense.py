@@ -2,9 +2,9 @@
 Обработчики команд для добавления расходов
 """
 
-from telegram import Update, ReplyKeyboardMarkup, ReplyKeyboardRemove
-from telegram.ext import ContextTypes, CommandHandler, filters, MessageHandler, ConversationHandler
-from utils import excel, helpers, projects
+from telegram import Update, ReplyKeyboardMarkup, ReplyKeyboardRemove, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import ContextTypes, CommandHandler, filters, MessageHandler, ConversationHandler, CallbackQueryHandler
+from utils import excel, helpers, projects, categories
 from utils.helpers import main_menu_button_regex
 from utils.logger import get_logger, log_command, log_event, log_error
 import config
@@ -12,7 +12,7 @@ import config
 logger = get_logger("handlers.expense")
 
 # Состояния для ConversationHandler
-ENTERING_AMOUNT, CHOOSING_CATEGORY, ENTERING_DESCRIPTION = range(3)
+ENTERING_AMOUNT, CHOOSING_CATEGORY, ENTERING_DESCRIPTION, CREATING_CATEGORY = range(4)
 
 
 async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -33,25 +33,44 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     expense_data = helpers.parse_add_command(message_text)
 
     if expense_data:
-        # Проверяем, что категория существует
-        if expense_data['category'] not in config.DEFAULT_CATEGORIES:
+        # Получаем активный проект
+        project_id = context.user_data.get('active_project_id')
+        
+        # Ищем категорию по имени
+        await categories.ensure_system_categories_exist(user_id)
+        cats = await categories.get_categories_for_user_project(user_id, project_id)
+        category_found = None
+        
+        # Сначала ищем в категориях проекта
+        for cat in cats:
+            if cat['name'].lower() == expense_data['category'].lower():
+                category_found = cat
+                break
+        
+        # Если не найдено, ищем в глобальных категориях
+        if not category_found:
+            cats_global = await categories.get_categories_for_user_project(user_id, None)
+            for cat in cats_global:
+                if cat['name'].lower() == expense_data['category'].lower():
+                    category_found = cat
+                    break
+        
+        if not category_found:
             log_event(logger, "invalid_category_in_text", user_id=user_id, 
                      category=expense_data['category'], 
                      message="Category not found in text message")
             return  # Не отвечаем, если категория не найдена в обычном сообщении
-
-        # Получаем активный проект
-        project_id = context.user_data.get('active_project_id')
         
         log_event(logger, "expense_parsed_from_text", user_id=user_id, 
-                 amount=expense_data['amount'], category=expense_data['category'],
+                 amount=expense_data['amount'], category_id=category_found['category_id'],
+                 category_name=category_found['name'],
                  has_description=bool(expense_data['description']), project_id=project_id)
         
         # Добавляем расход
         success = await excel.add_expense(
             user_id,
             expense_data['amount'],
-            expense_data['category'],
+            category_found['category_id'],
             expense_data['description'],
             project_id
         )
@@ -61,17 +80,18 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             log_error(logger, Exception("Failed to add expense from text"), 
                      "expense_add_failed_from_text", request_id=request_id,
                      duration_ms=duration_ms, user_id=user_id,
-                     amount=expense_data['amount'], category=expense_data['category'])
+                     amount=expense_data['amount'], category_id=category_found['category_id'],
+                     category_name=category_found['name'])
             await update.message.reply_text("❌ Ошибка при добавлении расхода. Попробуйте еще раз.")
             return
 
         # Отправляем подтверждение
-        category_emoji = config.DEFAULT_CATEGORIES[expense_data['category']]
+        category_emoji = config.DEFAULT_CATEGORIES.get(category_found['name'], '📦')
 
         confirmation = (
             f"✅ Расход добавлен:\n"
             f"💰 Сумма: {expense_data['amount']}\n"
-            f"{category_emoji} Категория: {expense_data['category'].title()}"
+            f"{category_emoji} Категория: {category_found['name'].title()}"
         )
 
         if expense_data['description']:
@@ -86,7 +106,8 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
                     duration_ms = (time.time() - start_time) * 1000
                     log_event(logger, "expense_added_from_text", request_id=request_id,
                              status="success", duration_ms=duration_ms, user_id=user_id,
-                             amount=expense_data['amount'], category=expense_data['category'],
+                             amount=expense_data['amount'], category_id=category_found['category_id'],
+                             category_name=category_found['name'],
                              project_id=project_id, project_name=project['project_name'])
             except Exception as e:
                 duration_ms = (time.time() - start_time) * 1000
@@ -97,7 +118,8 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             duration_ms = (time.time() - start_time) * 1000
             log_event(logger, "expense_added_from_text", request_id=request_id,
                      status="success", duration_ms=duration_ms, user_id=user_id,
-                     amount=expense_data['amount'], category=expense_data['category'])
+                     amount=expense_data['amount'], category_id=category_found['category_id'],
+                     category_name=category_found['name'])
 
         await update.message.reply_text(confirmation)
     else:
@@ -127,37 +149,58 @@ async def add_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
             )
             return ConversationHandler.END
 
-        # Проверяем, что категория существует
-        if expense_data['category'] not in config.DEFAULT_CATEGORIES:
-            categories_list = ", ".join(config.DEFAULT_CATEGORIES.keys())
+        # Получаем активный проект
+        project_id = context.user_data.get('active_project_id')
+        
+        # Ищем категорию по имени
+        await categories.ensure_system_categories_exist(user_id)
+        cats = await categories.get_categories_for_user_project(user_id, project_id)
+        category_found = None
+        
+        # Сначала ищем в категориях проекта
+        for cat in cats:
+            if cat['name'].lower() == expense_data['category'].lower():
+                category_found = cat
+                break
+        
+        # Если не найдено, ищем в глобальных категориях
+        if not category_found:
+            cats_global = await categories.get_categories_for_user_project(user_id, None)
+            for cat in cats_global:
+                if cat['name'].lower() == expense_data['category'].lower():
+                    category_found = cat
+                    break
+        
+        if not category_found:
             log_event(logger, "invalid_category_in_command", user_id=user_id,
                      category=expense_data['category'], amount=expense_data['amount'],
                      reason="category_not_found")
             await update.message.reply_text(
                 f"❌ Категория '{expense_data['category']}' не найдена.\n"
-                f"Доступные категории: {categories_list}"
+                f"Используйте команду /add без аргументов для выбора категории."
             )
             return ConversationHandler.END
-
-        # Получаем активный проект
-        project_id = context.user_data.get('active_project_id')
         
         # Добавляем расход
-        await excel.add_expense(
+        success = await excel.add_expense(
             user_id,
             expense_data['amount'],
-            expense_data['category'],
+            category_found['category_id'],
             expense_data['description'],
             project_id
         )
+        
+        if not success:
+            await update.message.reply_text("❌ Ошибка при добавлении расхода.")
+            return ConversationHandler.END
 
         # Отправляем подтверждение
-        category_emoji = config.DEFAULT_CATEGORIES[expense_data['category']]
+        category_emoji = config.DEFAULT_CATEGORIES.get(category_found['name'], '📦')
 
         confirmation = (
             f"✅ Расход добавлен:\n"
             f"💰 Сумма: {expense_data['amount']}\n"
-            f"{category_emoji} Категория: {expense_data['category']}"
+            f"{category_emoji} Категория: {category_found['name']}"
         )
 
         if expense_data['description']:
@@ -208,19 +251,39 @@ async def handle_amount(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
         
         log_event(logger, "amount_validated", user_id=user_id, amount=amount)
 
-        # Отправляем клавиатуру с категориями
+        # Получаем категории для пользователя и проекта
+        await categories.ensure_system_categories_exist(user_id)
+        cats = await categories.get_categories_for_user_project(user_id, project_id)
+        
+        if not cats:
+            await update.message.reply_text(
+                "❌ Нет доступных категорий. Создайте категорию сначала."
+            )
+            return ConversationHandler.END
+
+        # Создаем inline клавиатуру с категориями
         keyboard = []
         row = []
-        for i, category in enumerate(config.DEFAULT_CATEGORIES.keys()):
-            emoji = config.DEFAULT_CATEGORIES[category]
-            row.append(f"{emoji} {category}")
-            # По 2 категории в ряд
-            if (i + 1) % 2 == 0 or i == len(config.DEFAULT_CATEGORIES) - 1:
+        
+        for i, cat in enumerate(cats):
+            # Получаем эмодзи из конфига для системных категорий, иначе используем 📦
+            emoji = config.DEFAULT_CATEGORIES.get(cat['name'], '📦')
+            button_text = f"{emoji} {cat['name']}"
+            
+            row.append(InlineKeyboardButton(
+                button_text,
+                callback_data=f"cat_{cat['category_id']}"
+            ))
+            
+            # По 2 кнопки в ряд
+            if (i + 1) % 2 == 0 or i == len(cats) - 1:
                 keyboard.append(row)
                 row = []
-
-        keyboard.append(['Отмена'])
-        reply_markup = ReplyKeyboardMarkup(keyboard, one_time_keyboard=True, resize_keyboard=True)
+        
+        # Кнопка создания новой категории
+        keyboard.append([InlineKeyboardButton("➕ Создать категорию", callback_data="cat_create")])
+        
+        reply_markup = InlineKeyboardMarkup(keyboard)
 
         await update.message.reply_text(
             f"Сумма: {amount:.2f}\n\nВыберите категорию расхода:",
@@ -243,49 +306,109 @@ async def handle_amount(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
         return ENTERING_AMOUNT
 
 
-async def handle_category(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+async def handle_category_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """
-    Обрабатывает выбор категории расхода
+    Обрабатывает выбор категории через callback query
+    """
+    query = update.callback_query
+    await query.answer()
+    
+    user_id = update.effective_user.id
+    callback_data = query.data
+    project_id = context.user_data.get('active_project_id')
+    
+    if callback_data == "cat_create":
+        # Переходим к созданию категории
+        await query.edit_message_text(
+            "Введите название новой категории:"
+        )
+        return CREATING_CATEGORY
+    
+    # Извлекаем category_id из callback_data
+    if not callback_data.startswith("cat_"):
+        await query.edit_message_text("❌ Ошибка выбора категории.")
+        return ConversationHandler.END
+    
+    try:
+        category_id = int(callback_data.split("_")[1])
+    except (ValueError, IndexError):
+        await query.edit_message_text("❌ Ошибка выбора категории.")
+        return ConversationHandler.END
+    
+    # Проверяем, что категория принадлежит пользователю
+    category = await categories.get_category_by_id(user_id, category_id)
+    if not category:
+        await query.edit_message_text("❌ Категория не найдена.")
+        return ConversationHandler.END
+    
+    # Проверяем, что категория доступна для текущего проекта
+    if category['project_id'] is not None and category['project_id'] != project_id:
+        await query.edit_message_text("❌ Категория недоступна для этого проекта.")
+        return ConversationHandler.END
+    
+    # Сохраняем category_id в контексте
+    context.user_data['category_id'] = category_id
+    context.user_data['category_name'] = category['name']
+    
+    amount = context.user_data.get('amount')
+    log_event(logger, "category_selected", user_id=user_id, 
+             category_id=category_id, category_name=category['name'], 
+             amount=amount, project_id=project_id)
+    
+    # Обновляем сообщение и спрашиваем описание
+    emoji = config.DEFAULT_CATEGORIES.get(category['name'], '📦')
+    await query.edit_message_text(
+        f"Сумма: {amount:.2f}\n"
+        f"{emoji} Категория: {category['name']}\n\n"
+        f"Введите описание расхода (или отправьте /skip, чтобы пропустить):"
+    )
+    
+    return ENTERING_DESCRIPTION
+
+
+async def handle_create_category(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """
+    Обрабатывает создание новой категории
     """
     user_id = update.effective_user.id
-    text = update.message.text
-
-    if text == 'Отмена':
-        from utils.helpers import get_main_menu_keyboard
-        await update.message.reply_text(
-            "Добавление расхода отменено.",
-            reply_markup=get_main_menu_keyboard()
-        )
-        return ConversationHandler.END
-
-    # Извлекаем категорию из текста (убираем эмодзи)
-    category = text.split()[-1].lower()
-
-    # Проверяем, что категория существует
-    if category not in config.DEFAULT_CATEGORIES:
-        amount = context.user_data.get('amount')
-        log_event(logger, "invalid_category_selected", user_id=user_id,
-                 category=category, amount=amount, input_text=text,
-                 reason="category_not_in_list")
-        categories_list = ", ".join(config.DEFAULT_CATEGORIES.keys())
-        await update.message.reply_text(
-            f"❌ Категория '{category}' не найдена.\n"
-            f"Доступные категории: {categories_list}"
-        )
-        return CHOOSING_CATEGORY
-
-    # Сохраняем категорию в контексте
-    amount = context.user_data.get('amount')
+    category_name = update.message.text.strip()
     project_id = context.user_data.get('active_project_id')
-    context.user_data['category'] = category
     
-    log_event(logger, "category_validated", user_id=user_id, category=category, amount=amount, project_id=project_id)
-
+    if not category_name:
+        await update.message.reply_text("❌ Название категории не может быть пустым. Введите название:")
+        return CREATING_CATEGORY
+    
+    # Создаем категорию
+    result = await categories.create_category(
+        user_id=user_id,
+        name=category_name,
+        project_id=project_id,
+        is_system=False
+    )
+    
+    if not result['success']:
+        await update.message.reply_text(
+            f"❌ {result['message']}\n\nПопробуйте другое название:"
+        )
+        return CREATING_CATEGORY
+    
+    # Сохраняем category_id в контексте
+    context.user_data['category_id'] = result['category_id']
+    context.user_data['category_name'] = result['name']
+    
+    amount = context.user_data.get('amount')
+    log_event(logger, "category_created_and_selected", user_id=user_id,
+             category_id=result['category_id'], category_name=result['name'],
+             amount=amount, project_id=project_id)
+    
     # Спрашиваем описание
     await update.message.reply_text(
-        "Введите описание расхода (или отправьте /skip, чтобы пропустить):"
+        f"✅ Категория '{result['name']}' создана!\n\n"
+        f"Сумма: {amount:.2f}\n"
+        f"📦 Категория: {result['name']}\n\n"
+        f"Введите описание расхода (или отправьте /skip, чтобы пропустить):"
     )
-
+    
     return ENTERING_DESCRIPTION
 
 
@@ -298,8 +421,15 @@ async def handle_description(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
     # Получаем данные из контекста
     amount = context.user_data.get('amount', 0)
-    category = context.user_data.get('category', '')
+    category_id = context.user_data.get('category_id')
+    category_name = context.user_data.get('category_name', '')
     project_id = context.user_data.get('active_project_id')
+
+    if not category_id:
+        log_error(logger, Exception("category_id missing"), "expense_add_failed_no_category",
+                 user_id=user_id, project_id=project_id, amount=amount)
+        await update.message.reply_text("❌ Ошибка: категория не выбрана.")
+        return ConversationHandler.END
 
     # Проверяем, хочет ли пользователь пропустить описание
     if text == '/skip':
@@ -308,22 +438,24 @@ async def handle_description(update: Update, context: ContextTypes.DEFAULT_TYPE)
         description = text
 
     # Добавляем расход
-    success = await excel.add_expense(user_id, amount, category, description, project_id)
+    success = await excel.add_expense(user_id, amount, category_id, description, project_id)
     
     if success:
         log_event(logger, "expense_added", user_id=user_id, project_id=project_id,
-                 amount=amount, category=category, has_description=bool(description))
+                 amount=amount, category_id=category_id, category_name=category_name,
+                 has_description=bool(description))
     else:
         log_error(logger, Exception("Failed to add expense"), "expense_add_failed",
-                 user_id=user_id, project_id=project_id, amount=amount, category=category)
+                 user_id=user_id, project_id=project_id, amount=amount, 
+                 category_id=category_id, category_name=category_name)
 
     # Отправляем подтверждение
-    category_emoji = config.DEFAULT_CATEGORIES[category]
+    emoji = config.DEFAULT_CATEGORIES.get(category_name, '📦')
 
     confirmation = (
         f"✅ Расход добавлен:\n"
         f"💰 Сумма: {amount:.2f}\n"
-        f"{category_emoji} Категория: {category}"
+        f"{emoji} Категория: {category_name}"
     )
 
     if description:
@@ -340,8 +472,7 @@ async def handle_description(update: Update, context: ContextTypes.DEFAULT_TYPE)
     await update.message.reply_text(confirmation, reply_markup=helpers.get_main_menu_keyboard())
 
     # Очищаем данные пользователя
-    # context.user_data.clear()
-    for key in ['amount', 'category']:
+    for key in ['amount', 'category_id', 'category_name']:
         context.user_data.pop(key, None)
 
     return ConversationHandler.END
@@ -352,7 +483,7 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     Отменяет диалог добавления расхода
     """
     # Очищаем данные пользователя
-    for key in ['amount', 'category']:
+    for key in ['amount', 'category_id', 'category_name']:
         context.user_data.pop(key, None)
     
     return await helpers.cancel_conversation(update, context, "Добавление расхода отменено.")
@@ -364,28 +495,48 @@ async def direct_amount_handler(update: Update, context: ContextTypes.DEFAULT_TY
     """
     user_id = update.effective_user.id
     text = update.message.text
+    project_id = context.user_data.get('active_project_id')
 
     # Проверяем, похоже ли сообщение на сумму
     try:
         # Пытаемся распарсить как число
         amount = float(text)
+        
+        if amount <= 0:
+            return ConversationHandler.END
 
         # Сохраняем сумму в контексте
         context.user_data['amount'] = amount
 
-        # Отправляем клавиатуру с категориями
+        # Получаем категории для пользователя и проекта
+        await categories.ensure_system_categories_exist(user_id)
+        cats = await categories.get_categories_for_user_project(user_id, project_id)
+        
+        if not cats:
+            await update.message.reply_text(
+                "❌ Нет доступных категорий. Создайте категорию сначала."
+            )
+            return ConversationHandler.END
+
+        # Создаем inline клавиатуру с категориями
         keyboard = []
         row = []
-        for i, category in enumerate(config.DEFAULT_CATEGORIES.keys()):
-            emoji = config.DEFAULT_CATEGORIES[category]
-            row.append(f"{emoji} {category}")
-            # По 2 категории в ряд
-            if (i + 1) % 2 == 0 or i == len(config.DEFAULT_CATEGORIES) - 1:
+        
+        for i, cat in enumerate(cats):
+            emoji = config.DEFAULT_CATEGORIES.get(cat['name'], '📦')
+            button_text = f"{emoji} {cat['name']}"
+            
+            row.append(InlineKeyboardButton(
+                button_text,
+                callback_data=f"cat_{cat['category_id']}"
+            ))
+            
+            if (i + 1) % 2 == 0 or i == len(cats) - 1:
                 keyboard.append(row)
                 row = []
-
-        keyboard.append(['Отмена'])
-        reply_markup = ReplyKeyboardMarkup(keyboard, one_time_keyboard=True, resize_keyboard=True)
+        
+        keyboard.append([InlineKeyboardButton("➕ Создать категорию", callback_data="cat_create")])
+        reply_markup = InlineKeyboardMarkup(keyboard)
 
         await update.message.reply_text(
             f"Сумма: {amount:.2f}\n\nВыберите категорию расхода:",
@@ -412,7 +563,8 @@ def register_expense_handlers(application):
         ],
         states={
             ENTERING_AMOUNT: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_amount)],
-            CHOOSING_CATEGORY: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_category)],
+            CHOOSING_CATEGORY: [CallbackQueryHandler(handle_category_callback, pattern=r'^cat_')],
+            CREATING_CATEGORY: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_create_category)],
             ENTERING_DESCRIPTION: [
                 CommandHandler("skip", handle_description),
                 MessageHandler(filters.TEXT & ~filters.COMMAND, handle_description)

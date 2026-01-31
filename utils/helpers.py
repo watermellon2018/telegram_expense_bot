@@ -253,7 +253,7 @@ def get_main_menu_keyboard():
     btn = config.MAIN_MENU_BUTTONS
     keyboard = [
         [btn["add"], btn["month"], btn["day"], btn["stats"]],
-        [btn["categories"], btn["budget"], btn["export"]],
+        [btn["categories"], btn["export"]],
         [btn["projects"], btn["help"]],
     ]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
