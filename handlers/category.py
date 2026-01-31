@@ -217,10 +217,8 @@ async def confirm_category_delete(update: Update, context: ContextTypes.DEFAULT_
         # Возвращаемся в меню категорий
         btn = config.CATEGORY_MENU_BUTTONS
         keyboard = [
-            [btn["add"]],
-            [btn["list"]],
-            [btn["delete"]],
-            [btn["back"]],
+            [btn["add"], btn["list"]],
+            [btn["delete"], btn["back"]],
         ]
         reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
         
@@ -320,10 +318,8 @@ async def confirm_category_delete_with_transfer(update: Update, context: Context
         # Возвращаемся в меню категорий
         btn = config.CATEGORY_MENU_BUTTONS
         keyboard = [
-            [btn["add"]],
-            [btn["list"]],
-            [btn["delete"]],
-            [btn["back"]],
+            [btn["add"], btn["list"]],
+            [btn["delete"], btn["back"]],
         ]
         reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
         
@@ -376,10 +372,8 @@ async def categories_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     # Создаем клавиатуру меню категорий
     btn = config.CATEGORY_MENU_BUTTONS
     keyboard = [
-        [btn["add"]],
-        [btn["list"]],
-        [btn["delete"]],
-        [btn["back"]],
+        [btn["add"], btn["list"]],
+        [btn["delete"], btn["back"]],
     ]
     reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
     
@@ -454,10 +448,8 @@ async def handle_category_name_input(update: Update, context: ContextTypes.DEFAU
         # Возвращаемся в меню категорий
         btn = config.CATEGORY_MENU_BUTTONS
         keyboard = [
-            [btn["add"]],
-            [btn["list"]],
-            [btn["delete"]],
-            [btn["back"]],
+            [btn["add"], btn["list"]],
+            [btn["delete"], btn["back"]],
         ]
         reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
         
@@ -526,10 +518,8 @@ async def category_list_button(update: Update, context: ContextTypes.DEFAULT_TYP
     # Возвращаемся в меню категорий
     btn = config.CATEGORY_MENU_BUTTONS
     keyboard = [
-        [btn["add"]],
-        [btn["list"]],
-        [btn["delete"]],
-        [btn["back"]],
+        [btn["add"], btn["list"]],
+        [btn["delete"], btn["back"]],
     ]
     reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
     
@@ -562,10 +552,8 @@ async def cancel_category_add(update: Update, context: ContextTypes.DEFAULT_TYPE
     """
     btn = config.CATEGORY_MENU_BUTTONS
     keyboard = [
-        [btn["add"]],
-        [btn["list"]],
-        [btn["delete"]],
-        [btn["back"]],
+        [btn["add"], btn["list"]],
+        [btn["delete"], btn["back"]],
     ]
     reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
     
