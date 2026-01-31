@@ -265,6 +265,12 @@ def main_menu_button_regex(key: str) -> str:
     return "^" + re.escape(config.MAIN_MENU_BUTTONS[key]) + "$"
 
 
+def category_menu_button_regex(key: str) -> str:
+    """Точное совпадение с кнопкой меню категорий (для filters.Regex)."""
+    import config
+    return "^" + re.escape(config.CATEGORY_MENU_BUTTONS[key]) + "$"
+
+
 def project_menu_button_regex(key: str) -> str:
     """Точное совпадение с кнопкой меню проектов (для filters.Regex)."""
     import config

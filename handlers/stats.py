@@ -285,7 +285,7 @@ def register_stats_handlers(application):
     application.add_handler(CommandHandler("month", month_command))
     application.add_handler(MessageHandler(filters.Regex(main_menu_button_regex("month")), month_command))
     application.add_handler(CommandHandler("category", category_command))
-    application.add_handler(MessageHandler(filters.Regex(main_menu_button_regex("categories")), category_command))
+    # Categories button now handled by category menu (handlers/category.py)
     application.add_handler(CommandHandler("stats", stats_command))
     application.add_handler(MessageHandler(filters.Regex(main_menu_button_regex("stats")), stats_command))
     application.add_handler(CommandHandler("day", day_command))
