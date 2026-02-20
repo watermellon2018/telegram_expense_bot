@@ -217,10 +217,23 @@ async def fetchrow(query: str, *args, request_id: str = None):
 async def fetchval(query: str, *args, request_id: str = None):
     """
     Выполняет SELECT-запрос и возвращает одно значение
-    
+
     Args:
         query: SQL запрос
         *args: Параметры запроса
         request_id: ID запроса для трейсинга (опционально)
     """
     return await _pool.fetchval(query, *args)
+
+
+def transaction():
+    """
+    Возвращает контекстный менеджер транзакции asyncpg.
+    Использование:
+        async with db.transaction() as conn:
+            await conn.execute(...)
+            await conn.fetchrow(...)
+    Все операции внутри блока выполняются атомарно.
+    Если возникает исключение — транзакция откатывается автоматически.
+    """
+    return _pool.acquire()

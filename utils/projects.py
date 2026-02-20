@@ -511,35 +511,39 @@ async def accept_invitation(user_id: int, token: str) -> Dict:
                 'message': f"Вы уже участник проекта '{invitation['project_name']}' с ролью '{existing_role}'"
             }
         
-        # Ensure user exists in users table
-        await db.execute(
-            "INSERT INTO users(user_id) VALUES($1) ON CONFLICT (user_id) DO NOTHING",
-            str(user_id)
-        )
-        
-        # Add user to project_members
-        await db.execute(
-            """
-            INSERT INTO project_members(project_id, user_id, role, joined_at)
-            VALUES($1, $2, $3, NOW())
-            """,
-            invitation['project_id'],
-            str(user_id),
-            invitation['role']
-        )
-        
-        # Set project as active for the user
-        await db.execute(
-            "UPDATE users SET active_project_id = $1 WHERE user_id = $2",
-            invitation['project_id'],
-            str(user_id)
-        )
-        
-        # Delete the used invitation token
-        await db.execute(
-            "DELETE FROM project_invites WHERE token = $1",
-            token
-        )
+        # Все операции принятия приглашения выполняем атомарно в одной транзакции:
+        # добавление в project_members, обновление активного проекта и удаление токена.
+        # Если любой шаг упадёт — откатываются все изменения, токен остаётся валидным.
+        async with db.transaction() as conn:
+            # Убеждаемся что пользователь существует в таблице users
+            await conn.execute(
+                "INSERT INTO users(user_id) VALUES($1) ON CONFLICT (user_id) DO NOTHING",
+                str(user_id)
+            )
+
+            # Добавляем пользователя в участники проекта
+            await conn.execute(
+                """
+                INSERT INTO project_members(project_id, user_id, role, joined_at)
+                VALUES($1, $2, $3, NOW())
+                """,
+                invitation['project_id'],
+                str(user_id),
+                invitation['role']
+            )
+
+            # Устанавливаем проект как активный для пользователя
+            await conn.execute(
+                "UPDATE users SET active_project_id = $1 WHERE user_id = $2",
+                invitation['project_id'],
+                str(user_id)
+            )
+
+            # Удаляем использованный токен приглашения
+            await conn.execute(
+                "DELETE FROM project_invites WHERE token = $1",
+                token
+            )
         
         log_event(logger, "invitation_accepted", user_id=user_id,
                  project_id=invitation['project_id'],
