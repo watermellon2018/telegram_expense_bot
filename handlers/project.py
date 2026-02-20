@@ -2,9 +2,9 @@
 Обработчики команд для работы с проектами
 """
 
-from telegram import Update, ReplyKeyboardMarkup, ReplyKeyboardRemove
+from telegram import Update, ReplyKeyboardMarkup, ReplyKeyboardRemove, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.constants import ParseMode
-from telegram.ext import ContextTypes, CommandHandler, filters, MessageHandler, ConversationHandler
+from telegram.ext import ContextTypes, CommandHandler, filters, MessageHandler, ConversationHandler, CallbackQueryHandler
 from utils import projects, helpers
 from utils.helpers import project_menu_button_regex
 from utils.logger import get_logger, log_command, log_event, log_error
@@ -14,7 +14,7 @@ import time
 logger = get_logger("handlers.project")
 
 # Состояния для ConversationHandler
-CONFIRMING_DELETE, ENTERING_PROJECT_NAME, ENTERING_PROJECT_TO_SELECT, ENTERING_PROJECT_TO_DELETE = range(4)
+CONFIRMING_DELETE, ENTERING_PROJECT_NAME, ENTERING_PROJECT_TO_DELETE = range(3)
 
 
 async def project_create_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -160,6 +160,7 @@ async def project_list_command(update: Update, context: ContextTypes.DEFAULT_TYP
 async def project_select_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """
     Обрабатывает команду /project_select для переключения на проект
+    Если параметр не указан, показывает список проектов для выбора
     """
     user_id = update.effective_user.id
     message_text = update.message.text
@@ -168,12 +169,8 @@ async def project_select_command(update: Update, context: ContextTypes.DEFAULT_T
     parts = message_text.split(maxsplit=1)
     
     if len(parts) < 2:
-        await update.message.reply_text(
-            "❌ Укажите название или ID проекта.\n"
-            "Используйте: /project_select <название или ID>\n"
-            "Например: /project_select Отпуск\n"
-            "Или: /project_select 1"
-        )
+        # Показываем список проектов для выбора
+        await show_project_selection_menu(update, context)
         return
     
     project_identifier = parts[1].strip()
@@ -469,47 +466,126 @@ async def button_project_create_confirm(update: Update, context: ContextTypes.DE
 
 async def button_project_select_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """
-    Начинает выбор проекта для кнопки (просит ID/название)
+    Начинает выбор проекта для кнопки (показывает список проектов)
     """
-    await update.message.reply_text(
-        "🔄 Укажите название или ID проекта для выбора:\n"
-        "Например: Отпуск или 1"
-    )
-    return ENTERING_PROJECT_TO_SELECT
+    await show_project_selection_menu(update, context)
+    return ConversationHandler.END
 
 
-async def button_project_select_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+async def show_project_selection_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """
-    Подтверждает выбор проекта (после ввода)
+    Показывает меню выбора проекта с inline keyboard
     """
     user_id = update.effective_user.id
-    project_identifier = update.message.text.strip()
     
-    project = None
-    if project_identifier.isdigit():
-        project = await projects.get_project_by_id(user_id, int(project_identifier))
-    if project is None:
-        project = await projects.get_project_by_name(user_id, project_identifier)
+    # Получаем список всех доступных проектов
+    all_projects = await projects.get_all_projects(user_id)
     
-    if project is None:
+    if not all_projects:
         await update.message.reply_text(
-            f"❌ Проект '{project_identifier}' не найден.\n\n"
-            f"Посмотрите список проектов: /project_list"
+            "📋 У вас пока нет проектов.\n\n"
+            "Создайте проект командой:\n"
+            "/project_create <название>"
         )
-        return ConversationHandler.END
+        return
     
-    result = await projects.set_active_project(user_id, project['project_id'])
+    # Получаем активный проект
+    active_project = await projects.get_active_project(user_id)
+    active_project_id = active_project['project_id'] if active_project else None
     
-    if result['success']:
-        context.user_data['active_project_id'] = project['project_id']
-        await update.message.reply_text(
-            f"✅ {result['message']}\n\n"
-            f"Теперь все расходы будут записываться в проект '{project['project_name']}'."
-        )
+    # Формируем inline keyboard с проектами
+    keyboard = []
+    
+    # Группируем проекты по 2 в ряд
+    for i in range(0, len(all_projects), 2):
+        row = []
+        for j in range(2):
+            if i + j < len(all_projects):
+                project = all_projects[i + j]
+                project_id = project['project_id']
+                project_name = project['project_name']
+                
+                # Отмечаем активный проект
+                prefix = "✅ " if project_id == active_project_id else ""
+                button_text = f"{prefix}{project_name}"
+                
+                # Ограничиваем длину текста кнопки (Telegram лимит ~64 символа)
+                if len(button_text) > 60:
+                    button_text = button_text[:57] + "..."
+                
+                row.append(InlineKeyboardButton(
+                    button_text,
+                    callback_data=f"select_proj_{project_id}"
+                ))
+        keyboard.append(row)
+    
+    # Добавляем кнопку для переключения на общие расходы
+    if active_project_id is not None:
+        keyboard.append([InlineKeyboardButton(
+            "📊 Общие расходы",
+            callback_data="select_proj_none"
+        )])
+    
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    message = "🔄 Выберите проект:\n\n"
+    if active_project_id is not None:
+        message += f"Текущий активный проект: {active_project['project_name']}\n\n"
     else:
-        await update.message.reply_text(f"❌ {result['message']}")
+        message += "Текущий режим: Общие расходы\n\n"
     
-    return ConversationHandler.END
+    await update.message.reply_text(message, reply_markup=reply_markup)
+
+
+async def handle_project_selection_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """
+    Обрабатывает выбор проекта через callback query
+    """
+    query = update.callback_query
+    await query.answer()
+    
+    user_id = update.effective_user.id
+    callback_data = query.data
+    
+    # Извлекаем project_id из callback_data
+    if callback_data == "select_proj_none":
+        project_id = None
+    else:
+        try:
+            project_id = int(callback_data.split("_")[-1])
+        except (ValueError, IndexError):
+            await query.edit_message_text("❌ Ошибка выбора проекта.")
+            return
+    
+    # Переключаемся на проект
+    if project_id is None:
+        result = await projects.set_active_project(user_id, None)
+        if result['success']:
+            context.user_data['active_project_id'] = None
+            await query.edit_message_text(
+                f"✅ {result['message']}\n\n"
+                f"Теперь все расходы будут записываться в общие расходы."
+            )
+        else:
+            await query.edit_message_text(f"❌ {result['message']}")
+    else:
+        # Проверяем доступ к проекту
+        project = await projects.get_project_by_id(user_id, project_id)
+        if project is None:
+            await query.edit_message_text(
+                "❌ Проект не найден или у вас нет доступа к нему."
+            )
+            return
+        
+        result = await projects.set_active_project(user_id, project_id)
+        if result['success']:
+            context.user_data['active_project_id'] = project_id
+            await query.edit_message_text(
+                f"✅ {result['message']}\n\n"
+                f"Теперь все расходы будут записываться в проект '{project['project_name']}'."
+            )
+        else:
+            await query.edit_message_text(f"❌ {result['message']}")
 
 
 async def project_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -534,7 +610,7 @@ async def project_info_command(update: Update, context: ContextTypes.DEFAULT_TYP
             "📊 Текущий режим: Общие расходы\n\n"
             "Все расходы записываются в общую базу.\n\n"
             "Чтобы переключиться на проект, используйте:\n"
-            "/project_select <название или ID>"
+            "/project_select"
         )
         return
 
@@ -605,17 +681,11 @@ def register_project_handlers(application):
     )
     application.add_handler(create_conv_handler)
 
-    # Conversation для выбора (кнопка)
-    select_conv_handler = ConversationHandler(
-        entry_points=[MessageHandler(filters.Regex(project_menu_button_regex("select")), button_project_select_start)],
-        states={
-            ENTERING_PROJECT_TO_SELECT: [MessageHandler(filters.TEXT & ~filters.COMMAND, button_project_select_confirm)],
-        },
-        fallbacks=[CommandHandler("cancel", project_cancel)],
-        name="select_project_conversation",
-        persistent=False
-    )
-    application.add_handler(select_conv_handler)
+    # Обработчик выбора проекта через кнопку (показывает меню)
+    application.add_handler(MessageHandler(filters.Regex(project_menu_button_regex("select")), button_project_select_start))
+    
+    # Callback handler для выбора проекта из списка
+    application.add_handler(CallbackQueryHandler(handle_project_selection_callback, pattern=r'^select_proj_(none|\d+)$'))
 
     # Простые кнопки (без ввода)
     application.add_handler(MessageHandler(filters.Regex(project_menu_button_regex("list")), project_list_command))
