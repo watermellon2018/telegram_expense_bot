@@ -117,9 +117,15 @@ async def project_list_command(update: Update, context: ContextTypes.DEFAULT_TYP
             project_id = project['project_id']
             project_name = project['project_name']
             created_date = project['created_date']
+            role = project.get('role', 'owner')
+            is_owner = project.get('is_owner', False)
             
             # Получаем статистику по проекту
             stats = await projects.get_project_stats(user_id, project_id)
+            
+            # Получаем emoji роли
+            from utils.permissions import get_role_description
+            role_emoji = get_role_description(role)
             
             # Отмечаем активный проект
             if project_id == active_project_id:
@@ -127,6 +133,7 @@ async def project_list_command(update: Update, context: ContextTypes.DEFAULT_TYP
             else:
                 message += f"📁 {project_name}\n"
             
+            message += f"   {role_emoji}\n"
             message += f"   ID: {project_id}\n"
             message += f"   Создан: {created_date}\n"
             message += f"   Расходов: {stats['count']}\n"
@@ -516,6 +523,9 @@ async def project_info_command(update: Update, context: ContextTypes.DEFAULT_TYP
     """
     Обрабатывает команду /project_info для информации об активном проекте
     """
+    from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+    from utils.permissions import get_role_description
+    
     user_id = update.effective_user.id
     active_project = await projects.get_active_project(user_id)
     
@@ -531,13 +541,26 @@ async def project_info_command(update: Update, context: ContextTypes.DEFAULT_TYP
     # Получаем статистику по проекту
     stats = await projects.get_project_stats(user_id, active_project['project_id'])
     
+    # Получаем количество участников
+    members = await projects.get_project_members(active_project['project_id'])
+    
+    # Получаем роль и emoji
+    role = active_project.get('role', 'owner')
+    role_emoji = get_role_description(role)
+    
     message = f"📁 Текущий проект: {active_project['project_name']}\n\n"
+    message += f"{role_emoji}\n"
     message += f"ID: {active_project['project_id']}\n"
     message += f"Создан: {active_project['created_date']}\n"
     message += f"Расходов: {stats['count']}\n"
-    message += f"Общая сумма: {stats['total']:.2f}\n\n"
+    message += f"Общая сумма: {stats['total']:.2f}\n"
+    message += f"Участников: {len(members)}\n\n"
     
-    await update.message.reply_text(message)
+    # Add quick actions button
+    keyboard = [[InlineKeyboardButton("⚙️ Управление проектом", callback_data=f"proj_settings_{active_project['project_id']}")]]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    await update.message.reply_text(message, reply_markup=reply_markup)
 
 def register_project_handlers(application):
     """
@@ -598,4 +621,8 @@ def register_project_handlers(application):
     application.add_handler(MessageHandler(filters.Regex(project_menu_button_regex("list")), project_list_command))
     application.add_handler(MessageHandler(filters.Regex(project_menu_button_regex("all_expenses")), project_main_command))
     application.add_handler(MessageHandler(filters.Regex(project_menu_button_regex("info")), project_info_command))
+    
+    # Settings button - imported from project_management
+    from handlers.project_management import project_settings_menu
+    application.add_handler(MessageHandler(filters.Regex(project_menu_button_regex("settings")), project_settings_menu))
 

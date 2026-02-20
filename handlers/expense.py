@@ -33,8 +33,8 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     expense_data = helpers.parse_add_command(message_text)
 
     if expense_data:
-        # Получаем активный проект
-        project_id = context.user_data.get('active_project_id')
+        # Получаем активный проект (загружает из БД если нужно)
+        project_id = await helpers.get_active_project_id(user_id, context)
         
         # Ищем категорию по имени
         await categories.ensure_system_categories_exist(user_id)

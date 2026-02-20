@@ -14,11 +14,24 @@ logger = get_logger("handlers.start")
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """
     Обрабатывает команду /start
+    Также обрабатывает приглашения в проекты: /start inv_TOKEN
     """
     user_id = update.effective_user.id
     first_name = update.effective_user.first_name
         
     try:
+        # Check if there's an invitation token in the command
+        if context.args and len(context.args) > 0:
+            arg = context.args[0]
+            
+            # Check if this is an invitation token (starts with inv_)
+            if arg.startswith('inv_'):
+                # Handle invitation in a separate function
+                from handlers.invitations import handle_start_with_invitation
+                await handle_start_with_invitation(update, context)
+                return
+        
+        # Normal /start command
         # Создаем директорию для пользователя
         excel.create_user_dir(user_id)
         log_event(logger, "user_dir_created", user_id=user_id)
@@ -82,6 +95,10 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             "• /project_main - переключиться на общие расходы\n"
             "• /project_delete <название или ID> - удалить проект\n"
             "• /project_info - информация о текущем проекте\n\n"
+            "👥 Совместная работа:\n"
+            "• /project_settings - управление проектом (UI)\n"
+            "• /invite [роль] - создать приглашение (владелец)\n"
+            "• /members - список участников\n\n"
             "💰 Учет расходов:\n"
             "• /add <сумма> <категория> [описание] - добавить расход\n"
             "• /month - статистика за текущий месяц\n"
@@ -124,8 +141,8 @@ async def projects_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         keyboard = [
             [btn["create"], btn["list"]],
             [btn["select"], btn["all_expenses"]],
-            [btn["info"], btn["delete"]],
-            [btn["main_menu"]],
+            [btn["info"], btn["settings"]],
+            [btn["delete"], btn["main_menu"]],
         ]
         reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
         

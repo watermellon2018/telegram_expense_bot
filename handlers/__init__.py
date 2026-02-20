@@ -8,12 +8,16 @@ from handlers.stats import register_stats_handlers
 from handlers.export import register_export_handlers
 from handlers.project import register_project_handlers
 from handlers.category import register_category_handlers
+from handlers.invitations import register_invitation_handlers
+from handlers.project_management import register_project_management_handlers
 
 def register_all_handlers(application):
     """
     Регистрирует все обработчики команд
     """
     register_project_handlers(application)
+    register_invitation_handlers(application)  # Register before start handlers
+    register_project_management_handlers(application)  # Register management UI
     register_start_handlers(application)
 
     # Важный порядок! Экспорт и другие кнопки меню — до expense.text_handler (который ловит любой текст)

@@ -193,82 +193,10 @@ async def create_category_trend_chart(user_id, category, year=None, save_path=No
 
 async def create_budget_comparison_chart(user_id, year=None, save_path=None):
     """
-    Создает график сравнения бюджета и фактических расходов по месяцам
+    Budget functionality disabled. Returns None.
     """
-    if year is None:
-        year = datetime.datetime.now().year
-    
-    # Получаем данные о бюджете из БД
-    from utils import db
-
-    try:
-        rows = await db.fetch(
-            """
-            SELECT month, budget, actual
-            FROM budget
-            WHERE user_id = $1
-              AND project_id IS NULL
-            ORDER BY month
-            """,
-            str(user_id),
-        )
-        if not rows:
-            budget_df = None
-        else:
-            data = [dict(r) for r in rows]
-            budget_df = pd.DataFrame(data)
-    except Exception as e:
-        log_error(logger, e, "get_budget_data_error", user_id=user_id,
-                 month=month, year=year, project_id=project_id)
-        budget_df = None
-
-    if budget_df is None or budget_df.empty:
-        return None
-    
-    # Создаем список месяцев для отображения
-    months = []
-    for i in range(1, 13):
-        month_name = datetime.date(year, i, 1).strftime('%b')
-        months.append(month_name)
-    
-    # Подготавливаем данные для графика
-    budget_amounts = []
-    actual_amounts = []
-    
-    for i in range(1, 13):
-        month_data = budget_df[budget_df['month'] == i]
-        if not month_data.empty:
-            budget_amounts.append(month_data['budget'].values[0])
-            actual_amounts.append(month_data['actual'].values[0])
-        else:
-            budget_amounts.append(0)
-            actual_amounts.append(0)
-    
-    # Создаем график
-    plt.figure(figsize=(12, 6))
-    
-    x = range(len(months))
-    width = 0.35
-    
-    plt.bar([i - width/2 for i in x], budget_amounts, width, label='Бюджет', color='#4CAF50')
-    plt.bar([i + width/2 for i in x], actual_amounts, width, label='Факт', color='#F44336')
-    
-    plt.xlabel('Месяц')
-    plt.ylabel('Сумма')
-    plt.title(f'Сравнение бюджета и фактических расходов за {year} год')
-    plt.xticks(x, months)
-    plt.legend()
-    plt.grid(axis='y', linestyle='--', alpha=0.7)
-    
-    # Сохраняем график
-    if save_path is None:
-        user_dir = excel.create_user_dir(user_id)
-        save_path = os.path.join(user_dir, f"budget_comparison_{year}.png")
-    
-    plt.savefig(save_path, bbox_inches='tight')
-    plt.close()
-    
-    return save_path
+    log_event(logger, "budget_chart_disabled", user_id=user_id, year=year)
+    return None
 
 async def create_category_distribution_chart(user_id, year=None, save_path=None):
     """
