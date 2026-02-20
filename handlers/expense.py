@@ -35,7 +35,15 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     if expense_data:
         # Получаем активный проект (загружает из БД если нужно)
         project_id = await helpers.get_active_project_id(user_id, context)
-        
+
+        # Проверяем право добавления расхода
+        from utils.permissions import Permission, has_permission
+        if not await has_permission(user_id, project_id, Permission.ADD_EXPENSE):
+            await update.message.reply_text(
+                "❌ У вас нет прав на добавление расходов в этом проекте."
+            )
+            return
+
         # Ищем категорию по имени
         await categories.ensure_system_categories_exist(user_id)
         cats = await categories.get_categories_for_user_project(user_id, project_id)
@@ -131,8 +139,19 @@ async def add_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
     """
     Обрабатывает команду /add для начала диалога добавления расхода
     """
+    from utils.permissions import Permission, has_permission
+
     user_id = update.effective_user.id
     message_text = update.message.text
+
+    # Проверяем право добавления расхода до любой обработки
+    project_id = await helpers.get_active_project_id(user_id, context)
+    if not await has_permission(user_id, project_id, Permission.ADD_EXPENSE):
+        await update.message.reply_text(
+            "❌ У вас нет прав на добавление расходов в этом проекте.\n"
+            "Роль «Наблюдатель» позволяет только просматривать данные."
+        )
+        return ConversationHandler.END
 
     # Проверяем, содержит ли команда аргументы (только для /add ...; кнопка "➕ Добавить" — без аргументов)
     if message_text.strip().startswith("/add") and len(message_text.split()) > 1:
@@ -149,9 +168,6 @@ async def add_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
             )
             return ConversationHandler.END
 
-        # Получаем активный проект
-        project_id = context.user_data.get('active_project_id')
-        
         # Ищем категорию по имени
         await categories.ensure_system_categories_exist(user_id)
         cats = await categories.get_categories_for_user_project(user_id, project_id)
@@ -335,12 +351,15 @@ async def handle_category_callback(update: Update, context: ContextTypes.DEFAULT
         await query.edit_message_text("❌ Ошибка выбора категории.")
         return ConversationHandler.END
     
-    # Проверяем, что категория принадлежит пользователю
+    # Проверяем категорию: сначала по user_id, для общих проектов — по id без фильтра
     category = await categories.get_category_by_id(user_id, category_id)
+    if not category and project_id is not None:
+        # Участник проекта может выбирать категории владельца
+        category = await categories.get_category_by_id_only(category_id)
     if not category:
         await query.edit_message_text("❌ Категория не найдена.")
         return ConversationHandler.END
-    
+
     # Проверяем, что категория доступна для текущего проекта
     if category['project_id'] is not None and category['project_id'] != project_id:
         await query.edit_message_text("❌ Категория недоступна для этого проекта.")

@@ -74,7 +74,7 @@ ROLE_PERMISSIONS = {
         Permission.VIEW_BUDGET,
     },
     'viewer': {
-        # Viewers can only read data
+        # Наблюдатели могут только просматривать данные
         Permission.VIEW_STATS,
         Permission.VIEW_HISTORY,
         Permission.VIEW_MEMBERS,

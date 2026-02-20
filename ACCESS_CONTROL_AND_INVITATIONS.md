@@ -124,7 +124,7 @@ result = await projects.create_invitation(
     'project_name': 'Family Budget',
     'role': 'editor',
     'expires_at': '2026-02-02T12:00:00',
-    'message': 'Приглашение создано для роли "editor"'
+    'message': 'Приглашение создано для роли "Редактор"'
 }
 ```
 
