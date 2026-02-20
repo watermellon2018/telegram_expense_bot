@@ -203,12 +203,12 @@ async def send_invitation(
         f"📁 Проект: {result['project_name']}\n"
         f"{role_emoji}\n\n"
         f"Отправьте эту ссылку участнику:\n"
-        f"`{invite_link}`\n\n"
+        f'<a href="{invite_link}">🔗 Перейти в проект</a>\n\n'
         f"⏰ Действительна до: {result['expires_at'][:16].replace('T', ' ')}\n\n"
         f"Участник будет добавлен в проект после перехода по ссылке."
     )
-    
-    await update.message.reply_text(message, parse_mode='Markdown')
+
+    await update.message.reply_text(message, parse_mode='HTML')
     
     log_event(logger, "invitation_link_created", user_id=user_id,
              project_id=project_id, role=role)
@@ -245,12 +245,12 @@ async def send_invitation_from_callback(
         f"📁 Проект: {result['project_name']}\n"
         f"{role_emoji}\n\n"
         f"Отправьте эту ссылку участнику:\n"
-        f"`{invite_link}`\n\n"
+        f'<a href="{invite_link}">🔗 Перейти в проект</a>\n\n'
         f"⏰ Действительна до: {result['expires_at'][:16].replace('T', ' ')}\n\n"
         f"Участник будет добавлен в проект после перехода по ссылке."
     )
-    
-    await query.edit_message_text(message, parse_mode='Markdown')
+
+    await query.edit_message_text(message, parse_mode='HTML')
     
     log_event(logger, "invitation_link_created", user_id=user_id,
              project_id=project_id, role=role)

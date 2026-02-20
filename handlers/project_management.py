@@ -260,15 +260,15 @@ async def create_invitation_link(update: Update, context: ContextTypes.DEFAULT_T
         f"📁 {result['project_name']}\n"
         f"{role_emoji}\n\n"
         f"Отправьте эту ссылку участнику:\n"
-        f"`{invite_link}`\n\n"
+        f'<a href="{invite_link}">🔗 Перейти в проект</a>\n\n'
         f"⏰ Действительна до: {result['expires_at'][:16].replace('T', ' ')}\n\n"
         f"Участник будет добавлен после перехода по ссылке."
     )
-    
+
     keyboard = [[InlineKeyboardButton("« Назад к настройкам", callback_data=f"proj_settings_{project_id}")]]
     reply_markup = InlineKeyboardMarkup(keyboard)
-    
-    await query.edit_message_text(message, reply_markup=reply_markup, parse_mode='Markdown')
+
+    await query.edit_message_text(message, reply_markup=reply_markup, parse_mode='HTML')
     
     log_event(logger, "invitation_created_via_ui", user_id=user_id,
              project_id=project_id, role=role)
