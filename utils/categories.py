@@ -13,33 +13,72 @@ logger = get_logger("utils.categories")
 
 async def get_categories_for_user_project(user_id: int, project_id: Optional[int] = None) -> List[Dict]:
     """
-    Получает список категорий для пользователя и проекта.
-    Возвращает:
-    - Системные категории (is_system = TRUE) сначала
-    - Пользовательские категории (is_system = FALSE) потом
-    - Только активные категории (is_active = TRUE)
-    - Глобальные категории (project_id IS NULL) и категории проекта
+    Gets categories for user and project.
+    Returns:
+    - System categories (is_system = TRUE) first
+    - User categories (is_system = FALSE) second
+    - Only active categories (is_active = TRUE)
+    - Global categories (project_id IS NULL) and project-specific categories
+    
+    For shared projects: returns categories created by ANY project member.
+    For personal: returns only user's own global categories.
+    
+    Permission required: VIEW_STATS (owner, editor, or viewer for projects)
     
     Args:
-        user_id: ID пользователя
-        project_id: ID проекта (None для глобальных категорий)
+        user_id: User ID (for access validation)
+        project_id: Project ID (None for global categories)
     
     Returns:
-        Список словарей с информацией о категориях
+        List of category dictionaries
     """
     try:
-        rows = await db.fetch(
-            """
-            SELECT category_id, name, is_system, is_active, project_id, created_at
-            FROM categories
-            WHERE user_id = $1
-              AND is_active = TRUE
-              AND (project_id = $2 OR project_id IS NULL)
-            ORDER BY is_system DESC, name ASC
-            """,
-            str(user_id),
-            project_id
-        )
+        # Validate permission if project_id is specified
+        if project_id is not None:
+            from utils.permissions import Permission, has_permission
+            if not await has_permission(user_id, project_id, Permission.VIEW_STATS):
+                log_error(logger, Exception("Permission denied"), 
+                         "get_categories_permission_denied", user_id=user_id, project_id=project_id)
+                return []
+        
+        # For projects: get categories from ALL project members
+        # For personal: get only user's own global categories
+        if project_id is not None:
+            rows = await db.fetch(
+                """
+                WITH deduplicated AS (
+                    SELECT DISTINCT ON (LOWER(c.name))
+                           c.category_id, c.name, c.is_system, c.is_active,
+                           c.project_id, c.created_at, c.user_id
+                    FROM categories c
+                    WHERE c.is_active = TRUE
+                      AND (
+                        c.project_id = $1
+                        OR (c.project_id IS NULL AND c.user_id = (
+                            SELECT user_id FROM projects WHERE project_id = $1
+                        ))
+                      )
+                    ORDER BY LOWER(c.name),
+                             CASE WHEN c.project_id = $1 THEN 0 ELSE 1 END,
+                             c.is_system DESC
+                )
+                SELECT * FROM deduplicated
+                ORDER BY is_system DESC, name ASC
+                """,
+                project_id
+            )
+        else:
+            rows = await db.fetch(
+                """
+                SELECT category_id, name, is_system, is_active, project_id, created_at, user_id
+                FROM categories
+                WHERE user_id = $1
+                  AND is_active = TRUE
+                  AND project_id IS NULL
+                ORDER BY is_system DESC, name ASC
+                """,
+                str(user_id)
+            )
         
         categories = [
             {
@@ -64,7 +103,10 @@ async def get_categories_for_user_project(user_id: int, project_id: Optional[int
 
 async def get_category_by_id(user_id: int, category_id: int) -> Optional[Dict]:
     """
-    Получает категорию по ID с проверкой принадлежности пользователю.
+    Получает категорию по ID с проверкой доступа.
+    
+    For shared projects: returns category if user is a project member.
+    For personal: returns category if it belongs to the user.
     
     Args:
         user_id: ID пользователя
@@ -76,15 +118,30 @@ async def get_category_by_id(user_id: int, category_id: int) -> Optional[Dict]:
     try:
         row = await db.fetchrow(
             """
-            SELECT category_id, name, is_system, is_active, project_id, created_at
-            FROM categories
-            WHERE category_id = $1 AND user_id = $2
+            SELECT c.category_id, c.name, c.is_system, c.is_active, c.project_id, c.created_at
+            FROM categories c
+            WHERE c.category_id = $1
+              AND c.is_active = TRUE
+              AND (
+                  c.user_id = $2  -- User owns the category
+                  OR c.project_id IS NULL  -- Global category (accessible to all)
+                  OR EXISTS (
+                      -- User is a member of the category's project
+                      SELECT 1 FROM projects p
+                      LEFT JOIN project_members pm ON p.project_id = pm.project_id AND pm.user_id = $2
+                      WHERE p.project_id = c.project_id
+                        AND p.is_active = TRUE
+                        AND (p.user_id = $2 OR pm.user_id = $2)
+                  )
+              )
             """,
             category_id,
             str(user_id)
         )
         
         if not row:
+            log_event(logger, "get_category_by_id_not_found", 
+                     user_id=user_id, category_id=category_id)
             return None
         
         return {
@@ -100,14 +157,52 @@ async def get_category_by_id(user_id: int, category_id: int) -> Optional[Dict]:
         return None
 
 
+async def get_category_by_id_only(category_id: int) -> Optional[Dict]:
+    """
+    Получает категорию по ID без проверки владельца.
+    Используется для shared проектов, где категория может принадлежать другому участнику.
+    Разрешение уже проверено на уровне проекта.
+
+    Args:
+        category_id: ID категории
+
+    Returns:
+        Словарь с информацией о категории или None
+    """
+    try:
+        row = await db.fetchrow(
+            """
+            SELECT category_id, name, is_system, is_active, project_id, created_at
+            FROM categories
+            WHERE category_id = $1 AND is_active = TRUE
+            """,
+            category_id
+        )
+        if not row:
+            return None
+        return {
+            'category_id': row['category_id'],
+            'name': row['name'],
+            'is_system': row['is_system'],
+            'is_active': row['is_active'],
+            'project_id': row['project_id'],
+            'created_at': row['created_at'].isoformat() if row['created_at'] else None
+        }
+    except Exception as e:
+        log_error(logger, e, "get_category_by_id_only_error", category_id=category_id)
+        return None
+
+
 async def create_category(
-    user_id: int, 
-    name: str, 
+    user_id: int,
+    name: str,
     project_id: Optional[int] = None,
     is_system: bool = False
 ) -> Dict:
     """
     Создает новую категорию для пользователя.
+    
+    Permission required: ADD_CATEGORY (owner or editor for projects)
     
     Args:
         user_id: ID пользователя
@@ -119,6 +214,14 @@ async def create_category(
         Словарь с результатом операции
     """
     try:
+        # Check permission for project categories
+        if project_id is not None:
+            from utils.permissions import Permission, has_permission
+            if not await has_permission(user_id, project_id, Permission.ADD_CATEGORY):
+                return {
+                    'success': False,
+                    'message': "У вас нет прав на создание категорий в этом проекте"
+                }
         # Убеждаемся, что пользователь существует
         await db.execute(
             "INSERT INTO users(user_id) VALUES($1) ON CONFLICT (user_id) DO NOTHING",
@@ -218,18 +321,22 @@ async def create_category(
 
 async def delete_category_with_transfer(user_id: int, category_id: int, target_category_id: int) -> Dict:
     """
-    Удаляет категорию, перенося все расходы в другую категорию.
+    Deletes a category and transfers all expenses to another category.
+    For shared projects: transfers ALL expenses from all members.
+    For personal: transfers only user's expenses.
+    
+    Permission required: DELETE_CATEGORY (owner or editor for projects)
     
     Args:
-        user_id: ID пользователя
-        category_id: ID удаляемой категории
-        target_category_id: ID категории, в которую переносятся расходы
+        user_id: User ID (must own the category to delete it)
+        category_id: ID of category to delete
+        target_category_id: ID of category to transfer expenses to
     
     Returns:
-        Словарь с результатом операции
+        Dictionary with operation result
     """
     try:
-        # Проверяем, что категория принадлежит пользователю
+        # Check that category belongs to user
         category = await get_category_by_id(user_id, category_id)
         if not category:
             return {
@@ -237,7 +344,16 @@ async def delete_category_with_transfer(user_id: int, category_id: int, target_c
                 'message': "Категория не найдена"
             }
         
-        # Проверяем целевую категорию
+        # Check permission for project categories
+        if category['project_id'] is not None:
+            from utils.permissions import Permission, has_permission
+            if not await has_permission(user_id, category['project_id'], Permission.DELETE_CATEGORY):
+                return {
+                    'success': False,
+                    'message': "У вас нет прав на удаление категорий в этом проекте"
+                }
+        
+        # Check target category exists and user has access
         target_category = await get_category_by_id(user_id, target_category_id)
         if not target_category:
             return {
@@ -245,34 +361,57 @@ async def delete_category_with_transfer(user_id: int, category_id: int, target_c
                 'message': "Целевая категория не найдена"
             }
         
-        # Переносим расходы
         from utils import db
         
-        # Сначала получаем количество расходов для переноса
-        transferred_count = await db.fetchval(
-            """
-            SELECT COUNT(*) FROM expenses
-            WHERE category_id = $1 AND user_id = $2
-            """,
-            category_id,
-            str(user_id)
-        )
+        # Get count of expenses to transfer
+        # For project categories: count ALL members' expenses
+        # For personal: count only user's expenses
+        if category['project_id'] is not None:
+            transferred_count = await db.fetchval(
+                """
+                SELECT COUNT(*) FROM expenses
+                WHERE category_id = $1 AND project_id = $2
+                """,
+                category_id,
+                category['project_id']
+            )
+        else:
+            transferred_count = await db.fetchval(
+                """
+                SELECT COUNT(*) FROM expenses
+                WHERE category_id = $1 AND user_id = $2 AND project_id IS NULL
+                """,
+                category_id,
+                str(user_id)
+            )
         
         if transferred_count is None:
             transferred_count = 0
         
-        # Переносим расходы
+        # Transfer expenses
         if transferred_count > 0:
-            await db.execute(
-                """
-                UPDATE expenses
-                SET category_id = $1
-                WHERE category_id = $2 AND user_id = $3
-                """,
-                target_category_id,
-                category_id,
-                str(user_id)
-            )
+            if category['project_id'] is not None:
+                await db.execute(
+                    """
+                    UPDATE expenses
+                    SET category_id = $1
+                    WHERE category_id = $2 AND project_id = $3
+                    """,
+                    target_category_id,
+                    category_id,
+                    category['project_id']
+                )
+            else:
+                await db.execute(
+                    """
+                    UPDATE expenses
+                    SET category_id = $1
+                    WHERE category_id = $2 AND user_id = $3 AND project_id IS NULL
+                    """,
+                    target_category_id,
+                    category_id,
+                    str(user_id)
+                )
         
         # Деактивируем категорию
         await db.execute(
@@ -306,18 +445,21 @@ async def delete_category_with_transfer(user_id: int, category_id: int, target_c
 
 async def deactivate_category(user_id: int, category_id: int) -> Dict:
     """
-    Деактивирует категорию (soft delete).
-    Не позволяет деактивировать категории, которые используются в расходах.
+    Deactivates a category (soft delete).
+    Does not allow deactivation if the category is used in expenses.
+    For shared projects: checks if ANY member is using the category.
+    
+    Permission required: DELETE_CATEGORY (owner or editor for projects)
     
     Args:
-        user_id: ID пользователя
-        category_id: ID категории
+        user_id: User ID (must own the category to deactivate it)
+        category_id: Category ID
     
     Returns:
-        Словарь с результатом операции
+        Dictionary with operation result
     """
     try:
-        # Проверяем, что категория принадлежит пользователю
+        # Check that category belongs to user
         category = await get_category_by_id(user_id, category_id)
         if not category:
             return {
@@ -325,15 +467,36 @@ async def deactivate_category(user_id: int, category_id: int) -> Dict:
                 'message': "Категория не найдена"
             }
         
-        # Проверяем, используется ли категория в расходах
-        usage_count = await db.fetchval(
-            """
-            SELECT COUNT(*) FROM expenses
-            WHERE category_id = $1 AND user_id = $2
-            """,
-            category_id,
-            str(user_id)
-        )
+        # Check permission for project categories
+        if category['project_id'] is not None:
+            from utils.permissions import Permission, has_permission
+            if not await has_permission(user_id, category['project_id'], Permission.DELETE_CATEGORY):
+                return {
+                    'success': False,
+                    'message': "У вас нет прав на удаление категорий в этом проекте"
+                }
+        
+        # Check if category is used in expenses
+        # For project categories: check ALL members' expenses
+        # For personal: check only user's expenses
+        if category['project_id'] is not None:
+            usage_count = await db.fetchval(
+                """
+                SELECT COUNT(*) FROM expenses
+                WHERE category_id = $1 AND project_id = $2
+                """,
+                category_id,
+                category['project_id']
+            )
+        else:
+            usage_count = await db.fetchval(
+                """
+                SELECT COUNT(*) FROM expenses
+                WHERE category_id = $1 AND user_id = $2 AND project_id IS NULL
+                """,
+                category_id,
+                str(user_id)
+            )
         
         if usage_count > 0:
             return {

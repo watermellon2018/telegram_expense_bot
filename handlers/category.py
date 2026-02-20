@@ -461,7 +461,7 @@ async def handle_category_name_input(update: Update, context: ContextTypes.DEFAU
         )
     else:
         await update.message.reply_text(
-            f"❌ {result['message']}\n\nПопробуйте другое название:"
+            f"❌ {result['message']}"
         )
         return ENTERING_CATEGORY_NAME
     
