@@ -512,9 +512,19 @@ async def direct_amount_handler(update: Update, context: ContextTypes.DEFAULT_TY
     """
     Обрабатывает прямой ввод суммы без команды
     """
+    from utils.permissions import Permission, has_permission
+
     user_id = update.effective_user.id
     text = update.message.text
-    project_id = context.user_data.get('active_project_id')
+    project_id = await helpers.get_active_project_id(user_id, context)
+
+    # Проверяем право добавления расхода до показа категорий
+    if not await has_permission(user_id, project_id, Permission.ADD_EXPENSE):
+        await update.message.reply_text(
+            "❌ У вас нет прав на добавление расходов в этом проекте.\n"
+            "Роль «Наблюдатель» позволяет только просматривать данные."
+        )
+        return ConversationHandler.END
 
     # Проверяем, похоже ли сообщение на сумму
     try:
