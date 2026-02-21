@@ -345,53 +345,34 @@ async def get_project_stats(user_id: int, project_id: int) -> dict:
 
 async def delete_project(user_id: int, project_id: int) -> dict:
     """
-    Delete a project. Only the owner can delete.
-    This will cascade delete expenses, categories, and memberships.
-    
-    Permission required: DELETE_PROJECT (owner only)
+    Мягкое удаление проекта: устанавливает is_active = FALSE.
+    Данные (расходы, категории, участники) сохраняются в БД.
+    Только владелец проекта может удалить его.
     """
     from utils.permissions import Permission, has_permission
-    
-    # Check permission
+
+    # Проверяем права — только владелец может удалить проект
     if not await has_permission(user_id, project_id, Permission.DELETE_PROJECT):
         return {'success': False, 'message': "Только владелец может удалить проект"}
-    
-    # Check if project exists and user has access
+
+    # Получаем проект (заодно проверяем доступ)
     project = await get_project_by_id(user_id, project_id)
     if not project:
         return {'success': False, 'message': "Проект не найден или у вас нет доступа"}
-    
-    # Delete expenses (from all members, not just owner)
+
+    # Помечаем проект как неактивный (мягкое удаление)
     await db.execute(
-        "DELETE FROM expenses WHERE project_id = $1",
+        "UPDATE projects SET is_active = FALSE WHERE project_id = $1",
         project_id
     )
-    
-    # Delete categories associated with this project
-    await db.execute(
-        "UPDATE categories SET is_active = FALSE WHERE project_id = $1",
-        project_id
-    )
-    
-    # Delete project members
-    await db.execute(
-        "DELETE FROM project_members WHERE project_id = $1",
-        project_id
-    )
-    
-    # Delete the project
-    await db.execute(
-        "DELETE FROM projects WHERE project_id = $1",
-        project_id
-    )
-    
-    # Reset active_project_id for all users who had this project active
+
+    # Сбрасываем активный проект у всех участников, у которых он был активен
     await db.execute(
         "UPDATE users SET active_project_id = NULL WHERE active_project_id = $1",
         project_id
     )
-    
-    return {'success': True, 'message': f"Проект '{project['project_name']}' удален"}
+
+    return {'success': True, 'message': f"Проект '{project['project_name']}' удалён"}
 
 
 async def create_invitation(

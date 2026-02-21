@@ -14,7 +14,7 @@ import time
 logger = get_logger("handlers.project")
 
 # Состояния для ConversationHandler
-CONFIRMING_DELETE, ENTERING_PROJECT_NAME, ENTERING_PROJECT_TO_DELETE = range(3)
+CONFIRMING_DELETE, ENTERING_PROJECT_NAME, ENTERING_PROJECT_TO_DELETE, CHOOSING_PROJECT_TO_DELETE = range(4)
 
 
 async def project_create_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -235,193 +235,161 @@ async def project_main_command(update: Update, context: ContextTypes.DEFAULT_TYP
         )
 
 
-async def project_delete_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+async def _show_delete_menu(update: Update, context) -> int:
     """
-    Начинает процесс удаления проекта
+    Вспомогательная функция: показывает инлайн-меню с проектами,
+    которые пользователь может удалить (только собственные — роль owner).
     """
+    from utils.permissions import Permission, has_permission
+
     user_id = update.effective_user.id
-    message_text = update.message.text
-    
-    # Проверяем, содержит ли команда название или ID проекта
-    parts = message_text.split(maxsplit=1)
-    
-    if len(parts) < 2:
+    all_projects = await projects.get_all_projects(user_id)
+
+    # Оставляем только те проекты, для которых есть право DELETE_PROJECT
+    deletable = []
+    for p in all_projects:
+        if await has_permission(user_id, p['project_id'], Permission.DELETE_PROJECT):
+            deletable.append(p)
+
+    if not deletable:
         await update.message.reply_text(
-            "❌ Укажите название или ID проекта.\n"
-            "Используйте: /project_delete <название или ID>\n"
-            "Например: /project_delete Отпуск\n"
-            "Или: /project_delete 1"
+            "📋 Нет проектов, доступных для удаления.\n\n"
+            "Удалить можно только собственные проекты (роль «Владелец»)."
         )
         return ConversationHandler.END
-    
-    project_identifier = parts[1].strip()
-    
-    # Пытаемся найти проект по ID или названию
-    project = None
-    
-    # Проверяем, является ли идентификатор числом (ID)
-    if project_identifier.isdigit():
-        project = await projects.get_project_by_id(user_id, int(project_identifier))
-    
-    # Если не нашли по ID, ищем по названию
-    if project is None:
-        project = await projects.get_project_by_name(user_id, project_identifier)
-    
-    if project is None:
-        await update.message.reply_text(
-            f"❌ Проект '{project_identifier}' не найден.\n\n"
-            f"Посмотрите список проектов: /project_list"
-        )
-        return ConversationHandler.END
-    
-    # Сохраняем ID проекта в контексте
-    context.user_data['delete_project_id'] = project['project_id']
-    context.user_data['delete_project_name'] = project['project_name']
-    
-    # Получаем статистику по проекту
-    stats = await projects.get_project_stats(user_id, project['project_id'])
-    
-    # Создаем клавиатуру для подтверждения
-    keyboard = [['Да, удалить', 'Отмена']]
-    reply_markup = ReplyKeyboardMarkup(keyboard, one_time_keyboard=True, resize_keyboard=True)
-    
+
+    # Формируем инлайн-клавиатуру
+    keyboard = []
+    for p in deletable:
+        keyboard.append([InlineKeyboardButton(
+            f"🗑 {p['project_name']}",
+            callback_data=f"del_proj_{p['project_id']}"
+        )])
+    keyboard.append([InlineKeyboardButton("❌ Отмена", callback_data="del_proj_cancel")])
+    reply_markup = InlineKeyboardMarkup(keyboard)
+
     await update.message.reply_text(
-        f"⚠️ Вы уверены, что хотите удалить проект '{project['project_name']}'?\n\n"
-        f"Будет удалено:\n"
-        f"- Расходов: {stats['count']}\n"
-        f"- На сумму: {stats['total']:.2f}\n\n"
-        f"Это действие нельзя отменить!",
+        "🗑 Выберите проект для удаления:\n\n"
+        "Проект будет деактивирован. Данные будут храниться в базе месяц.",
         reply_markup=reply_markup
     )
-    
+    return CHOOSING_PROJECT_TO_DELETE
+
+
+async def project_delete_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """
+    Вход через команду /project_delete — показывает инлайн-меню с выбором проекта.
+    """
+    return await _show_delete_menu(update, context)
+
+
+async def project_delete_choose_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """
+    Обрабатывает выбор проекта из инлайн-меню удаления.
+    Показывает карточку проекта с кнопками «Подтвердить удаление» / «Отмена».
+    """
+    query = update.callback_query
+    await query.answer()
+
+    user_id = update.effective_user.id
+
+    if query.data == "del_proj_cancel":
+        await query.edit_message_text("Удаление проекта отменено.")
+        return ConversationHandler.END
+
+    try:
+        project_id = int(query.data.split("_")[-1])
+    except (ValueError, IndexError):
+        await query.edit_message_text("❌ Ошибка выбора проекта.")
+        return ConversationHandler.END
+
+    project = await projects.get_project_by_id(user_id, project_id)
+    if not project:
+        await query.edit_message_text("❌ Проект не найден или у вас нет доступа.")
+        return ConversationHandler.END
+
+    # Сохраняем в контексте для шага подтверждения
+    context.user_data['delete_project_id'] = project_id
+    context.user_data['delete_project_name'] = project['project_name']
+
+    stats = await projects.get_project_stats(user_id, project_id)
+
+    keyboard = [
+        [InlineKeyboardButton("✅ Да, удалить", callback_data=f"del_confirm_{project_id}")],
+        [InlineKeyboardButton("❌ Отмена", callback_data="del_proj_cancel")],
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+
+    await query.edit_message_text(
+        f"⚠️ Удалить проект «{project['project_name']}»?\n\n"
+        f"📊 Расходов: {stats['count']} на сумму {stats['total']:.2f}\n\n"
+        f"Проект будет деактивирован. Данные будут храниться в базе месяц.",
+        reply_markup=reply_markup
+    )
     return CONFIRMING_DELETE
 
 
 async def project_delete_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """
-    Подтверждает удаление проекта
+    Финальное подтверждение удаления — обрабатывает callback «Да, удалить».
     """
+    query = update.callback_query
+    await query.answer()
+
     user_id = update.effective_user.id
-    text = update.message.text
-    
-    if text == 'Да, удалить':
-        # Получаем ID проекта из контекста
-        project_id = context.user_data.get('delete_project_id')
-        project_name = context.user_data.get('delete_project_name')
-        
-        if project_id is None:
-            from utils.helpers import get_main_menu_keyboard
-            await update.message.reply_text(
-                "❌ Ошибка: проект не найден.",
-                reply_markup=get_main_menu_keyboard()
-            )
-            return ConversationHandler.END
-        
-        # Удаляем проект
-        result = await projects.delete_project(user_id, project_id)
-        
-        if result['success']:
-            # Если удаленный проект был активным, сбрасываем контекст
-            if context.user_data.get('active_project_id') == project_id:
-                context.user_data['active_project_id'] = None
-            
-            from utils.helpers import get_main_menu_keyboard
-            await update.message.reply_text(
-                f"✅ {result['message']}\n\n"
-                f"Все данные проекта '{project_name}' удалены.",
-                reply_markup=get_main_menu_keyboard()
-            )
+
+    if query.data == "del_proj_cancel":
+        context.user_data.pop('delete_project_id', None)
+        context.user_data.pop('delete_project_name', None)
+        await query.edit_message_text("Удаление проекта отменено.")
+        return ConversationHandler.END
+
+    try:
+        project_id = int(query.data.split("_")[-1])
+    except (ValueError, IndexError):
+        await query.edit_message_text("❌ Ошибка подтверждения.")
+        return ConversationHandler.END
+
+    result = await projects.delete_project(user_id, project_id)
+
+    context.user_data.pop('delete_project_id', None)
+    context.user_data.pop('delete_project_name', None)
+
+    if result['success']:
+        # Определяем, был ли удалённый проект активным у пользователя
+        was_active = context.user_data.get('active_project_id') == project_id
+        if was_active:
+            context.user_data['active_project_id'] = None
+            status_line = "Вы переключены на общие расходы."
         else:
-            from utils.helpers import get_main_menu_keyboard
-            await update.message.reply_text(
-                f"❌ {result['message']}",
-                reply_markup=get_main_menu_keyboard()
-            )
-    else:
-        from utils.helpers import get_main_menu_keyboard
-        await update.message.reply_text(
-            "Удаление проекта отменено.",
-            reply_markup=get_main_menu_keyboard()
+            active_id = context.user_data.get('active_project_id')
+            if active_id:
+                active = await projects.get_project_by_id(user_id, active_id)
+                project_name = active['project_name'] if active else None
+            else:
+                project_name = None
+
+            if project_name:
+                status_line = f"Активный проект не изменился: «{project_name}»."
+            else:
+                status_line = "Вы находитесь в режиме общих расходов."
+
+        await query.edit_message_text(
+            f"✅ {result['message']}\n\n{status_line}"
         )
-    
-    # Очищаем данные пользователя
-    context.user_data.pop('delete_project_id', None)
-    context.user_data.pop('delete_project_name', None)
-    
+    else:
+        await query.edit_message_text(f"❌ {result['message']}")
+
     return ConversationHandler.END
 
-
-async def project_delete_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """
-    Отменяет удаление проекта
-    """
-    from utils.helpers import get_main_menu_keyboard
-    
-    await update.message.reply_text(
-        "Удаление проекта отменено.",
-        reply_markup=get_main_menu_keyboard()
-    )
-    
-    # Очищаем данные пользователя
-    context.user_data.pop('delete_project_id', None)
-    context.user_data.pop('delete_project_name', None)
-    
-    return ConversationHandler.END
 
 async def button_project_delete_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """
-    Начинает процесс удаления для кнопки (просит ввести ID/название)
+    Вход через кнопку меню — показывает инлайн-меню с выбором проекта.
     """
-    await update.message.reply_text(
-        "❌ Укажите название или ID проекта для удаления:\n"
-        "Например: Отпуск или 1"
-    )
-    return ENTERING_PROJECT_TO_DELETE
+    return await _show_delete_menu(update, context)
 
 
-async def handle_delete_identifier(update: Update, context: ContextTypes.DEFAULT_TYPE, project_identifier: str = None) -> int:
-    """
-    Общий обработчик для ввода ID/названия при удалении (для команды и кнопки)
-    """
-    user_id = update.effective_user.id
-    if project_identifier is None:
-        project_identifier = update.message.text.strip()
-    
-    # Пытаемся найти проект
-    project = None
-    if project_identifier.isdigit():
-        project = await projects.get_project_by_id(user_id, int(project_identifier))
-    if project is None:
-        project = await projects.get_project_by_name(user_id, project_identifier)
-    
-    if project is None:
-        await update.message.reply_text(
-            f"❌ Проект '{project_identifier}' не найден.\n\n"
-            f"Посмотрите список проектов: /project_list"
-        )
-        return ConversationHandler.END
-    
-    # Сохраняем в контексте
-    context.user_data['delete_project_id'] = project['project_id']
-    context.user_data['delete_project_name'] = project['project_name']
-    
-    # Статистика
-    stats = await projects.get_project_stats(user_id, project['project_id'])
-    
-    # Клавиатура подтверждения
-    keyboard = [['Да, удалить', 'Отмена']]
-    reply_markup = ReplyKeyboardMarkup(keyboard, one_time_keyboard=True, resize_keyboard=True)
-    
-    await update.message.reply_text(
-        f"⚠️ Вы уверены, что хотите удалить проект '{project['project_name']}'?\n\n"
-        f"Будет удалено:\n"
-        f"- Расходов: {stats['count']}\n"
-        f"- На сумму: {stats['total']:.2f}\n\n"
-        f"Это действие нельзя отменить!",
-        reply_markup=reply_markup
-    )
-    
-    return CONFIRMING_DELETE
 
 
 async def button_project_create_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -657,10 +625,13 @@ def register_project_handlers(application):
             MessageHandler(filters.Regex(project_menu_button_regex("delete")), button_project_delete_start)
         ],
         states={
-            ENTERING_PROJECT_TO_DELETE: [MessageHandler(filters.TEXT & ~filters.COMMAND, lambda u, c: handle_delete_identifier(u, c))],
+            # Пользователь выбирает проект из инлайн-меню
+            CHOOSING_PROJECT_TO_DELETE: [
+                CallbackQueryHandler(project_delete_choose_callback, pattern=r'^del_proj_')
+            ],
+            # Пользователь подтверждает удаление выбранного проекта
             CONFIRMING_DELETE: [
-                MessageHandler(filters.Regex('^(Да, удалить|Отмена)$'), project_delete_confirm),
-                MessageHandler(filters.TEXT & ~filters.COMMAND, project_delete_confirm)
+                CallbackQueryHandler(project_delete_confirm, pattern=r'^(del_confirm_\d+|del_proj_cancel)$')
             ],
         },
         fallbacks=[CommandHandler("cancel", project_cancel)],
