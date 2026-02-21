@@ -4,31 +4,39 @@
 
 from telegram import Update, ReplyKeyboardMarkup
 from telegram.ext import ContextTypes, CommandHandler, filters, MessageHandler
-from utils import excel, projects
+from utils import excel, projects, helpers
 from utils.logger import get_logger, log_command, log_event, log_error
 import config
+from utils import helpers as btn_helpers
 
 logger = get_logger("handlers.start")
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """
     Обрабатывает команду /start
+    Также обрабатывает приглашения в проекты: /start inv_TOKEN
     """
     user_id = update.effective_user.id
     first_name = update.effective_user.first_name
         
     try:
+        # Check if there's an invitation token in the command
+        if context.args and len(context.args) > 0:
+            arg = context.args[0]
+            
+            # Check if this is an invitation token (starts with inv_)
+            if arg.startswith('inv_'):
+                # Handle invitation in a separate function
+                from handlers.invitations import handle_start_with_invitation
+                await handle_start_with_invitation(update, context)
+                return
+        
+        # Normal /start command
         # Создаем директорию для пользователя
         excel.create_user_dir(user_id)
         log_event(logger, "user_dir_created", user_id=user_id)
         
-        # Создаем клавиатуру с основными командами
-        keyboard = [
-            ['/add', '/month', '/day', '/stats'],
-            ['/category', '/budget', '/export'],
-            ['📁 Проекты', '/help']
-        ]
-        reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+        reply_markup = helpers.get_main_menu_keyboard()
         
         # Инициализируем активный проект из БД
         try:
@@ -51,8 +59,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             f"Я бот для учета и анализа расходов. С моей помощью вы можете:\n"
             f"• Записывать свои расходы по категориям\n"
             f"• Получать статистику за месяц\n"
-            f"• Анализировать расходы с помощью графиков\n"
-            f"• Устанавливать бюджет и следить за его исполнением\n\n"
+            f"• Анализировать расходы с помощью графиков\n\n"
             f"Чтобы добавить расход, используйте команду:\n"
             f"/add <сумма> <категория> [описание]\n\n"
             f"Например: /add 100 продукты хлеб и молоко\n\n"
@@ -88,14 +95,18 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             "• /project_main - переключиться на общие расходы\n"
             "• /project_delete <название или ID> - удалить проект\n"
             "• /project_info - информация о текущем проекте\n\n"
+            "👥 Совместная работа:\n"
+            "• /project_settings - управление проектом (UI)\n"
+            "• /invite [роль] - создать приглашение (владелец)\n"
+            "• /members - список участников\n\n"
             "💰 Учет расходов:\n"
             "• /add <сумма> <категория> [описание] - добавить расход\n"
             "• /month - статистика за текущий месяц\n"
             "• /day - статистика за текущий день\n"
             "• /stats - общая статистика расходов\n"
-            "• /budget <сумма> - установить бюджет на месяц\n"
             "• /category - перечень всех возможных категорий\n"
             "• /category <название> - расходы по категории\n"
+            "• /delete_category - удалить пользовательскую категорию\n"
             "• /export - экспорт детальной статистики в Excel\n"
             "• /help - показать эту справку\n\n"
             "📊 Доступные категории расходов:\n"
@@ -126,12 +137,12 @@ async def projects_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     log_event(logger, "projects_menu_opened", user_id=user_id)
     
     try:
-        # Создаем клавиатуру с функциями проектов
+        btn = config.PROJECT_MENU_BUTTONS
         keyboard = [
-            ['🆕 Создать проект', '📋 Список проектов'],
-            ['🔄 Выбрать проект', '📊 Общие расходы'],
-            ['ℹ️ Инфо о проекте', '🗑️ Удалить проект'],
-            ['⬅️ Главное меню']
+            [btn["create"], btn["list"]],
+            [btn["select"], btn["all_expenses"]],
+            [btn["info"], btn["settings"]],
+            [btn["delete"], btn["main_menu"]],
         ]
         reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
         
@@ -148,12 +159,7 @@ async def main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """
     Возвращает в главное меню
     """
-    keyboard = [
-        ['/add', '/month', '/day', '/stats'],
-        ['/category', '/budget', '/export'],
-        ['📁 Проекты', '/help']
-    ]
-    reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+    reply_markup = helpers.get_main_menu_keyboard()
     
     await update.message.reply_text(
         "✅ Возвращение в главное меню",
@@ -167,6 +173,7 @@ def register_start_handlers(application):
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("help", help_command))
     
-    # Обработчики для кнопок меню
-    application.add_handler(MessageHandler(filters.Regex('^📁 Проекты$'), projects_menu))
-    application.add_handler(MessageHandler(filters.Regex('^⬅️ Главное меню$'), main_menu))
+    # Обработчики для кнопок меню (тексты из config.MAIN_MENU_BUTTONS)
+    application.add_handler(MessageHandler(filters.Regex(btn_helpers.main_menu_button_regex("projects")), projects_menu))
+    application.add_handler(MessageHandler(filters.Regex(btn_helpers.main_menu_button_regex("main_menu")), main_menu))
+    application.add_handler(MessageHandler(filters.Regex(btn_helpers.main_menu_button_regex("help")), help_command))

@@ -66,7 +66,7 @@ def format_month_expenses(expenses, month=None, year=None):
     
     for category, amount in sorted_categories:
         from config import DEFAULT_CATEGORIES
-        emoji = DEFAULT_CATEGORIES.get(category, "")
+        emoji = DEFAULT_CATEGORIES.get(category, "📦")  # 📦 default for custom categories
         report += f"{emoji} {category.title()}: {amount:.2f}\n"
     
     return report
@@ -83,7 +83,7 @@ def format_category_expenses(category_data, category, year=None):
     
     # Формируем отчет
     from config import DEFAULT_CATEGORIES
-    emoji = DEFAULT_CATEGORIES.get(category.lower(), "")
+    emoji = DEFAULT_CATEGORIES.get(category.lower(), "📦")  # 📦 default for custom categories
     
     report = f"📊 Статистика расходов по категории {emoji} {category} за {year} год:\n\n"
     report += f"💰 Общая сумма: {category_data['total']:.2f}\n"
@@ -111,33 +111,37 @@ def get_month_name(month):
 
 async def format_budget_status(user_id, month=None, year=None):
     """
-    Форматирует статус бюджета на месяц
+    Budget functionality disabled. Returns message.
     """
     if month is None:
         month = datetime.datetime.now().month
     if year is None:
         year = datetime.datetime.now().year
+    
+    return f"📊 Функция бюджета отключена."
+    
+    # OLD CODE (disabled):
+    if False:
+        from utils import db
 
-    from utils import db
+        try:
+            row = await db.fetchrow(
+                """
+                SELECT budget, actual
+                FROM budget
+                WHERE user_id = $1
+                  AND project_id IS NULL
+                  AND month = $2
+                """,
+                str(user_id),
+                month,
+            )
+        except Exception as e:
+            logger.error(f"Ошибка при получении статуса бюджета из БД: {e}")
+            row = None
 
-    try:
-        row = await db.fetchrow(
-            """
-            SELECT budget, actual
-            FROM budget
-            WHERE user_id = $1
-              AND project_id IS NULL
-              AND month = $2
-            """,
-            str(user_id),
-            month,
-        )
-    except Exception as e:
-        logger.error(f"Ошибка при получении статуса бюджета из БД: {e}")
-        row = None
-
-    if not row or float(row["budget"]) == 0:
-        return f"Бюджет на {get_month_name(month)} {year} года не установлен."
+        if not row or float(row["budget"]) == 0:
+            return f"Бюджет на {get_month_name(month)} {year} года не установлен."
 
     budget = float(row["budget"])
     actual = float(row["actual"])
@@ -188,7 +192,7 @@ def format_day_expenses(expenses, date=None):
     
     for category, amount in sorted_categories:
         from config import DEFAULT_CATEGORIES
-        emoji = DEFAULT_CATEGORIES.get(category, "")
+        emoji = DEFAULT_CATEGORIES.get(category, "📦")  # 📦 default for custom categories
         percentage = (amount / expenses['total']) * 100
         report += f"{emoji} {category.title()}: {amount:.2f} ({percentage:.1f}%)\n"
     
@@ -246,14 +250,71 @@ async def add_project_context_to_report(report: str, user_id: int, project_id: i
 def get_main_menu_keyboard():
     """
     Возвращает клавиатуру главного меню.
-    
-    Returns:
-        ReplyKeyboardMarkup с кнопками главного меню
+    Тексты кнопок берутся из config.MAIN_MENU_BUTTONS.
     """
+    import config
     from telegram import ReplyKeyboardMarkup
+    btn = config.MAIN_MENU_BUTTONS
     keyboard = [
-        ['/add', '/month', '/day', '/stats'],
-        ['/category', '/budget', '/export'],
-        ['📁 Проекты', '/help']
+        [btn["add"], btn["month"], btn["day"], btn["stats"]],
+        [btn["categories"], btn["export"]],
+        [btn["projects"], btn["help"]],
     ]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+
+
+def main_menu_button_regex(key: str) -> str:
+    """Точное совпадение с кнопкой главного меню (для filters.Regex)."""
+    import config
+    return "^" + re.escape(config.MAIN_MENU_BUTTONS[key]) + "$"
+
+
+def category_menu_button_regex(key: str) -> str:
+    """Точное совпадение с кнопкой меню категорий (для filters.Regex)."""
+    import config
+    return "^" + re.escape(config.CATEGORY_MENU_BUTTONS[key]) + "$"
+
+
+def project_menu_button_regex(key: str) -> str:
+    """Точное совпадение с кнопкой меню проектов (для filters.Regex)."""
+    import config
+    return "^" + re.escape(config.PROJECT_MENU_BUTTONS[key]) + "$"
+
+
+async def get_active_project_id(user_id: int, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """
+    Get active project ID for user.
+    Loads from database if not in context memory.
+    
+    Args:
+        user_id: User ID
+        context: Telegram context
+    
+    Returns:
+        project_id or None
+    """
+    from utils import projects
+    from utils.logger import get_logger, log_event, log_error
+    
+    logger = get_logger("utils.helpers")
+    
+    # Check if already in context
+    if 'active_project_id' in context.user_data:
+        return context.user_data['active_project_id']
+    
+    # Load from database
+    try:
+        active_project = await projects.get_active_project(user_id)
+        if active_project:
+            project_id = active_project['project_id']
+            context.user_data['active_project_id'] = project_id
+            log_event(logger, "active_project_loaded_from_db", 
+                     user_id=user_id, project_id=project_id)
+            return project_id
+        else:
+            context.user_data['active_project_id'] = None
+            return None
+    except Exception as e:
+        log_error(logger, e, "load_active_project_error", user_id=user_id)
+        context.user_data['active_project_id'] = None
+        return None

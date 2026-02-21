@@ -6,6 +6,7 @@ from telegram import Update, ReplyKeyboardMarkup
 from telegram.constants import ParseMode
 from telegram.ext import ContextTypes, CommandHandler, filters, MessageHandler, ConversationHandler, CallbackQueryHandler
 from utils import excel, helpers, visualization, projects
+from utils.helpers import main_menu_button_regex
 from utils.logger import get_logger, log_command, log_event, log_error
 import config
 import os
@@ -15,7 +16,7 @@ import time
 logger = get_logger("handlers.stats")
 
 # Состояния для ConversationHandler
-CHOOSING_CATEGORY, ENTERING_BUDGET = range(2)
+CHOOSING_CATEGORY, = range(1)
 
 async def month_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """
@@ -50,7 +51,7 @@ async def month_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         report = await helpers.add_project_context_to_report(report, user_id, project_id)
 
         # Отправляем отчет
-        await update.message.reply_text(report)
+        await update.message.reply_text(report, reply_markup=helpers.get_main_menu_keyboard())
         
         total = expenses.get('total', 0) if expenses else 0
         count = expenses.get('count', 0) if expenses else 0
@@ -91,12 +92,29 @@ async def category_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     """
     Обрабатывает команду /category для получения статистики по категории
     """
+    from utils import categories
+    
     user_id = update.effective_user.id
 
     # Проверяем, что указана категория
     if not context.args or len(context.args) < 1:
-        # Отправляем список доступных категорий
-        categories_list_emoji = [f"{emoji}  {category.title()}" for category, emoji in config.DEFAULT_CATEGORIES.items()]
+        # Получаем активный проект
+        project_id = context.user_data.get('active_project_id')
+        
+        # Получаем доступные категории для пользователя
+        await categories.ensure_system_categories_exist(user_id)
+        cats = await categories.get_categories_for_user_project(user_id, project_id)
+        
+        if not cats:
+            await update.message.reply_text("Нет доступных категорий.")
+            return
+        
+        # Формируем список категорий
+        categories_list_emoji = []
+        for cat in cats:
+            emoji = config.DEFAULT_CATEGORIES.get(cat['name'], '📦')
+            categories_list_emoji.append(f"{emoji}  {cat['name'].title()}")
+        
         message = 'Доступные категории:\n'
         message += '\n'.join(categories_list_emoji)
         
@@ -105,41 +123,57 @@ async def category_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         )
         return
 
-    category = context.args[0].lower()
+    category_name = context.args[0].lower()
 
-    # Проверяем, что категория существует
-    if category not in config.DEFAULT_CATEGORIES:
-        categories_list = ", ".join(config.DEFAULT_CATEGORIES.keys())
+    # Получаем активный проект
+    project_id = context.user_data.get('active_project_id')
+    
+    # Ищем категорию по имени
+    await categories.ensure_system_categories_exist(user_id)
+    cats = await categories.get_categories_for_user_project(user_id, project_id)
+    category_found = None
+    
+    # Сначала ищем в категориях проекта
+    for cat in cats:
+        if cat['name'].lower() == category_name:
+            category_found = cat
+            break
+    
+    # Если не найдено, ищем в глобальных категориях
+    if not category_found:
+        cats_global = await categories.get_categories_for_user_project(user_id, None)
+        for cat in cats_global:
+            if cat['name'].lower() == category_name:
+                category_found = cat
+                break
+    
+    if not category_found:
         await update.message.reply_text(
-            f"❌ Категория '{category}' не найдена.\n"
-            f"Доступные категории: {categories_list}"
+            f"❌ Категория '{category_name}' не найдена."
         )
         return
 
     # Получаем текущий год
     year = datetime.datetime.now().year
 
-    # Получаем активный проект
-    project_id = context.user_data.get('active_project_id')
-
     # Получаем статистику расходов по категории
-    category_data = await excel.get_category_expenses(user_id, category, year, project_id)
+    category_data = await excel.get_category_expenses(user_id, category_found['category_id'], year, project_id)
 
     # Форматируем отчет
-    report = helpers.format_category_expenses(category_data, category, year)
+    report = helpers.format_category_expenses(category_data, category_found['name'], year)
     
     # Добавляем информацию о проекте
     report = await helpers.add_project_context_to_report(report, user_id, project_id)
 
     # Отправляем отчет
-    await update.message.reply_text(report)
+    await update.message.reply_text(report, reply_markup=helpers.get_main_menu_keyboard())
 
     # Если есть расходы, отправляем график тренда
     if category_data and category_data['total'] > 0:
-        chart_path = await visualization.create_category_trend_chart(user_id, category, year)
+        chart_path = await visualization.create_category_trend_chart(user_id, category_found['name'], year)
         if chart_path and os.path.exists(chart_path):
             with open(chart_path, 'rb') as photo:
-                await update.message.reply_photo(photo=photo, caption=f"Тренд расходов на {category} за {year} год")
+                await update.message.reply_photo(photo=photo, caption=f"Тренд расходов на {category_found['name']} за {year} год")
 
 async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """
@@ -163,121 +197,57 @@ async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         with open(monthly_chart, 'rb') as photo:
             await update.message.reply_photo(photo=photo, caption=f"Расходы по месяцам за {year} год")
 
-    # 3. Сравнение с бюджетом
-    budget_chart = await visualization.create_budget_comparison_chart(user_id, year)
-    if budget_chart and os.path.exists(budget_chart):
-        with open(budget_chart, 'rb') as photo:
-            await update.message.reply_photo(photo=photo, caption=f"Сравнение бюджета и фактических расходов за {year} год")
-
-
 async def handle_category_choice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """
     Обрабатывает выбор категории для построения тренда
     """
+    from utils import categories
+    
     user_id = update.effective_user.id
-    category = update.message.text
+    category_name = update.message.text
 
-    if category == 'Отмена':
+    if category_name == 'Отмена':
         await update.message.reply_text("Построение графика отменено.")
         return ConversationHandler.END
 
-    # Проверяем, что категория существует
-    if category.lower() not in config.DEFAULT_CATEGORIES:
-        await update.message.reply_text(f"Категория '{category}' не найдена.")
+    # Получаем активный проект
+    project_id = context.user_data.get('active_project_id')
+    
+    # Ищем категорию по имени
+    await categories.ensure_system_categories_exist(user_id)
+    cats = await categories.get_categories_for_user_project(user_id, project_id)
+    category_found = None
+    
+    # Сначала ищем в категориях проекта
+    for cat in cats:
+        if cat['name'].lower() == category_name.lower():
+            category_found = cat
+            break
+    
+    # Если не найдено, ищем в глобальных категориях
+    if not category_found:
+        cats_global = await categories.get_categories_for_user_project(user_id, None)
+        for cat in cats_global:
+            if cat['name'].lower() == category_name.lower():
+                category_found = cat
+                break
+    
+    if not category_found:
+        await update.message.reply_text(f"Категория '{category_name}' не найдена.")
         return ConversationHandler.END
 
     # Получаем текущий год
     year = datetime.datetime.now().year
 
     # Создаем график тренда
-    chart_path = await visualization.create_category_trend_chart(user_id, category.lower(), year)
+    chart_path = await visualization.create_category_trend_chart(user_id, category_found['name'], year)
     if chart_path and os.path.exists(chart_path):
         with open(chart_path, 'rb') as photo:
-            await update.message.reply_photo(photo=photo, caption=f"Тренд расходов на {category} за {year} год")
+            await update.message.reply_photo(photo=photo, caption=f"Тренд расходов на {category_found['name']} за {year} год")
     else:
-        await update.message.reply_text(f"Нет данных о расходах по категории '{category}' за {year} год.")
+        await update.message.reply_text(f"Нет данных о расходах по категории '{category_found['name']}' за {year} год.")
 
     return ConversationHandler.END
-
-async def budget_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """
-    Обрабатывает команду /budget для установки бюджета на месяц
-    """
-    user_id = update.effective_user.id
-
-    # Проверяем, что указана сумма
-    if context.args and len(context.args) > 0:
-        try:
-            # Парсим сумму
-            amount = float(context.args[0])
-
-            # Получаем текущий месяц и год
-            now = datetime.datetime.now()
-            month = now.month
-            year = now.year
-
-            # Устанавливаем бюджет
-            await excel.set_budget(user_id, amount, month, year)
-
-            # Отправляем подтверждение
-            month_name = helpers.get_month_name(month)
-            await update.message.reply_text(
-                f"✅ Бюджет на {month_name} {year} года установлен: {amount:.2f}"
-            )
-            return ConversationHandler.END
-        except ValueError:
-            await update.message.reply_text(
-                "❌ Неверный формат суммы. Используйте:\n"
-                "/budget <сумма>\n"
-                "Например: /budget 10000"
-            )
-            return ConversationHandler.END
-
-    # Если сумма не указана, показываем текущий бюджет и запрашиваем новую сумму
-    month = datetime.datetime.now().month
-    year = datetime.datetime.now().year
-    month_name = helpers.get_month_name(month)
-    budget_status = await helpers.format_budget_status(user_id, month, year)
-
-    await update.message.reply_text(
-        f"{budget_status}\n\n"
-        f"Введите сумму бюджета на {month_name} {year} года:"
-    )
-
-    return ENTERING_BUDGET
-
-async def handle_budget_amount(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """
-    Обрабатывает ввод суммы бюджета
-    """
-    user_id = update.effective_user.id
-    text = update.message.text
-
-    try:
-        # Парсим сумму
-        amount = float(text)
-
-        # Получаем текущий месяц и год
-        now = datetime.datetime.now()
-        month = now.month
-        year = now.year
-
-        # Устанавливаем бюджет
-        await excel.set_budget(user_id, amount, month, year)
-
-        # Отправляем подтверждение
-        month_name = helpers.get_month_name(month)
-        await update.message.reply_text(
-            f"✅ Бюджет на {month_name} {year} года установлен: {amount:.2f}"
-        )
-    except ValueError:
-        await update.message.reply_text(
-            "❌ Неверный формат суммы. Пожалуйста, введите число.\n"
-            "Например: 10000"
-        )
-
-    return ConversationHandler.END
-
 
 # Отмена (необязательно)
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -305,26 +275,18 @@ async def day_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     report = await helpers.add_project_context_to_report(report, user_id, project_id)
     
     # Отправляем отчет
-    await update.message.reply_text(report)
+    await update.message.reply_text(report, reply_markup=helpers.get_main_menu_keyboard())
     
 
 def register_stats_handlers(application):
     """
     Регистрирует обработчики команд для получения статистики и анализа
     """
-
     application.add_handler(CommandHandler("month", month_command))
+    application.add_handler(MessageHandler(filters.Regex(main_menu_button_regex("month")), month_command))
     application.add_handler(CommandHandler("category", category_command))
+    # Categories button now handled by category menu (handlers/category.py)
     application.add_handler(CommandHandler("stats", stats_command))
+    application.add_handler(MessageHandler(filters.Regex(main_menu_button_regex("stats")), stats_command))
     application.add_handler(CommandHandler("day", day_command))
-
-    # Регистрируем ConversationHandler для команды /budget
-    budget_conv_handler = ConversationHandler(
-        entry_points=[CommandHandler("budget", budget_command)],
-        states={
-            ENTERING_BUDGET: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_budget_amount)],
-        },
-        fallbacks=[CommandHandler("cancel", lambda u, c: ConversationHandler.END)],
-    )
-
-    application.add_handler(budget_conv_handler)
+    application.add_handler(MessageHandler(filters.Regex(main_menu_button_regex("day")), day_command))

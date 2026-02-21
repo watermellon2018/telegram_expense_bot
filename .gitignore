@@ -49,6 +49,7 @@ Thumbs.db
 
 avatar.png
 todo.md
+.claude/*
 
 # tests
 htmlcov/
