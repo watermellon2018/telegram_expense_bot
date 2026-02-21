@@ -45,14 +45,13 @@ async def create_project(user_id: int, project_name: str) -> dict:
         str(user_id),
     )
     
-    # Check for duplicate in projects user has access to
+    # Проверяем дубликат среди доступных пользователю проектов
     existing = await db.fetchrow(
         """
-        SELECT p.project_id 
+        SELECT p.project_id
         FROM projects p
-        LEFT JOIN project_members pm ON p.project_id = pm.project_id AND pm.user_id = $1
+        JOIN project_members pm ON pm.project_id = p.project_id AND pm.user_id = $1
         WHERE LOWER(p.project_name) = LOWER($2) AND p.is_active = TRUE
-          AND (p.user_id = $1 OR pm.user_id = $1)
         """,
         str(user_id), project_name
     )
@@ -93,18 +92,37 @@ async def create_project(user_id: int, project_name: str) -> dict:
 
 async def get_all_projects(user_id: int) -> list:
     """
-    Get all projects the user has access to (owned or member of)
+    Возвращает список проектов, доступных пользователю:
+    - собственные проекты (владелец)
+    - проекты, в которых пользователь состоит как участник
+
+    Используется UNION вместо LEFT JOIN, чтобы строго разделить
+    два случая и исключить ситуацию, когда друг видит чужие проекты
+    из-за неожиданного совпадения в JOIN-условии.
     """
     rows = await db.fetch(
         """
-        SELECT DISTINCT p.project_id, p.project_name, p.created_date, p.is_active,
+        -- Собственные проекты пользователя (он владелец)
+        SELECT p.project_id, p.project_name, p.created_date, p.is_active,
                p.user_id as owner_id,
-               COALESCE(pm.role, 'owner') as role
+               pm.role
         FROM projects p
-        LEFT JOIN project_members pm ON p.project_id = pm.project_id AND pm.user_id = $1
+        JOIN project_members pm ON pm.project_id = p.project_id AND pm.user_id = $1
         WHERE p.is_active = TRUE
-          AND (p.user_id = $1 OR pm.user_id = $1)
-        ORDER BY p.project_id
+          AND p.user_id = $1
+
+        UNION
+
+        -- Проекты, в которых пользователь состоит как участник (не владелец)
+        SELECT p.project_id, p.project_name, p.created_date, p.is_active,
+               p.user_id as owner_id,
+               pm.role
+        FROM projects p
+        JOIN project_members pm ON pm.project_id = p.project_id AND pm.user_id = $1
+        WHERE p.is_active = TRUE
+          AND p.user_id <> $1
+
+        ORDER BY project_id
         """,
         str(user_id)
     )
@@ -125,17 +143,17 @@ async def get_all_projects(user_id: int) -> list:
 
 async def get_project_by_id(user_id: int, project_id: int) -> Optional[dict]:
     """
-    Get project by ID, checking if user has access (owner or member)
+    Возвращает проект по ID, если пользователь имеет к нему доступ
+    (является владельцем или участником в project_members).
     """
     row = await db.fetchrow(
         """
-        SELECT DISTINCT p.project_id, p.project_name, p.created_date, p.is_active,
+        SELECT p.project_id, p.project_name, p.created_date, p.is_active,
                p.user_id as owner_id,
-               COALESCE(pm.role, 'owner') as role
+               pm.role
         FROM projects p
-        LEFT JOIN project_members pm ON p.project_id = pm.project_id AND pm.user_id = $1
+        JOIN project_members pm ON pm.project_id = p.project_id AND pm.user_id = $1
         WHERE p.project_id = $2 AND p.is_active = TRUE
-          AND (p.user_id = $1 OR pm.user_id = $1)
         """,
         str(user_id), project_id
     )
@@ -154,17 +172,17 @@ async def get_project_by_id(user_id: int, project_id: int) -> Optional[dict]:
 
 async def get_project_by_name(user_id: int, project_name: str) -> Optional[dict]:
     """
-    Get project by name, checking if user has access (owner or member)
+    Возвращает проект по названию, если пользователь имеет к нему доступ
+    (является владельцем или участником в project_members).
     """
     row = await db.fetchrow(
         """
-        SELECT DISTINCT p.project_id, p.project_name, p.created_date, p.is_active,
+        SELECT p.project_id, p.project_name, p.created_date, p.is_active,
                p.user_id as owner_id,
-               COALESCE(pm.role, 'owner') as role
+               pm.role
         FROM projects p
-        LEFT JOIN project_members pm ON p.project_id = pm.project_id AND pm.user_id = $1
+        JOIN project_members pm ON pm.project_id = p.project_id AND pm.user_id = $1
         WHERE LOWER(p.project_name) = LOWER($2) AND p.is_active = TRUE
-          AND (p.user_id = $1 OR pm.user_id = $1)
         """,
         str(user_id), project_name
     )
@@ -184,15 +202,15 @@ async def get_project_by_name(user_id: int, project_name: str) -> Optional[dict]
 
 async def is_project_member(user_id: int, project_id: int) -> bool:
     """
-    Check if user has access to project (owner or member)
+    Проверяет, имеет ли пользователь доступ к проекту
+    (является владельцем или участником в project_members).
     """
     row = await db.fetchrow(
         """
         SELECT 1
         FROM projects p
-        LEFT JOIN project_members pm ON p.project_id = pm.project_id AND pm.user_id = $1
+        JOIN project_members pm ON pm.project_id = p.project_id AND pm.user_id = $1
         WHERE p.project_id = $2 AND p.is_active = TRUE
-          AND (p.user_id = $1 OR pm.user_id = $1)
         """,
         str(user_id), project_id
     )
