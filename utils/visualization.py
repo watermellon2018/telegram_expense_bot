@@ -6,6 +6,8 @@ import os
 import pandas as pd
 import matplotlib.pyplot as plt
 import matplotlib
+import matplotlib.ticker as mticker
+import matplotlib.patheffects as pe
 
 matplotlib.use('Agg')  # Использование не-интерактивного бэкенда
 import seaborn as sns
@@ -16,242 +18,425 @@ import config
 
 logger = logging.getLogger(__name__)
 
+# Русские названия месяцев
+MONTH_NAMES_RU = {
+    1: 'январь', 2: 'февраль', 3: 'март', 4: 'апрель',
+    5: 'май', 6: 'июнь', 7: 'июль', 8: 'август',
+    9: 'сентябрь', 10: 'октябрь', 11: 'ноябрь', 12: 'декабрь'
+}
+MONTH_NAMES_SHORT_RU = {
+    1: 'Янв', 2: 'Фев', 3: 'Мар', 4: 'Апр',
+    5: 'Май', 6: 'Июн', 7: 'Июл', 8: 'Авг',
+    9: 'Сен', 10: 'Окт', 11: 'Ноя', 12: 'Дек'
+}
+
+# Цветовая палитра (современная, приглушённая)
+PALETTE = [
+    "#4E79A7", "#F28E2B", "#E15759", "#76B7B2",
+    "#59A14F", "#EDC948", "#B07AA1", "#FF9DA7",
+    "#9C755F", "#BAB0AC",
+]
+
+# Глобальный стиль
+sns.set_theme(style="whitegrid", palette="muted")
+plt.rcParams.update({
+    'font.family': 'DejaVu Sans',
+    'figure.dpi': 150,
+    'savefig.dpi': 150,
+    'axes.spines.top': False,
+    'axes.spines.right': False,
+})
+
+
+def _fmt_amount(value: float) -> str:
+    """Форматирует сумму: 1 500 руб."""
+    return f"{int(float(value)):,}".replace(",", "\u202f") + "\u00a0руб."
+
+
+def _cap(name: str) -> str:
+    """Первая буква заглавная."""
+    return name.capitalize() if name else name
+
+
+def _tracked(text: str) -> str:
+    """Добавляет волосяные пробелы (U+200A) между символами для эффекта letter-spacing ~1-2%."""
+    LS = '\u200a'
+    result = []
+    for i, ch in enumerate(text):
+        result.append(ch)
+        if i < len(text) - 1 and ch not in (' ', '\n'):
+            result.append(LS)
+    return ''.join(result)
+
+
+def _get_colors(categories: list) -> list:
+    """Возвращает цвета из config или из палитры по умолчанию."""
+    result = []
+    for i, cat in enumerate(categories):
+        color = config.COLORS.get(cat, PALETTE[i % len(PALETTE)])
+        result.append(color)
+    return result
+
+
 async def create_monthly_pie_chart(user_id, month=None, year=None, save_path=None, project_id=None):
     """
-    Создает круговую диаграмму расходов по категориям за указанный месяц
-    Если project_id указан, создает диаграмму для проекта
+    Создаёт donut-диаграмму расходов по категориям за указанный месяц.
+    Маленькие сегменты (<= THRESHOLD%) подписываются снаружи с «усами» (leader lines).
     """
+    import math
+
     if month is None:
         month = datetime.datetime.now().month
     if year is None:
         year = datetime.datetime.now().year
-    
-    # Получаем данные о расходах
+
     expenses = await excel.get_month_expenses(user_id, month, year, project_id)
-    
+
     if not expenses or expenses['total'] == 0:
         return None
-    
-    # Подготавливаем данные для диаграммы
-    categories = []
-    amounts = []
-    colors = []
-    
-    # Сортируем категории по убыванию сумм
+
+    # Сортируем по убыванию
     sorted_categories = sorted(
-        expenses['by_category'].items(), 
-        key=lambda x: x[1], 
+        expenses['by_category'].items(),
+        key=lambda x: x[1],
         reverse=True
     )
-    
-    # Ограничиваем количество категорий для отображения
+
+    raw_names = []
+    amounts = []
+
     if len(sorted_categories) > config.MAX_CATEGORIES_ON_CHART:
-        main_categories = sorted_categories[:config.MAX_CATEGORIES_ON_CHART-1]
-        other_sum = sum(item[1] for item in sorted_categories[config.MAX_CATEGORIES_ON_CHART-1:])
-        
+        main_categories = sorted_categories[:config.MAX_CATEGORIES_ON_CHART - 1]
+        other_sum = sum(float(item[1]) for item in sorted_categories[config.MAX_CATEGORIES_ON_CHART - 1:])
         for category, amount in main_categories:
-            emoji = config.DEFAULT_CATEGORIES.get(category, "📦")
-            categories.append(f"{emoji} {category}" if emoji else category)
-            amounts.append(amount)
-            colors.append(config.COLORS.get(category, "#9E9E9E"))
-        
-        # Добавляем "Прочее"
+            raw_names.append(category)
+            amounts.append(float(amount))
         if other_sum > 0:
-            categories.append("📦 прочее")
+            raw_names.append("прочее")
             amounts.append(other_sum)
-            colors.append("#9E9E9E")
     else:
         for category, amount in sorted_categories:
-            emoji = config.DEFAULT_CATEGORIES.get(category, "📦")
-            categories.append(f"{emoji} {category}" if emoji else category)
-            amounts.append(amount)
-            colors.append(config.COLORS.get(category, "#9E9E9E"))
-    
-    # Создаем диаграмму
-    plt.figure(figsize=(10, 7))
-    plt.pie(amounts, labels=categories, autopct='%1.1f%%', startangle=90, colors=colors)
-    plt.axis('equal')
-    
-    month_name = datetime.date(year, month, 1).strftime('%B')
-    plt.title(f'Расходы за {month_name} {year}')
-    
-    # Сохраняем диаграмму
+            raw_names.append(category)
+            amounts.append(float(amount))
+
+    total = sum(amounts)
+    labels = [_cap(n) for n in raw_names]
+    colors = _get_colors(raw_names)
+
+    # --- Фигура ---
+    # subplots_adjust: пирог занимает ~60% ширины, правее — легенда
+    fig, ax = plt.subplots(figsize=(10, 6.5))
+    fig.patch.set_facecolor('white')
+    fig.subplots_adjust(left=0.01, right=0.80, top=0.82, bottom=0.03)
+
+    # --- Donut ---
+    wedges, _ = ax.pie(
+        amounts,
+        labels=None,
+        startangle=90,
+        colors=colors,
+        wedgeprops=dict(width=0.50, edgecolor='white', linewidth=0.5),
+        counterclock=False,
+    )
+
+    # Расширяем оси, чтобы вместить leader lines
+    scale = 1.3  # tweak 1.05–1.25 to taste
+    ax.set_xlim(-scale, scale)
+    ax.set_ylim(-scale, scale)
+    # ax.set_xlim(-1.65, 1.65)
+    # ax.set_ylim(-1.65, 1.65)
+
+    # --- Метки: процент ВНУТРИ кольца, название категории СНАРУЖИ ---
+    THRESHOLD = 5.0  # % — ниже этого: добавляем "ус"
+    for i, (wedge, amount) in enumerate(zip(wedges, amounts)):
+        pct = amount / total * 100
+        category_label = labels[i]
+        angle_mid = (wedge.theta1 + wedge.theta2) / 2
+        xm = math.cos(math.radians(angle_mid))
+        ym = math.sin(math.radians(angle_mid))
+
+        # 2) Название категории снаружи
+        ha_txt = 'left' if xm >= 0 else 'right'
+        if pct >= THRESHOLD:
+            # 1) Процент всегда внутри доната
+            ax.text(
+                xm * 0.74, ym * 0.74,
+                f"{pct:.0f}%",
+                ha='center', va='center',
+                fontsize=8.0, fontweight='bold', color='white',
+            )
+
+            # Без "уса" для крупных сегментов: подпись снаружи в цвете сегмента
+            x_tip = xm * 1.00
+            y_tip = ym * 1.00
+            x_txt = xm * 1.09
+            y_txt = ym * 1.09
+            ax.annotate(
+                category_label,
+                xy=(x_tip, y_tip),
+                xytext=(x_txt, y_txt),
+                ha=ha_txt, va='center',
+                fontsize=11.0, color=colors[i],
+                fontweight='bold',
+                annotation_clip=False,
+            )
+        else:
+            # С "усом" для мелких сегментов
+            x_tip = xm * 1.02
+            y_tip = ym * 1.02
+            x_txt = xm * 1.10
+            y_txt = ym * 1.10
+
+            # Ус + название категории и процент рядом
+            ax.annotate(
+                f"{category_label} {pct:.1f}%",
+                xy=(x_tip, y_tip),
+                xytext=(x_txt, y_txt),
+                ha=ha_txt, va='center',
+                fontsize=8.0, color='#555555',
+                annotation_clip=False,
+                arrowprops=dict(
+                    arrowstyle='-', 
+                    color='#cccccc',
+                    lw=1,
+                    shrinkA=0, shrinkB=0,
+                ),
+            )
+
+
+    # --- Только сумма в центре дырки, строго по центру ---
+    ax.text(
+        0, 0,
+        _fmt_amount(total),
+        ha='center', va='center',
+        fontsize=16, fontweight=600, color='#2A2A2A',
+    )
+
+    # --- Легенда: маленькие квадратики, название и цена рядом, сортировка по убыванию ---
+    sorted_idxs = sorted(range(len(amounts)), key=lambda i: amounts[i], reverse=True)
+    legend_handles = [wedges[i] for i in sorted_idxs]
+
+    max_len = max(len(labels[i]) for i in sorted_idxs)
+    legend_texts = [
+        f"{labels[i].ljust(max_len)}  {_fmt_amount(amounts[i]).rjust(3)}"
+        for i in sorted_idxs
+    ]
+    ax.legend(
+        legend_handles, legend_texts,
+        loc='center left',
+        bbox_to_anchor=(1.06, 0.5),
+        fontsize=9,
+        frameon=False,
+        prop={'family': 'monospace'} 
+    )
+
+    # --- Заголовок: по центру фигуры, увеличенный отступ сверху ---
+    month_name = MONTH_NAMES_RU.get(month, str(month)).capitalize()
+    title_raw = f"Расходы  \u2022  {month_name} {year}"
+    fig.text(
+        0.55, 0.84,
+        _tracked(title_raw),
+        ha='center', va='top',
+        fontsize=14, fontweight=700, color='#2A2A2A',
+    )
+
     if save_path is None:
         user_dir = excel.create_user_dir(user_id)
         save_path = os.path.join(user_dir, f"pie_chart_{year}_{month}.png")
-    plt.savefig(save_path, bbox_inches='tight')
+
+    plt.savefig(save_path, bbox_inches='tight', facecolor='white', dpi=150)
     plt.close()
-    
+
     return save_path
+
 
 async def create_monthly_bar_chart(user_id, year=None, save_path=None):
     """
-    Создает столбчатую диаграмму расходов по месяцам за указанный год
+    Создаёт столбчатую диаграмму расходов по месяцам за указанный год.
     """
     if year is None:
         year = datetime.datetime.now().year
 
-    # Получаем данные о расходах из БД через excel.get_all_expenses
     expenses_df = await excel.get_all_expenses(user_id, year)
 
     if expenses_df is None or expenses_df.empty:
         return None
-    
-    # Группируем данные по месяцам
+
+    # Конвертируем Decimal → float
+    expenses_df['amount'] = expenses_df['amount'].astype(float)
+
     monthly_expenses = expenses_df.groupby('month')['amount'].sum()
-    
-    # Создаем список месяцев для отображения
-    months = []
-    for i in range(1, 13):
-        month_name = datetime.date(year, i, 1).strftime('%b')
-        months.append(month_name)
-    
-    # Подготавливаем данные для диаграммы
-    amounts = []
-    for i in range(1, 13):
-        if i in monthly_expenses.index:
-            amounts.append(monthly_expenses[i])
-        else:
-            amounts.append(0)
-    
-    # Создаем диаграмму
-    plt.figure(figsize=(12, 6))
-    bars = plt.bar(months, amounts, color='#2196F3')
-    
-    # Добавляем значения над столбцами
-    for bar in bars:
-        height = bar.get_height()
-        if height > 0:
-            plt.text(bar.get_x() + bar.get_width()/2., height + 5,
-                    f'{int(height)}',
-                    ha='center', va='bottom')
-    
-    plt.title(f'Расходы по месяцам за {year} год')
-    plt.xlabel('Месяц')
-    plt.ylabel('Сумма')
-    plt.grid(axis='y', linestyle='--', alpha=0.7)
-    
-    # Сохраняем диаграмму
+
+    months_labels = [MONTH_NAMES_SHORT_RU[i] for i in range(1, 13)]
+    amounts = [float(monthly_expenses.get(i, 0)) for i in range(1, 13)]
+
+    max_val = max(amounts) if max(amounts) > 0 else 1
+    bar_colors = [
+        plt.cm.Blues(0.35 + 0.55 * (v / max_val)) for v in amounts
+    ]
+
+    fig, ax = plt.subplots(figsize=(12, 6))
+    fig.patch.set_facecolor('white')
+
+    bars = ax.bar(months_labels, amounts, color=bar_colors,
+                  edgecolor='white', linewidth=1.5, width=0.65)
+
+    for bar, amount in zip(bars, amounts):
+        if amount > 0:
+            ax.text(
+                bar.get_x() + bar.get_width() / 2,
+                bar.get_height() + max_val * 0.012,
+                _fmt_amount(amount),
+                ha='center', va='bottom', fontsize=7.5, fontweight='bold', color='#444444',
+            )
+
+    ax.set_title(
+        f"Расходы по месяцам за {year} год",
+        loc='right',
+        fontsize=12, fontweight='bold', color='#333333', pad=12,
+    )
+    ax.set_xlabel("Месяц", fontsize=10, color='#555555')
+    ax.set_ylabel("Сумма, руб.", fontsize=10, color='#555555')
+    ax.yaxis.set_major_formatter(
+        mticker.FuncFormatter(lambda x, _: f"{int(x):,}".replace(",", "\u202f"))
+    )
+    ax.set_ylim(0, max_val * 1.18)
+    ax.tick_params(colors='#666666')
+    sns.despine(left=False, bottom=False)
+
     if save_path is None:
         user_dir = excel.create_user_dir(user_id)
         save_path = os.path.join(user_dir, f"bar_chart_{year}.png")
-    
-    plt.savefig(save_path, bbox_inches='tight')
+
+    plt.savefig(save_path, bbox_inches='tight', facecolor='white')
     plt.close()
-    
+
     return save_path
+
 
 async def create_category_trend_chart(user_id, category, year=None, save_path=None):
     """
-    Создает график тренда расходов по указанной категории за год
+    Создаёт линейный график тренда расходов по категории за год.
     """
     if year is None:
         year = datetime.datetime.now().year
-    
-    # Получаем данные о расходах по категории
+
     category_data = await excel.get_category_expenses(user_id, category, year)
-    
+
     if not category_data or category_data['total'] == 0:
         return None
-    
-    # Подготавливаем данные для графика
-    months = []
-    amounts = []
-    
-    for i in range(1, 13):
-        month_name = datetime.date(year, i, 1).strftime('%b')
-        months.append(month_name)
-        
-        if i in category_data['by_month']:
-            amounts.append(category_data['by_month'][i])
-        else:
-            amounts.append(0)
-    
-    # Создаем график
-    plt.figure(figsize=(12, 6))
-    plt.plot(months, amounts, marker='o', linestyle='-', color=config.COLORS.get(category.lower(), "#2196F3"), linewidth=2)
-    
-    # Добавляем значения над точками
+
+    months_labels = [MONTH_NAMES_SHORT_RU[i] for i in range(1, 13)]
+    amounts = [float(category_data['by_month'].get(i, 0)) for i in range(1, 13)]
+
+    line_color = config.COLORS.get(category.lower(), "#4E79A7")
+
+    fig, ax = plt.subplots(figsize=(12, 6))
+    fig.patch.set_facecolor('white')
+
+    ax.fill_between(range(12), amounts, alpha=0.12, color=line_color)
+    ax.plot(range(12), amounts, marker='o', linestyle='-', color=line_color,
+            linewidth=2.5, markersize=8, markerfacecolor='white',
+            markeredgewidth=2.5, markeredgecolor=line_color)
+
+    max_val = max(amounts) if max(amounts) > 0 else 1
     for i, amount in enumerate(amounts):
         if amount > 0:
-            plt.text(i, amount + 5, f'{int(amount)}', ha='center')
-    
-    plt.title(f'Расходы на {category} за {year} год')
-    plt.xlabel('Месяц')
-    plt.ylabel('Сумма')
-    plt.grid(True, linestyle='--', alpha=0.7)
-    
-    # Сохраняем график
+            ax.text(i, amount + max_val * 0.03, _fmt_amount(amount),
+                    ha='center', fontsize=8, fontweight='bold', color='#444444')
+
+    ax.set_xticks(range(12))
+    ax.set_xticklabels(months_labels)
+    ax.set_title(
+        f"Расходы на «{_cap(category)}» за {year} год",
+        loc='right',
+        fontsize=12, fontweight='bold', color='#333333', pad=12,
+    )
+    ax.set_xlabel("Месяц", fontsize=10, color='#555555')
+    ax.set_ylabel("Сумма, руб.", fontsize=10, color='#555555')
+    ax.yaxis.set_major_formatter(
+        mticker.FuncFormatter(lambda x, _: f"{int(x):,}".replace(",", "\u202f"))
+    )
+    ax.set_ylim(0, max_val * 1.22)
+    ax.tick_params(colors='#666666')
+    sns.despine()
+
     if save_path is None:
         user_dir = excel.create_user_dir(user_id)
         save_path = os.path.join(user_dir, f"trend_{category}_{year}.png")
-    
-    plt.savefig(save_path, bbox_inches='tight')
+
+    plt.savefig(save_path, bbox_inches='tight', facecolor='white')
     plt.close()
-    
+
     return save_path
 
+
 async def create_budget_comparison_chart(user_id, year=None, save_path=None):
-    """
-    Budget functionality disabled. Returns None.
-    """
-    log_event(logger, "budget_chart_disabled", user_id=user_id, year=year)
+    """Budget functionality disabled. Returns None."""
     return None
+
 
 async def create_category_distribution_chart(user_id, year=None, save_path=None):
     """
-    Создает горизонтальную столбчатую диаграмму распределения расходов по категориям за год
+    Создаёт горизонтальную столбчатую диаграмму распределения расходов по категориям за год.
     """
     if year is None:
         year = datetime.datetime.now().year
-    
-    # Получаем данные о расходах из БД
+
     expenses_df = await excel.get_all_expenses(user_id, year)
 
     if expenses_df is None or expenses_df.empty:
         return None
-    
-    # Группируем данные по категориям
-    category_expenses = expenses_df.groupby('category')['amount'].sum().sort_values(ascending=False)
-    
-    # Ограничиваем количество категорий для отображения
+
+    # Конвертируем Decimal → float
+    expenses_df['amount'] = expenses_df['amount'].astype(float)
+
+    category_expenses = expenses_df.groupby('category')['amount'].sum().sort_values(ascending=True)
+
     if len(category_expenses) > config.MAX_CATEGORIES_ON_CHART:
-        main_categories = category_expenses.iloc[:config.MAX_CATEGORIES_ON_CHART-1]
-        other_sum = category_expenses.iloc[config.MAX_CATEGORIES_ON_CHART-1:].sum()
-        
-        # Создаем новую серию с основными категориями и "Прочее"
-        new_data = main_categories.copy()
-        new_data['прочее'] = other_sum
-        category_expenses = new_data
-    
-    # Создаем диаграмму
-    plt.figure(figsize=(10, 8))
-    
-    # Создаем цветовую палитру
-    colors = [config.COLORS.get(cat, "#9E9E9E") for cat in category_expenses.index]
-    
-    # Добавляем эмодзи к названиям категорий
-    categories_with_emoji = [f"{config.DEFAULT_CATEGORIES.get(cat, '📦')} {cat}" for cat in category_expenses.index]
-    
-    bars = plt.barh(categories_with_emoji, category_expenses.values, color=colors)
-    
-    # Добавляем значения на столбцы
-    for bar in bars:
-        width = bar.get_width()
-        plt.text(width + 5, bar.get_y() + bar.get_height()/2, 
-                f'{int(width)}', va='center')
-    
-    plt.title(f'Распределение расходов по категориям за {year} год')
-    plt.xlabel('Сумма')
-    plt.ylabel('Категория')
-    plt.grid(axis='x', linestyle='--', alpha=0.7)
-    
-    # Сохраняем диаграмму
+        other_sum = float(category_expenses.iloc[:-(config.MAX_CATEGORIES_ON_CHART - 1)].sum())
+        category_expenses = category_expenses.iloc[-(config.MAX_CATEGORIES_ON_CHART - 1):]
+        category_expenses['прочее'] = other_sum
+        category_expenses = category_expenses.sort_values(ascending=True)
+
+    raw_names = list(category_expenses.index)
+    amounts_vals = [float(v) for v in category_expenses.values]
+    colors = _get_colors(raw_names)
+    labels = [_cap(n) for n in raw_names]
+
+    fig, ax = plt.subplots(figsize=(10, max(5, len(category_expenses) * 0.75)))
+    fig.patch.set_facecolor('white')
+
+    bars = ax.barh(labels, amounts_vals,
+                   color=colors, edgecolor='white', linewidth=1.5, height=0.6)
+
+    max_val = max(amounts_vals) if amounts_vals else 1
+    for bar, amount in zip(bars, amounts_vals):
+        ax.text(
+            bar.get_width() + max_val * 0.01,
+            bar.get_y() + bar.get_height() / 2,
+            _fmt_amount(amount),
+            va='center', fontsize=9, fontweight='bold', color='#444444',
+        )
+
+    ax.set_title(
+        f"Распределение расходов по категориям за {year} год",
+        loc='right',
+        fontsize=12, fontweight='bold', color='#333333', pad=12,
+    )
+    ax.set_xlabel("Сумма, руб.", fontsize=10, color='#555555')
+    ax.xaxis.set_major_formatter(
+        mticker.FuncFormatter(lambda x, _: f"{int(x):,}".replace(",", "\u202f"))
+    )
+    ax.set_xlim(0, max_val * 1.22)
+    ax.tick_params(colors='#666666')
+    sns.despine(left=True, bottom=False)
+
     if save_path is None:
         user_dir = excel.create_user_dir(user_id)
         save_path = os.path.join(user_dir, f"category_distribution_{year}.png")
-    
-    plt.savefig(save_path, bbox_inches='tight')
+
+    plt.savefig(save_path, bbox_inches='tight', facecolor='white')
     plt.close()
-    
+
     return save_path
