@@ -58,6 +58,17 @@ def _cap(name: str) -> str:
     return name.capitalize() if name else name
 
 
+def _tracked(text: str) -> str:
+    """Добавляет волосяные пробелы (U+200A) между символами для эффекта letter-spacing ~1-2%."""
+    LS = '\u200a'
+    result = []
+    for i, ch in enumerate(text):
+        result.append(ch)
+        if i < len(text) - 1 and ch not in (' ', '\n'):
+            result.append(LS)
+    return ''.join(result)
+
+
 def _get_colors(categories: list) -> list:
     """Возвращает цвета из config или из палитры по умолчанию."""
     result = []
@@ -70,7 +81,10 @@ def _get_colors(categories: list) -> list:
 async def create_monthly_pie_chart(user_id, month=None, year=None, save_path=None, project_id=None):
     """
     Создаёт donut-диаграмму расходов по категориям за указанный месяц.
+    Маленькие сегменты (<= THRESHOLD%) подписываются снаружи с «усами» (leader lines).
     """
+    import math
+
     if month is None:
         month = datetime.datetime.now().month
     if year is None:
@@ -94,11 +108,9 @@ async def create_monthly_pie_chart(user_id, month=None, year=None, save_path=Non
     if len(sorted_categories) > config.MAX_CATEGORIES_ON_CHART:
         main_categories = sorted_categories[:config.MAX_CATEGORIES_ON_CHART - 1]
         other_sum = sum(float(item[1]) for item in sorted_categories[config.MAX_CATEGORIES_ON_CHART - 1:])
-
         for category, amount in main_categories:
             raw_names.append(category)
             amounts.append(float(amount))
-
         if other_sum > 0:
             raw_names.append("прочее")
             amounts.append(other_sum)
@@ -107,12 +119,15 @@ async def create_monthly_pie_chart(user_id, month=None, year=None, save_path=Non
             raw_names.append(category)
             amounts.append(float(amount))
 
-    total = float(expenses['total'])
+    total = sum(amounts)
     labels = [_cap(n) for n in raw_names]
     colors = _get_colors(raw_names)
 
-    fig, ax = plt.subplots(figsize=(9, 7))
+    # --- Фигура ---
+    # subplots_adjust: пирог занимает ~60% ширины, правее — легенда
+    fig, ax = plt.subplots(figsize=(10, 6.5))
     fig.patch.set_facecolor('white')
+    fig.subplots_adjust(left=0.01, right=0.80, top=0.82, bottom=0.03)
 
     # --- Donut ---
     wedges, _ = ax.pie(
@@ -120,64 +135,116 @@ async def create_monthly_pie_chart(user_id, month=None, year=None, save_path=Non
         labels=None,
         startangle=90,
         colors=colors,
-        wedgeprops=dict(width=0.52, edgecolor='white', linewidth=2),
+        wedgeprops=dict(width=0.50, edgecolor='white', linewidth=0.5),
         counterclock=False,
     )
 
-    # --- Подписи только для сегментов > 5% ---
+    # Расширяем оси, чтобы вместить leader lines
+    scale = 1.3  # tweak 1.05–1.25 to taste
+    ax.set_xlim(-scale, scale)
+    ax.set_ylim(-scale, scale)
+    # ax.set_xlim(-1.65, 1.65)
+    # ax.set_ylim(-1.65, 1.65)
+
+    # --- Метки: процент ВНУТРИ кольца, название категории СНАРУЖИ ---
+    THRESHOLD = 5.0  # % — ниже этого: добавляем "ус"
     for i, (wedge, amount) in enumerate(zip(wedges, amounts)):
         pct = amount / total * 100
-        if pct < 4:
-            continue
-        angle = (wedge.theta2 + wedge.theta1) / 2
-        import math
-        x = math.cos(math.radians(angle))
-        y = math.sin(math.radians(angle))
-        r_mid = 0.72  # внутри кольца
-        ax.text(
-            x * r_mid, y * r_mid,
-            f"{pct:.0f}%",
-            ha='center', va='center',
-            fontsize=8.5, fontweight='bold', color='white',
-        )
+        category_label = labels[i]
+        angle_mid = (wedge.theta1 + wedge.theta2) / 2
+        xm = math.cos(math.radians(angle_mid))
+        ym = math.sin(math.radians(angle_mid))
 
-    # --- Сумма в центре ---
-    ax.text(0, 0.08, "Итого", ha='center', va='center',
-            fontsize=10, color='#666666')
-    ax.text(0, -0.15, _fmt_amount(total), ha='center', va='center',
-            fontsize=13, fontweight='bold', color='#222222')
+        # 2) Название категории снаружи
+        ha_txt = 'left' if xm >= 0 else 'right'
+        if pct >= THRESHOLD:
+            # 1) Процент всегда внутри доната
+            ax.text(
+                xm * 0.74, ym * 0.74,
+                f"{pct:.0f}%",
+                ha='center', va='center',
+                fontsize=8.0, fontweight='bold', color='white',
+            )
 
-    # --- Легенда ---
-    legend_labels = [
-        f"{label}  —  {_fmt_amount(amt)}"
-        for label, amt in zip(labels, amounts)
-    ]
-    ax.legend(
-        wedges, legend_labels,
-        loc="center left",
-        bbox_to_anchor=(1.02, 0.5),
-        fontsize=9,
-        frameon=False,
-        handlelength=1.2,
-        handleheight=1.2,
+            # Без "уса" для крупных сегментов: подпись снаружи в цвете сегмента
+            x_tip = xm * 1.00
+            y_tip = ym * 1.00
+            x_txt = xm * 1.09
+            y_txt = ym * 1.09
+            ax.annotate(
+                category_label,
+                xy=(x_tip, y_tip),
+                xytext=(x_txt, y_txt),
+                ha=ha_txt, va='center',
+                fontsize=11.0, color=colors[i],
+                fontweight='bold',
+                annotation_clip=False,
+            )
+        else:
+            # С "усом" для мелких сегментов
+            x_tip = xm * 1.02
+            y_tip = ym * 1.02
+            x_txt = xm * 1.10
+            y_txt = ym * 1.10
+
+            # Ус + название категории и процент рядом
+            ax.annotate(
+                f"{category_label} {pct:.1f}%",
+                xy=(x_tip, y_tip),
+                xytext=(x_txt, y_txt),
+                ha=ha_txt, va='center',
+                fontsize=8.0, color='#555555',
+                annotation_clip=False,
+                arrowprops=dict(
+                    arrowstyle='-', 
+                    color='#cccccc',
+                    lw=1,
+                    shrinkA=0, shrinkB=0,
+                ),
+            )
+
+
+    # --- Только сумма в центре дырки, строго по центру ---
+    ax.text(
+        0, 0,
+        _fmt_amount(total),
+        ha='center', va='center',
+        fontsize=16, fontweight=600, color='#2A2A2A',
     )
 
-    # --- Заголовок (справа сверху) ---
-    month_name = MONTH_NAMES_RU.get(month, str(month))
-    ax.set_title(
-        f"Расходы за {month_name} {year}",
-        loc='right',
-        fontsize=12,
-        fontweight='bold',
-        color='#333333',
-        pad=12,
+    # --- Легенда: маленькие квадратики, название и цена рядом, сортировка по убыванию ---
+    sorted_idxs = sorted(range(len(amounts)), key=lambda i: amounts[i], reverse=True)
+    legend_handles = [wedges[i] for i in sorted_idxs]
+
+    max_len = max(len(labels[i]) for i in sorted_idxs)
+    legend_texts = [
+        f"{labels[i].ljust(max_len)}  {_fmt_amount(amounts[i]).rjust(3)}"
+        for i in sorted_idxs
+    ]
+    ax.legend(
+        legend_handles, legend_texts,
+        loc='center left',
+        bbox_to_anchor=(1.06, 0.5),
+        fontsize=9,
+        frameon=False,
+        prop={'family': 'monospace'} 
+    )
+
+    # --- Заголовок: по центру фигуры, увеличенный отступ сверху ---
+    month_name = MONTH_NAMES_RU.get(month, str(month)).capitalize()
+    title_raw = f"Расходы  \u2022  {month_name} {year}"
+    fig.text(
+        0.55, 0.84,
+        _tracked(title_raw),
+        ha='center', va='top',
+        fontsize=14, fontweight=700, color='#2A2A2A',
     )
 
     if save_path is None:
         user_dir = excel.create_user_dir(user_id)
         save_path = os.path.join(user_dir, f"pie_chart_{year}_{month}.png")
 
-    plt.savefig(save_path, bbox_inches='tight', facecolor='white')
+    plt.savefig(save_path, bbox_inches='tight', facecolor='white', dpi=150)
     plt.close()
 
     return save_path
