@@ -44,28 +44,14 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             )
             return
 
-        # Ищем категорию по имени
-        await categories.ensure_system_categories_exist(user_id)
-        cats = await categories.get_categories_for_user_project(user_id, project_id)
-        category_found = None
-        
-        # Сначала ищем в категориях проекта
-        for cat in cats:
-            if cat['name'].lower() == expense_data['category'].lower():
-                category_found = cat
-                break
-        
-        # Если не найдено, ищем в глобальных категориях
+        # Ищем категорию по имени одним SQL-запросом
+        category_found = await categories.get_category_by_name(
+            user_id, expense_data['category'], project_id
+        )
+
         if not category_found:
-            cats_global = await categories.get_categories_for_user_project(user_id, None)
-            for cat in cats_global:
-                if cat['name'].lower() == expense_data['category'].lower():
-                    category_found = cat
-                    break
-        
-        if not category_found:
-            log_event(logger, "invalid_category_in_text", user_id=user_id, 
-                     category=expense_data['category'], 
+            log_event(logger, "invalid_category_in_text", user_id=user_id,
+                     category=expense_data['category'],
                      message="Category not found in text message")
             return  # Не отвечаем, если категория не найдена в обычном сообщении
         
@@ -168,25 +154,11 @@ async def add_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
             )
             return ConversationHandler.END
 
-        # Ищем категорию по имени
-        await categories.ensure_system_categories_exist(user_id)
-        cats = await categories.get_categories_for_user_project(user_id, project_id)
-        category_found = None
-        
-        # Сначала ищем в категориях проекта
-        for cat in cats:
-            if cat['name'].lower() == expense_data['category'].lower():
-                category_found = cat
-                break
-        
-        # Если не найдено, ищем в глобальных категориях
-        if not category_found:
-            cats_global = await categories.get_categories_for_user_project(user_id, None)
-            for cat in cats_global:
-                if cat['name'].lower() == expense_data['category'].lower():
-                    category_found = cat
-                    break
-        
+        # Ищем категорию по имени одним SQL-запросом
+        category_found = await categories.get_category_by_name(
+            user_id, expense_data['category'], project_id
+        )
+
         if not category_found:
             log_event(logger, "invalid_category_in_command", user_id=user_id,
                      category=expense_data['category'], amount=expense_data['amount'],

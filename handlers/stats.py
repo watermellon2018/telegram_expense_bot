@@ -2,6 +2,8 @@
 Обработчики команд для получения статистики и анализа расходов
 """
 
+import asyncio
+
 from telegram import Update, ReplyKeyboardMarkup
 from telegram.constants import ParseMode
 from telegram.ext import ContextTypes, CommandHandler, filters, MessageHandler, ConversationHandler, CallbackQueryHandler
@@ -128,25 +130,10 @@ async def category_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     # Получаем активный проект
     project_id = context.user_data.get('active_project_id')
     
-    # Ищем категорию по имени
+    # Ищем категорию по имени одним SQL-запросом
     await categories.ensure_system_categories_exist(user_id)
-    cats = await categories.get_categories_for_user_project(user_id, project_id)
-    category_found = None
-    
-    # Сначала ищем в категориях проекта
-    for cat in cats:
-        if cat['name'].lower() == category_name:
-            category_found = cat
-            break
-    
-    # Если не найдено, ищем в глобальных категориях
-    if not category_found:
-        cats_global = await categories.get_categories_for_user_project(user_id, None)
-        for cat in cats_global:
-            if cat['name'].lower() == category_name:
-                category_found = cat
-                break
-    
+    category_found = await categories.get_category_by_name(user_id, category_name, project_id)
+
     if not category_found:
         await update.message.reply_text(
             f"❌ Категория '{category_name}' не найдена."
@@ -184,15 +171,18 @@ async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     # Получаем текущий год
     year = datetime.datetime.now().year
 
-    # Отправляем графики
+    # Генерируем оба графика параллельно
+    category_chart, monthly_chart = await asyncio.gather(
+        visualization.create_category_distribution_chart(user_id, year),
+        visualization.create_monthly_bar_chart(user_id, year),
+    )
+
     # 1. Распределение по категориям
-    category_chart = await visualization.create_category_distribution_chart(user_id, year)
     if category_chart and os.path.exists(category_chart):
         with open(category_chart, 'rb') as photo:
             await update.message.reply_photo(photo=photo, caption=f"Распределение расходов по категориям за {year} год")
 
     # 2. Расходы по месяцам
-    monthly_chart = await visualization.create_monthly_bar_chart(user_id, year)
     if monthly_chart and os.path.exists(monthly_chart):
         with open(monthly_chart, 'rb') as photo:
             await update.message.reply_photo(photo=photo, caption=f"Расходы по месяцам за {year} год")
@@ -213,25 +203,10 @@ async def handle_category_choice(update: Update, context: ContextTypes.DEFAULT_T
     # Получаем активный проект
     project_id = context.user_data.get('active_project_id')
     
-    # Ищем категорию по имени
+    # Ищем категорию по имени одним SQL-запросом
     await categories.ensure_system_categories_exist(user_id)
-    cats = await categories.get_categories_for_user_project(user_id, project_id)
-    category_found = None
-    
-    # Сначала ищем в категориях проекта
-    for cat in cats:
-        if cat['name'].lower() == category_name.lower():
-            category_found = cat
-            break
-    
-    # Если не найдено, ищем в глобальных категориях
-    if not category_found:
-        cats_global = await categories.get_categories_for_user_project(user_id, None)
-        for cat in cats_global:
-            if cat['name'].lower() == category_name.lower():
-                category_found = cat
-                break
-    
+    category_found = await categories.get_category_by_name(user_id, category_name, project_id)
+
     if not category_found:
         await update.message.reply_text(f"Категория '{category_name}' не найдена.")
         return ConversationHandler.END
