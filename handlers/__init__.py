@@ -10,6 +10,7 @@ from handlers.project import register_project_handlers
 from handlers.category import register_category_handlers
 from handlers.invitations import register_invitation_handlers
 from handlers.project_management import register_project_management_handlers
+from handlers.budget import register_budget_handlers
 
 def register_all_handlers(application):
     """
@@ -24,4 +25,5 @@ def register_all_handlers(application):
     register_export_handlers(application)
     register_stats_handlers(application)
     register_category_handlers(application)
+    register_budget_handlers(application)      # Бюджет — до expense (expense ловит любой текст)
     register_expense_handlers(application)
