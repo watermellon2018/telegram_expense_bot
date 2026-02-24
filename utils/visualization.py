@@ -2,6 +2,9 @@
 Утилиты для визуализации данных расходов
 """
 
+import asyncio
+import functools
+import math
 import os
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -78,58 +81,20 @@ def _get_colors(categories: list) -> list:
     return result
 
 
-async def create_monthly_pie_chart(user_id, month=None, year=None, save_path=None, project_id=None):
-    """
-    Создаёт donut-диаграмму расходов по категориям за указанный месяц.
-    Маленькие сегменты (<= THRESHOLD%) подписываются снаружи с «усами» (leader lines).
-    """
-    import math
+# ---------------------------------------------------------------------------
+# Синхронные функции рендеринга (выполняются в ThreadPoolExecutor)
+# ---------------------------------------------------------------------------
 
-    if month is None:
-        month = datetime.datetime.now().month
-    if year is None:
-        year = datetime.datetime.now().year
-
-    expenses = await excel.get_month_expenses(user_id, month, year, project_id)
-
-    if not expenses or expenses['total'] == 0:
-        return None
-
-    # Сортируем по убыванию
-    sorted_categories = sorted(
-        expenses['by_category'].items(),
-        key=lambda x: x[1],
-        reverse=True
-    )
-
-    raw_names = []
-    amounts = []
-
-    if len(sorted_categories) > config.MAX_CATEGORIES_ON_CHART:
-        main_categories = sorted_categories[:config.MAX_CATEGORIES_ON_CHART - 1]
-        other_sum = sum(float(item[1]) for item in sorted_categories[config.MAX_CATEGORIES_ON_CHART - 1:])
-        for category, amount in main_categories:
-            raw_names.append(category)
-            amounts.append(float(amount))
-        if other_sum > 0:
-            raw_names.append("прочее")
-            amounts.append(other_sum)
-    else:
-        for category, amount in sorted_categories:
-            raw_names.append(category)
-            amounts.append(float(amount))
-
-    total = sum(amounts)
+def _render_pie_chart(raw_names: list, amounts: list, total: float,
+                      month: int, year: int, save_path: str) -> str:
+    """Синхронный рендеринг donut-диаграммы. Вызывается через run_in_executor."""
     labels = [_cap(n) for n in raw_names]
     colors = _get_colors(raw_names)
 
-    # --- Фигура ---
-    # subplots_adjust: пирог занимает ~60% ширины, правее — легенда
     fig, ax = plt.subplots(figsize=(10, 6.5))
     fig.patch.set_facecolor('white')
     fig.subplots_adjust(left=0.01, right=0.80, top=0.82, bottom=0.03)
 
-    # --- Donut ---
     wedges, _ = ax.pie(
         amounts,
         labels=None,
@@ -139,15 +104,11 @@ async def create_monthly_pie_chart(user_id, month=None, year=None, save_path=Non
         counterclock=False,
     )
 
-    # Расширяем оси, чтобы вместить leader lines
-    scale = 1.3  # tweak 1.05–1.25 to taste
+    scale = 1.3
     ax.set_xlim(-scale, scale)
     ax.set_ylim(-scale, scale)
-    # ax.set_xlim(-1.65, 1.65)
-    # ax.set_ylim(-1.65, 1.65)
 
-    # --- Метки: процент ВНУТРИ кольца, название категории СНАРУЖИ ---
-    THRESHOLD = 5.0  # % — ниже этого: добавляем "ус"
+    THRESHOLD = 5.0
     for i, (wedge, amount) in enumerate(zip(wedges, amounts)):
         pct = amount / total * 100
         category_label = labels[i]
@@ -155,18 +116,14 @@ async def create_monthly_pie_chart(user_id, month=None, year=None, save_path=Non
         xm = math.cos(math.radians(angle_mid))
         ym = math.sin(math.radians(angle_mid))
 
-        # 2) Название категории снаружи
         ha_txt = 'left' if xm >= 0 else 'right'
         if pct >= THRESHOLD:
-            # 1) Процент всегда внутри доната
             ax.text(
                 xm * 0.74, ym * 0.74,
                 f"{pct:.0f}%",
                 ha='center', va='center',
                 fontsize=8.0, fontweight='bold', color='white',
             )
-
-            # Без "уса" для крупных сегментов: подпись снаружи в цвете сегмента
             x_tip = xm * 1.00
             y_tip = ym * 1.00
             x_txt = xm * 1.09
@@ -181,13 +138,10 @@ async def create_monthly_pie_chart(user_id, month=None, year=None, save_path=Non
                 annotation_clip=False,
             )
         else:
-            # С "усом" для мелких сегментов
             x_tip = xm * 1.02
             y_tip = ym * 1.02
             x_txt = xm * 1.10
             y_txt = ym * 1.10
-
-            # Ус + название категории и процент рядом
             ax.annotate(
                 f"{category_label} {pct:.1f}%",
                 xy=(x_tip, y_tip),
@@ -196,15 +150,13 @@ async def create_monthly_pie_chart(user_id, month=None, year=None, save_path=Non
                 fontsize=8.0, color='#555555',
                 annotation_clip=False,
                 arrowprops=dict(
-                    arrowstyle='-', 
+                    arrowstyle='-',
                     color='#cccccc',
                     lw=1,
                     shrinkA=0, shrinkB=0,
                 ),
             )
 
-
-    # --- Только сумма в центре дырки, строго по центру ---
     ax.text(
         0, 0,
         _fmt_amount(total),
@@ -212,7 +164,6 @@ async def create_monthly_pie_chart(user_id, month=None, year=None, save_path=Non
         fontsize=16, fontweight=600, color='#2A2A2A',
     )
 
-    # --- Легенда: маленькие квадратики, название и цена рядом, сортировка по убыванию ---
     sorted_idxs = sorted(range(len(amounts)), key=lambda i: amounts[i], reverse=True)
     legend_handles = [wedges[i] for i in sorted_idxs]
 
@@ -227,10 +178,9 @@ async def create_monthly_pie_chart(user_id, month=None, year=None, save_path=Non
         bbox_to_anchor=(1.06, 0.5),
         fontsize=9,
         frameon=False,
-        prop={'family': 'monospace'} 
+        prop={'family': 'monospace'}
     )
 
-    # --- Заголовок: по центру фигуры, увеличенный отступ сверху ---
     month_name = MONTH_NAMES_RU.get(month, str(month)).capitalize()
     title_raw = f"Расходы  \u2022  {month_name} {year}"
     fig.text(
@@ -240,36 +190,14 @@ async def create_monthly_pie_chart(user_id, month=None, year=None, save_path=Non
         fontsize=14, fontweight=700, color='#2A2A2A',
     )
 
-    if save_path is None:
-        user_dir = excel.create_user_dir(user_id)
-        save_path = os.path.join(user_dir, f"pie_chart_{year}_{month}.png")
-
     plt.savefig(save_path, bbox_inches='tight', facecolor='white', dpi=150)
-    plt.close()
-
+    plt.close(fig)
     return save_path
 
 
-async def create_monthly_bar_chart(user_id, year=None, save_path=None):
-    """
-    Создаёт столбчатую диаграмму расходов по месяцам за указанный год.
-    """
-    if year is None:
-        year = datetime.datetime.now().year
-
-    expenses_df = await excel.get_all_expenses(user_id, year)
-
-    if expenses_df is None or expenses_df.empty:
-        return None
-
-    # Конвертируем Decimal → float
-    expenses_df['amount'] = expenses_df['amount'].astype(float)
-
-    monthly_expenses = expenses_df.groupby('month')['amount'].sum()
-
-    months_labels = [MONTH_NAMES_SHORT_RU[i] for i in range(1, 13)]
-    amounts = [float(monthly_expenses.get(i, 0)) for i in range(1, 13)]
-
+def _render_bar_chart(months_labels: list, amounts: list, year: int,
+                      save_path: str) -> str:
+    """Синхронный рендеринг столбчатой диаграммы по месяцам."""
     max_val = max(amounts) if max(amounts) > 0 else 1
     bar_colors = [
         plt.cm.Blues(0.35 + 0.55 * (v / max_val)) for v in amounts
@@ -304,33 +232,14 @@ async def create_monthly_bar_chart(user_id, year=None, save_path=None):
     ax.tick_params(colors='#666666')
     sns.despine(left=False, bottom=False)
 
-    if save_path is None:
-        user_dir = excel.create_user_dir(user_id)
-        save_path = os.path.join(user_dir, f"bar_chart_{year}.png")
-
     plt.savefig(save_path, bbox_inches='tight', facecolor='white')
-    plt.close()
-
+    plt.close(fig)
     return save_path
 
 
-async def create_category_trend_chart(user_id, category, year=None, save_path=None):
-    """
-    Создаёт линейный график тренда расходов по категории за год.
-    """
-    if year is None:
-        year = datetime.datetime.now().year
-
-    category_data = await excel.get_category_expenses(user_id, category, year)
-
-    if not category_data or category_data['total'] == 0:
-        return None
-
-    months_labels = [MONTH_NAMES_SHORT_RU[i] for i in range(1, 13)]
-    amounts = [float(category_data['by_month'].get(i, 0)) for i in range(1, 13)]
-
-    line_color = config.COLORS.get(category.lower(), "#4E79A7")
-
+def _render_trend_chart(months_labels: list, amounts: list, category: str,
+                        line_color: str, year: int, save_path: str) -> str:
+    """Синхронный рендеринг линейного графика тренда по категории."""
     fig, ax = plt.subplots(figsize=(12, 6))
     fig.patch.set_facecolor('white')
 
@@ -361,50 +270,18 @@ async def create_category_trend_chart(user_id, category, year=None, save_path=No
     ax.tick_params(colors='#666666')
     sns.despine()
 
-    if save_path is None:
-        user_dir = excel.create_user_dir(user_id)
-        save_path = os.path.join(user_dir, f"trend_{category}_{year}.png")
-
     plt.savefig(save_path, bbox_inches='tight', facecolor='white')
-    plt.close()
-
+    plt.close(fig)
     return save_path
 
 
-async def create_budget_comparison_chart(user_id, year=None, save_path=None):
-    """Budget functionality disabled. Returns None."""
-    return None
-
-
-async def create_category_distribution_chart(user_id, year=None, save_path=None):
-    """
-    Создаёт горизонтальную столбчатую диаграмму распределения расходов по категориям за год.
-    """
-    if year is None:
-        year = datetime.datetime.now().year
-
-    expenses_df = await excel.get_all_expenses(user_id, year)
-
-    if expenses_df is None or expenses_df.empty:
-        return None
-
-    # Конвертируем Decimal → float
-    expenses_df['amount'] = expenses_df['amount'].astype(float)
-
-    category_expenses = expenses_df.groupby('category')['amount'].sum().sort_values(ascending=True)
-
-    if len(category_expenses) > config.MAX_CATEGORIES_ON_CHART:
-        other_sum = float(category_expenses.iloc[:-(config.MAX_CATEGORIES_ON_CHART - 1)].sum())
-        category_expenses = category_expenses.iloc[-(config.MAX_CATEGORIES_ON_CHART - 1):]
-        category_expenses['прочее'] = other_sum
-        category_expenses = category_expenses.sort_values(ascending=True)
-
-    raw_names = list(category_expenses.index)
-    amounts_vals = [float(v) for v in category_expenses.values]
+def _render_distribution_chart(raw_names: list, amounts_vals: list,
+                                year: int, save_path: str) -> str:
+    """Синхронный рендеринг горизонтальной столбчатой диаграммы распределения."""
     colors = _get_colors(raw_names)
     labels = [_cap(n) for n in raw_names]
 
-    fig, ax = plt.subplots(figsize=(10, max(5, len(category_expenses) * 0.75)))
+    fig, ax = plt.subplots(figsize=(10, max(5, len(raw_names) * 0.75)))
     fig.patch.set_facecolor('white')
 
     bars = ax.barh(labels, amounts_vals,
@@ -432,11 +309,160 @@ async def create_category_distribution_chart(user_id, year=None, save_path=None)
     ax.tick_params(colors='#666666')
     sns.despine(left=True, bottom=False)
 
+    plt.savefig(save_path, bbox_inches='tight', facecolor='white')
+    plt.close(fig)
+    return save_path
+
+
+# ---------------------------------------------------------------------------
+# Публичные async-функции: получают данные из БД, затем рендерят в потоке
+# ---------------------------------------------------------------------------
+
+async def create_monthly_pie_chart(user_id, month=None, year=None, save_path=None, project_id=None):
+    """
+    Создаёт donut-диаграмму расходов по категориям за указанный месяц.
+    Рендеринг matplotlib выполняется в ThreadPoolExecutor, не блокируя event loop.
+    """
+    if month is None:
+        month = datetime.datetime.now().month
+    if year is None:
+        year = datetime.datetime.now().year
+
+    expenses = await excel.get_month_expenses(user_id, month, year, project_id)
+
+    if not expenses or expenses['total'] == 0:
+        return None
+
+    sorted_categories = sorted(
+        expenses['by_category'].items(),
+        key=lambda x: x[1],
+        reverse=True
+    )
+
+    raw_names = []
+    amounts = []
+
+    if len(sorted_categories) > config.MAX_CATEGORIES_ON_CHART:
+        main_categories = sorted_categories[:config.MAX_CATEGORIES_ON_CHART - 1]
+        other_sum = sum(float(item[1]) for item in sorted_categories[config.MAX_CATEGORIES_ON_CHART - 1:])
+        for category, amount in main_categories:
+            raw_names.append(category)
+            amounts.append(float(amount))
+        if other_sum > 0:
+            raw_names.append("прочее")
+            amounts.append(other_sum)
+    else:
+        for category, amount in sorted_categories:
+            raw_names.append(category)
+            amounts.append(float(amount))
+
+    total = sum(amounts)
+
+    if save_path is None:
+        user_dir = excel.create_user_dir(user_id)
+        save_path = os.path.join(user_dir, f"pie_chart_{year}_{month}.png")
+
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(
+        None,
+        functools.partial(_render_pie_chart, raw_names, amounts, total, month, year, save_path)
+    )
+
+
+async def create_monthly_bar_chart(user_id, year=None, save_path=None):
+    """
+    Создаёт столбчатую диаграмму расходов по месяцам за указанный год.
+    Рендеринг matplotlib выполняется в ThreadPoolExecutor, не блокируя event loop.
+    """
+    if year is None:
+        year = datetime.datetime.now().year
+
+    expenses_df = await excel.get_all_expenses(user_id, year)
+
+    if expenses_df is None or expenses_df.empty:
+        return None
+
+    expenses_df['amount'] = expenses_df['amount'].astype(float)
+    monthly_expenses = expenses_df.groupby('month')['amount'].sum()
+
+    months_labels = [MONTH_NAMES_SHORT_RU[i] for i in range(1, 13)]
+    amounts = [float(monthly_expenses.get(i, 0)) for i in range(1, 13)]
+
+    if save_path is None:
+        user_dir = excel.create_user_dir(user_id)
+        save_path = os.path.join(user_dir, f"bar_chart_{year}.png")
+
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(
+        None,
+        functools.partial(_render_bar_chart, months_labels, amounts, year, save_path)
+    )
+
+
+async def create_category_trend_chart(user_id, category, year=None, save_path=None):
+    """
+    Создаёт линейный график тренда расходов по категории за год.
+    Рендеринг matplotlib выполняется в ThreadPoolExecutor, не блокируя event loop.
+    """
+    if year is None:
+        year = datetime.datetime.now().year
+
+    category_data = await excel.get_category_expenses(user_id, category, year)
+
+    if not category_data or category_data['total'] == 0:
+        return None
+
+    months_labels = [MONTH_NAMES_SHORT_RU[i] for i in range(1, 13)]
+    amounts = [float(category_data['by_month'].get(i, 0)) for i in range(1, 13)]
+    line_color = config.COLORS.get(category.lower(), "#4E79A7")
+
+    if save_path is None:
+        user_dir = excel.create_user_dir(user_id)
+        save_path = os.path.join(user_dir, f"trend_{category}_{year}.png")
+
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(
+        None,
+        functools.partial(_render_trend_chart, months_labels, amounts, category, line_color, year, save_path)
+    )
+
+
+async def create_budget_comparison_chart(user_id, year=None, save_path=None):
+    """Budget functionality disabled. Returns None."""
+    return None
+
+
+async def create_category_distribution_chart(user_id, year=None, save_path=None):
+    """
+    Создаёт горизонтальную столбчатую диаграмму распределения расходов по категориям за год.
+    Рендеринг matplotlib выполняется в ThreadPoolExecutor, не блокируя event loop.
+    """
+    if year is None:
+        year = datetime.datetime.now().year
+
+    expenses_df = await excel.get_all_expenses(user_id, year)
+
+    if expenses_df is None or expenses_df.empty:
+        return None
+
+    expenses_df['amount'] = expenses_df['amount'].astype(float)
+    category_expenses = expenses_df.groupby('category')['amount'].sum().sort_values(ascending=True)
+
+    if len(category_expenses) > config.MAX_CATEGORIES_ON_CHART:
+        other_sum = float(category_expenses.iloc[:-(config.MAX_CATEGORIES_ON_CHART - 1)].sum())
+        category_expenses = category_expenses.iloc[-(config.MAX_CATEGORIES_ON_CHART - 1):]
+        category_expenses['прочее'] = other_sum
+        category_expenses = category_expenses.sort_values(ascending=True)
+
+    raw_names = list(category_expenses.index)
+    amounts_vals = [float(v) for v in category_expenses.values]
+
     if save_path is None:
         user_dir = excel.create_user_dir(user_id)
         save_path = os.path.join(user_dir, f"category_distribution_{year}.png")
 
-    plt.savefig(save_path, bbox_inches='tight', facecolor='white')
-    plt.close()
-
-    return save_path
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(
+        None,
+        functools.partial(_render_distribution_chart, raw_names, amounts_vals, year, save_path)
+    )

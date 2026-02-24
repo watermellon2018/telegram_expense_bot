@@ -101,6 +101,69 @@ async def get_categories_for_user_project(user_id: int, project_id: Optional[int
         return []
 
 
+async def get_category_by_name(user_id: int, name: str, project_id: Optional[int] = None) -> Optional[Dict]:
+    """
+    Находит категорию по имени (без учёта регистра).
+    Сначала ищет в категориях проекта, затем в глобальных.
+    Один SQL-запрос вместо загрузки всего списка и цикла в Python.
+
+    Args:
+        user_id: ID пользователя
+        name: Имя категории (поиск без учёта регистра)
+        project_id: ID проекта (None для глобальных)
+
+    Returns:
+        Словарь с информацией о категории или None
+    """
+    try:
+        if project_id is not None:
+            row = await db.fetchrow(
+                """
+                SELECT category_id, name, is_system, is_active, project_id, created_at, user_id
+                FROM categories
+                WHERE LOWER(name) = LOWER($1)
+                  AND is_active = TRUE
+                  AND (
+                    project_id = $2
+                    OR (project_id IS NULL AND user_id = (
+                        SELECT user_id FROM projects WHERE project_id = $2
+                    ))
+                  )
+                ORDER BY CASE WHEN project_id = $2 THEN 0 ELSE 1 END
+                LIMIT 1
+                """,
+                name,
+                project_id
+            )
+        else:
+            row = await db.fetchrow(
+                """
+                SELECT category_id, name, is_system, is_active, project_id, created_at, user_id
+                FROM categories
+                WHERE user_id = $1
+                  AND LOWER(name) = LOWER($2)
+                  AND is_active = TRUE
+                  AND project_id IS NULL
+                LIMIT 1
+                """,
+                str(user_id),
+                name
+            )
+        if row is None:
+            return None
+        return {
+            'category_id': row['category_id'],
+            'name': row['name'],
+            'is_system': row['is_system'],
+            'is_active': row['is_active'],
+            'project_id': row['project_id'],
+            'created_at': row['created_at'].isoformat() if row['created_at'] else None,
+        }
+    except Exception as e:
+        log_error(logger, e, "get_category_by_name_error", user_id=user_id, name=name, project_id=project_id)
+        return None
+
+
 async def get_category_by_id(user_id: int, category_id: int) -> Optional[Dict]:
     """
     Получает категорию по ID с проверкой доступа.
