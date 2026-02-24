@@ -24,9 +24,12 @@ async def month_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     """
     Обрабатывает команду /month для получения статистики за текущий месяц
     """
+    from utils import budgets as budgets_utils
+    from handlers.budget import _format_budget_status_text
+
     user_id = update.effective_user.id
     start_time = time.time()
-    
+
     try:
         # Получаем текущий месяц и год
         now = datetime.datetime.now()
@@ -35,20 +38,28 @@ async def month_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
         # Получаем активный проект
         project_id = context.user_data.get('active_project_id')
-        
-        log_event(logger, "month_stats_requested", user_id=user_id, 
+
+        log_event(logger, "month_stats_requested", user_id=user_id,
                  project_id=project_id, month=month, year=year)
 
-        # Получаем статистику расходов
-        expenses = await excel.get_month_expenses(user_id, month, year, project_id)
-        
+        # Получаем статистику расходов и бюджет параллельно
+        expenses, budget = await asyncio.gather(
+            excel.get_month_expenses(user_id, month, year, project_id),
+            budgets_utils.get_or_inherit_budget(user_id, month, year, project_id),
+        )
+
         if not expenses or expenses.get('total', 0) == 0:
-            log_event(logger, "month_stats_empty", user_id=user_id, 
+            log_event(logger, "month_stats_empty", user_id=user_id,
                      project_id=project_id, month=month, year=year)
 
         # Форматируем отчет
         report = helpers.format_month_expenses(expenses, month, year)
-        
+
+        # Добавляем статус бюджета (если задан)
+        if budget:
+            spending = float(expenses.get('total', 0)) if expenses else 0.0
+            report += "\n\n" + _format_budget_status_text(budget, spending, month, year)
+
         # Добавляем информацию о проекте
         report = await helpers.add_project_context_to_report(report, user_id, project_id)
 
@@ -167,14 +178,15 @@ async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     Обрабатывает команду /stats для получения общей статистики расходов
     """
     user_id = update.effective_user.id
+    project_id = context.user_data.get('active_project_id')
 
     # Получаем текущий год
     year = datetime.datetime.now().year
 
-    # Генерируем оба графика параллельно
-    category_chart, monthly_chart = await asyncio.gather(
+    # Генерируем все три графика параллельно
+    category_chart, budget_chart = await asyncio.gather(
         visualization.create_category_distribution_chart(user_id, year),
-        visualization.create_monthly_bar_chart(user_id, year),
+        visualization.create_budget_comparison_chart(user_id, year, project_id=project_id),
     )
 
     # 1. Распределение по категориям
@@ -182,10 +194,10 @@ async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         with open(category_chart, 'rb') as photo:
             await update.message.reply_photo(photo=photo, caption=f"Распределение расходов по категориям за {year} год")
 
-    # 2. Расходы по месяцам
-    if monthly_chart and os.path.exists(monthly_chart):
-        with open(monthly_chart, 'rb') as photo:
-            await update.message.reply_photo(photo=photo, caption=f"Расходы по месяцам за {year} год")
+    # 3. Бюджет vs. расходы (только если бюджет задан)
+    if budget_chart and os.path.exists(budget_chart):
+        with open(budget_chart, 'rb') as photo:
+            await update.message.reply_photo(photo=photo, caption=f"Бюджет vs. расходы за {year} год")
 
 async def handle_category_choice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """

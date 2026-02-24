@@ -1,5 +1,6 @@
 import logging
 import os
+import datetime
 import pytz
 import apscheduler.util
 
@@ -12,6 +13,7 @@ def patched_astimezone(obj):
 apscheduler.util.astimezone = patched_astimezone
 apscheduler.util.get_localzone = lambda: pytz.UTC
 
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from telegram.ext import Application, ContextTypes
 import config
 from handlers import register_all_handlers
@@ -22,18 +24,42 @@ from utils.logger import get_logger
 
 logger = get_logger("main")
 
+# Глобальный экземпляр планировщика
+_scheduler: AsyncIOScheduler = None
+
 # Функция, которая выполнится ПОСЛЕ инициализации бота
 async def on_startup(application: Application):
     """Вызывается после инициализации Application"""
+    global _scheduler
     from utils.logger import log_event
     os.makedirs(config.DATA_DIR, exist_ok=True)
     await init_pool()
+
+    # Запускаем планировщик уведомлений о бюджете
+    from utils.budget_notifier import check_budget_notifications
+    _scheduler = AsyncIOScheduler(timezone=pytz.UTC)
+    _scheduler.add_job(
+        check_budget_notifications,
+        'interval',
+        hours=4,
+        args=[application.bot],
+        id='budget_notifications',
+        replace_existing=True,
+        next_run_time=datetime.datetime.now(pytz.UTC),  # Запуск сразу при старте
+    )
+    _scheduler.start()
+    log_event(logger, "scheduler_started", jobs=["budget_notifications"], interval_hours=4)
+
     log_event(logger, "bot_started", status="success")
 
 # Функция, которая выполнится ПРИ ОСТАНОВКЕ бота
 async def on_shutdown(application: Application):
     """Вызывается при остановке Application"""
+    global _scheduler
     from utils.logger import log_event
+    if _scheduler and _scheduler.running:
+        _scheduler.shutdown(wait=False)
+        log_event(logger, "scheduler_stopped")
     await close_pool()
     log_event(logger, "bot_shutdown", status="success")
 

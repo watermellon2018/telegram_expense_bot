@@ -369,36 +369,6 @@ async def create_monthly_pie_chart(user_id, month=None, year=None, save_path=Non
     )
 
 
-async def create_monthly_bar_chart(user_id, year=None, save_path=None):
-    """
-    Создаёт столбчатую диаграмму расходов по месяцам за указанный год.
-    Рендеринг matplotlib выполняется в ThreadPoolExecutor, не блокируя event loop.
-    """
-    if year is None:
-        year = datetime.datetime.now().year
-
-    expenses_df = await excel.get_all_expenses(user_id, year)
-
-    if expenses_df is None or expenses_df.empty:
-        return None
-
-    expenses_df['amount'] = expenses_df['amount'].astype(float)
-    monthly_expenses = expenses_df.groupby('month')['amount'].sum()
-
-    months_labels = [MONTH_NAMES_SHORT_RU[i] for i in range(1, 13)]
-    amounts = [float(monthly_expenses.get(i, 0)) for i in range(1, 13)]
-
-    if save_path is None:
-        user_dir = excel.create_user_dir(user_id)
-        save_path = os.path.join(user_dir, f"bar_chart_{year}.png")
-
-    loop = asyncio.get_event_loop()
-    return await loop.run_in_executor(
-        None,
-        functools.partial(_render_bar_chart, months_labels, amounts, year, save_path)
-    )
-
-
 async def create_category_trend_chart(user_id, category, year=None, save_path=None):
     """
     Создаёт линейный график тренда расходов по категории за год.
@@ -427,9 +397,120 @@ async def create_category_trend_chart(user_id, category, year=None, save_path=No
     )
 
 
-async def create_budget_comparison_chart(user_id, year=None, save_path=None):
-    """Budget functionality disabled. Returns None."""
-    return None
+def _render_budget_comparison_chart(budget_by_month: dict, spending_by_month: dict,
+                                     year: int, save_path: str) -> str:
+    """Синхронный рендеринг диаграммы «Бюджет vs. расходы по месяцам»."""
+    from matplotlib.patches import Patch
+    from matplotlib.lines import Line2D
+
+    months_labels = [MONTH_NAMES_SHORT_RU[i] for i in range(1, 13)]
+    spendings = [spending_by_month.get(i, 0.0) for i in range(1, 13)]
+    budgets_line = [budget_by_month.get(i) for i in range(1, 13)]  # None где бюджет не задан
+
+    # Цвет столбца: зелёный — в рамках бюджета, красный — перерасход, голубой — нет бюджета
+    colors = []
+    for i in range(12):
+        b = budgets_line[i]
+        if b is None:
+            colors.append('#90CAF9')   # голубой — бюджет не задан
+        elif spendings[i] <= b:
+            colors.append('#66BB6A')   # зелёный — ОК
+        else:
+            colors.append('#EF5350')   # красный — перерасход
+
+    max_spending = max(spendings) if any(s > 0 for s in spendings) else 0
+    max_budget = max((b for b in budgets_line if b is not None), default=0)
+    max_val = max(max_spending, max_budget, 1)
+
+    fig, ax = plt.subplots(figsize=(12, 6))
+    fig.patch.set_facecolor('white')
+
+    bars = ax.bar(months_labels, spendings, color=colors,
+                  edgecolor='white', linewidth=1.5, width=0.65)
+
+    # Подписи значений над столбцами
+    for bar, amount in zip(bars, spendings):
+        if amount > 0:
+            ax.text(
+                bar.get_x() + bar.get_width() / 2,
+                bar.get_height() + max_val * 0.012,
+                _fmt_amount(amount),
+                ha='center', va='bottom', fontsize=7.5, fontweight='bold', color='#444444',
+            )
+
+    # Горизонтальные пунктирные отрезки бюджета для каждого месяца
+    for i, b in enumerate(budgets_line):
+        if b is not None:
+            ax.plot(
+                [i - 0.38, i + 0.38], [b, b],
+                color='#FF6F00', linewidth=2.0, linestyle='--', alpha=0.85,
+                solid_capstyle='round',
+            )
+
+    ax.set_title(
+        f"Бюджет vs. расходы  •  {year} год",
+        loc='right',
+        fontsize=12, fontweight='bold', color='#333333', pad=12,
+    )
+    ax.set_xlabel("Месяц", fontsize=10, color='#555555')
+    ax.set_ylabel("Сумма, руб.", fontsize=10, color='#555555')
+    ax.yaxis.set_major_formatter(
+        mticker.FuncFormatter(lambda x, _: f"{int(x):,}".replace(",", "\u202f"))
+    )
+    ax.set_ylim(0, max_val * 1.25)
+    ax.tick_params(colors='#666666')
+
+    legend_elements = [
+        Patch(facecolor='#66BB6A', label='В рамках бюджета'),
+        Patch(facecolor='#EF5350', label='Превышение бюджета'),
+        Patch(facecolor='#90CAF9', label='Бюджет не задан'),
+        Line2D([0], [0], color='#FF6F00', linewidth=2.0, linestyle='--', label='Лимит бюджета'),
+    ]
+    ax.legend(handles=legend_elements, loc='upper left', frameon=False, fontsize=9)
+
+    sns.despine(left=False, bottom=False)
+    plt.savefig(save_path, bbox_inches='tight', facecolor='white')
+    plt.close(fig)
+    return save_path
+
+
+async def create_budget_comparison_chart(user_id, year=None, save_path=None, project_id=None):
+    """
+    Создаёт столбчатую диаграмму «Бюджет vs. расходы по месяцам».
+    Зелёные столбцы — расходы в рамках бюджета, красные — превышение.
+    Пунктирные горизонтальные линии — установленный лимит бюджета.
+    Рендеринг выполняется в ThreadPoolExecutor, не блокируя event loop.
+    """
+    if year is None:
+        year = datetime.datetime.now().year
+
+    from utils import budgets as budgets_utils
+    budgets_list = await budgets_utils.get_budgets_for_year(user_id, year, project_id)
+    if not budgets_list:
+        return None
+
+    budget_by_month = {b['month']: b['amount'] for b in budgets_list}
+
+    # Получаем фактические расходы
+    expenses_df = await excel.get_all_expenses(user_id, year)
+    spending_by_month: dict = {}
+    if expenses_df is not None and not expenses_df.empty:
+        expenses_df['amount'] = expenses_df['amount'].astype(float)
+        monthly = expenses_df.groupby('month')['amount'].sum()
+        spending_by_month = {int(m): float(v) for m, v in monthly.items()}
+
+    if save_path is None:
+        user_dir = excel.create_user_dir(user_id)
+        save_path = os.path.join(user_dir, f"budget_comparison_{year}.png")
+
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(
+        None,
+        functools.partial(
+            _render_budget_comparison_chart,
+            budget_by_month, spending_by_month, year, save_path,
+        )
+    )
 
 
 async def create_category_distribution_chart(user_id, year=None, save_path=None):
