@@ -10,7 +10,6 @@
 """
 
 import datetime
-import pytz
 from utils.logger import get_logger, log_event, log_error
 from utils import budgets as budgets_utils, excel
 from utils.projects import get_project_members
@@ -56,10 +55,7 @@ def _should_send(notified_at, last_notified_spending, current_spending: float) -
     """
     if notified_at is None:
         return True
-    now = datetime.datetime.now(pytz.UTC)
-    # Убедимся что notified_at timezone-aware
-    if notified_at.tzinfo is None:
-        notified_at = notified_at.replace(tzinfo=pytz.UTC)
+    now = datetime.datetime.utcnow()
     days_passed = (now - notified_at).total_seconds() / 86400
     spending_changed = (last_notified_spending is None or
                         abs(current_spending - last_notified_spending) > 0.01)
@@ -88,7 +84,7 @@ async def check_budget_notifications(bot) -> None:
     Основная функция планировщика.
     Проверяет все активные бюджеты и отправляет уведомления при необходимости.
     """
-    now = datetime.datetime.now(pytz.UTC)
+    now = datetime.datetime.utcnow()
     month = now.month
     year = now.year
 

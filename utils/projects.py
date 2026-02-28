@@ -45,25 +45,25 @@ async def create_project(user_id: int, project_name: str) -> dict:
         str(user_id),
     )
     
-    # Проверяем дубликат среди доступных пользователю проектов
+    # Проверяем дубликат среди доступных пользователю активных проектов
     existing = await db.fetchrow(
         """
         SELECT p.project_id
         FROM projects p
         JOIN project_members pm ON pm.project_id = p.project_id AND pm.user_id = $1
-        WHERE LOWER(p.project_name) = LOWER($2) AND p.is_active = TRUE
+        WHERE LOWER(p.project_name) = LOWER($2) AND p.deleted_at IS NULL
         """,
         str(user_id), project_name
     )
     if existing:
         return {'success': False, 'message': f"Проект '{project_name}' уже существует"}
-    
+
     # Insert project and let database generate project_id from sequence
     row = await db.fetchrow(
-        """INSERT INTO projects(user_id, project_name, created_date, is_active)
-           VALUES($1, $2, $3, $4)
+        """INSERT INTO projects(user_id, project_name, created_date)
+           VALUES($1, $2, $3)
            RETURNING project_id""",
-        str(user_id), project_name, datetime.date.today(), True
+        str(user_id), project_name, datetime.date.today()
     )
     project_id = row['project_id']
     
@@ -103,23 +103,23 @@ async def get_all_projects(user_id: int) -> list:
     rows = await db.fetch(
         """
         -- Собственные проекты пользователя (он владелец)
-        SELECT p.project_id, p.project_name, p.created_date, p.is_active,
+        SELECT p.project_id, p.project_name, p.created_date,
                p.user_id as owner_id,
                pm.role
         FROM projects p
         JOIN project_members pm ON pm.project_id = p.project_id AND pm.user_id = $1
-        WHERE p.is_active = TRUE
+        WHERE p.deleted_at IS NULL
           AND p.user_id = $1
 
         UNION
 
         -- Проекты, в которых пользователь состоит как участник (не владелец)
-        SELECT p.project_id, p.project_name, p.created_date, p.is_active,
+        SELECT p.project_id, p.project_name, p.created_date,
                p.user_id as owner_id,
                pm.role
         FROM projects p
         JOIN project_members pm ON pm.project_id = p.project_id AND pm.user_id = $1
-        WHERE p.is_active = TRUE
+        WHERE p.deleted_at IS NULL
           AND p.user_id <> $1
 
         ORDER BY project_id
@@ -132,7 +132,6 @@ async def get_all_projects(user_id: int) -> list:
             'project_id': r['project_id'],
             'project_name': r['project_name'],
             'created_date': r['created_date'].strftime('%Y-%m-%d') if r['created_date'] else None,
-            'is_active': r['is_active'],
             'owner_id': r['owner_id'],
             'role': r['role'],
             'is_owner': r['owner_id'] == str(user_id),
@@ -148,23 +147,22 @@ async def get_project_by_id(user_id: int, project_id: int) -> Optional[dict]:
     """
     row = await db.fetchrow(
         """
-        SELECT p.project_id, p.project_name, p.created_date, p.is_active,
+        SELECT p.project_id, p.project_name, p.created_date,
                p.user_id as owner_id,
                pm.role
         FROM projects p
         JOIN project_members pm ON pm.project_id = p.project_id AND pm.user_id = $1
-        WHERE p.project_id = $2 AND p.is_active = TRUE
+        WHERE p.project_id = $2 AND p.deleted_at IS NULL
         """,
         str(user_id), project_id
     )
     if not row:
         return None
-    
+
     return {
         'project_id': row['project_id'],
         'project_name': row['project_name'],
         'created_date': row['created_date'].strftime('%Y-%m-%d') if row['created_date'] else None,
-        'is_active': row['is_active'],
         'owner_id': row['owner_id'],
         'role': row['role'],
         'is_owner': row['owner_id'] == str(user_id),
@@ -177,23 +175,22 @@ async def get_project_by_name(user_id: int, project_name: str) -> Optional[dict]
     """
     row = await db.fetchrow(
         """
-        SELECT p.project_id, p.project_name, p.created_date, p.is_active,
+        SELECT p.project_id, p.project_name, p.created_date,
                p.user_id as owner_id,
                pm.role
         FROM projects p
         JOIN project_members pm ON pm.project_id = p.project_id AND pm.user_id = $1
-        WHERE LOWER(p.project_name) = LOWER($2) AND p.is_active = TRUE
+        WHERE LOWER(p.project_name) = LOWER($2) AND p.deleted_at IS NULL
         """,
         str(user_id), project_name
     )
     if not row:
         return None
-    
+
     return {
         'project_id': row['project_id'],
         'project_name': row['project_name'],
         'created_date': row['created_date'].strftime('%Y-%m-%d') if row['created_date'] else None,
-        'is_active': row['is_active'],
         'owner_id': row['owner_id'],
         'role': row['role'],
         'is_owner': row['owner_id'] == str(user_id),
@@ -210,7 +207,7 @@ async def is_project_member(user_id: int, project_id: int) -> bool:
         SELECT 1
         FROM projects p
         JOIN project_members pm ON pm.project_id = p.project_id AND pm.user_id = $1
-        WHERE p.project_id = $2 AND p.is_active = TRUE
+        WHERE p.project_id = $2 AND p.deleted_at IS NULL
         """,
         str(user_id), project_id
     )
@@ -236,11 +233,11 @@ async def get_user_role_in_project(user_id: int, project_id: int) -> Optional[st
             END as role
         FROM projects p
         LEFT JOIN project_members pm ON p.project_id = pm.project_id AND pm.user_id = $1
-        WHERE p.project_id = $2 AND p.is_active = TRUE
+        WHERE p.project_id = $2 AND p.deleted_at IS NULL
         """,
         str(user_id), project_id
     )
-    
+
     log_event(logger, "get_user_role_in_project_debug",
              user_id=user_id, project_id=project_id,
              row_found=row is not None,
@@ -345,9 +342,10 @@ async def get_project_stats(user_id: int, project_id: int) -> dict:
 
 async def delete_project(user_id: int, project_id: int) -> dict:
     """
-    Мягкое удаление проекта: устанавливает is_active = FALSE.
+    Мягкое удаление проекта: устанавливает deleted_at = NOW().
     Данные (расходы, категории, участники) сохраняются в БД.
     Только владелец проекта может удалить его.
+    Проекты, удалённые более месяца назад, очищаются автоматически.
     """
     from utils.permissions import Permission, has_permission
 
@@ -360,9 +358,9 @@ async def delete_project(user_id: int, project_id: int) -> dict:
     if not project:
         return {'success': False, 'message': "Проект не найден или у вас нет доступа"}
 
-    # Помечаем проект как неактивный (мягкое удаление)
+    # Помечаем проект как удалённый (мягкое удаление через deleted_at)
     await db.execute(
-        "UPDATE projects SET is_active = FALSE WHERE project_id = $1",
+        "UPDATE projects SET deleted_at = NOW() WHERE project_id = $1",
         project_id
     )
 
@@ -373,6 +371,75 @@ async def delete_project(user_id: int, project_id: int) -> dict:
     )
 
     return {'success': True, 'message': f"Проект '{project['project_name']}' удалён"}
+
+
+async def restore_project(user_id: int, project_id: int) -> dict:
+    """
+    Восстанавливает мягко удалённый проект: сбрасывает deleted_at = NULL.
+    Только владелец проекта может восстановить его.
+    """
+    # Ищем удалённый проект, проверяем владельца напрямую (без фильтра deleted_at IS NULL)
+    row = await db.fetchrow(
+        """
+        SELECT p.project_id, p.project_name
+        FROM projects p
+        JOIN project_members pm ON pm.project_id = p.project_id
+            AND pm.user_id = $1 AND pm.role = 'owner'
+        WHERE p.project_id = $2 AND p.deleted_at IS NOT NULL
+        """,
+        str(user_id), project_id
+    )
+    if not row:
+        return {
+            'success': False,
+            'message': "Удалённый проект не найден или вы не являетесь его владельцем"
+        }
+
+    await db.execute(
+        "UPDATE projects SET deleted_at = NULL WHERE project_id = $1",
+        project_id
+    )
+
+    log_event(logger, "project_restored", user_id=user_id, project_id=project_id,
+              project_name=row['project_name'])
+
+    return {'success': True, 'message': f"Проект '{row['project_name']}' восстановлен"}
+
+
+async def cleanup_old_deleted_projects(batch_size: int = 500) -> int:
+    """
+    Физически удаляет проекты, помеченные как удалённые более 1 месяца назад.
+    Использует батчевое удаление (не более batch_size за один вызов), чтобы
+    не блокировать таблицу на длительное время.
+
+    Returns:
+        Количество физически удалённых проектов за этот запуск.
+    """
+    try:
+        result = await db.execute(
+            """
+            DELETE FROM projects
+            WHERE project_id IN (
+                SELECT project_id
+                FROM projects
+                WHERE deleted_at IS NOT NULL
+                  AND deleted_at < NOW() - INTERVAL '1 month'
+                LIMIT $1
+            )
+            """,
+            batch_size
+        )
+        deleted_count = int(result.split()[-1]) if result and result.startswith("DELETE") else 0
+
+        if deleted_count > 0:
+            log_event(logger, "old_deleted_projects_cleaned", count=deleted_count,
+                      batch_size=batch_size)
+
+        return deleted_count
+
+    except Exception as e:
+        log_error(logger, e, "cleanup_old_deleted_projects_error", batch_size=batch_size)
+        return 0
 
 
 async def create_invitation(
