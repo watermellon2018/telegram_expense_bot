@@ -1,0 +1,41 @@
+name: Label issues when merged to dev
+
+on:
+  pull_request:
+    branches:
+      - dev
+    types:
+      - closed
+
+jobs:
+  label_issues:
+    if: github.event.pull_request.merged == true
+    runs-on: ubuntu-latest
+    steps:
+      - name: Find linked issues
+        id: find
+        uses: Nearsoft/find-linked-issues@v2
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          pull-request-number: ${{ github.event.pull_request.number }}
+          repository: ${{ github.repository }}
+
+      - name: Add "in_dev" label to linked issues
+        if: steps.find.outputs.linked-issues != ''
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const issues = '${{ steps.find.outputs.linked-issues }}'
+              .split(',')
+              .map(n => parseInt(n.trim(), 10))
+              .filter(Boolean);
+
+            for (const issue_number of issues) {
+              await github.rest.issues.addLabels({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number,
+                labels: ['in_dev'],
+              });
+            }
