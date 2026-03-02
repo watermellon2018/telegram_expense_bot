@@ -1,0 +1,18 @@
+name: Rollback to Previous
+
+on:
+  workflow_dispatch:
+
+jobs:
+  rollback:
+    runs-on: self-hosted
+    steps:
+      - name: Read previous version
+        run: |
+          PREV=$(cat /opt/money_bot/previous_version)
+          echo "BOT_TAG=$PREV" >> $GITHUB_ENV
+
+      - name: Redeploy previous version
+        run: |
+          docker compose pull money_bot
+          docker compose up -d --no-deps money_bot
