@@ -188,7 +188,7 @@ def _page_overview(pdf: PdfPages, df: pd.DataFrame, today: datetime.date):
 
     # ── Line-график ──────────────────────────────────────────────────────────
     ax_line = fig.add_subplot(4, 1, 2)
-    ax_line.set_position([0.06, 0.66, 0.90, 0.17])
+    ax_line.set_position([0.09, 0.66, 0.87, 0.17])
     
     max_v = max(monthly_totals) if monthly_totals else 1
     ax_line.fill_between(range(12), monthly_totals, alpha=0.10, color="#4E79A7")
@@ -209,7 +209,7 @@ def _page_overview(pdf: PdfPages, df: pd.DataFrame, today: datetime.date):
     sns.despine(ax=ax_line)
 
     # ── Топ-5 категорий ──────────────────────────────────────────────────────
-    ax_top = fig.add_axes([0.06, 0.42, 0.45, 0.16])
+    ax_top = fig.add_axes([0.06, 0.44, 0.45, 0.16])
     ax_top.set_axis_off()
     ax_top.set_title("Топ-5 категорий за год", fontsize=20, fontweight='bold',
                      color='#333333', loc='left', pad=2)
@@ -275,7 +275,7 @@ def _page_overview(pdf: PdfPages, df: pd.DataFrame, today: datetime.date):
     # tbl.auto_set_column_width([0, 1, 2, 3])  # not used for compactness
 
     # ── Три виджета (справа от топ-5) ────────────────────────────────────────
-    widget_ax = fig.add_axes([0.53, 0.42, 0.44, 0.16])
+    widget_ax = fig.add_axes([0.53, 0.44, 0.44, 0.16])
     widget_ax.set_axis_off()
 
     n_tx = len(df)
@@ -445,7 +445,7 @@ def _page_structure_table(pdf: PdfPages, df: pd.DataFrame, today: datetime.date)
     fig.text(0.5, 0.960, "Сводная таблица по месяцам",
              ha='center', fontsize=14, color='#888888')
 
-    ax = fig.add_axes([0.02, 0.58, 0.96, 0.37])
+    ax = fig.add_axes([0.07, 0.58, 0.91, 0.37])
     ax.set_axis_off()
 
     col_labels = [f"{MONTH_SHORT_RU[m]}'{str(y)[2:]}" for y, m in months]
