@@ -258,7 +258,8 @@ def get_main_menu_keyboard():
     keyboard = [
         [btn["add"],    btn["day"],        btn["month"]],
         [btn["budget"], btn["categories"], btn["projects"]],
-        [btn["stats"],  btn["export"],     btn["help"]],
+        [btn["stats"],  btn["export"],     btn["report"]],
+        [btn["help"]],
     ]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
