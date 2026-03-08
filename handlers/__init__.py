@@ -6,6 +6,7 @@ from handlers.start import register_start_handlers
 from handlers.expense import register_expense_handlers
 from handlers.stats import register_stats_handlers
 from handlers.export import register_export_handlers
+from handlers.report import register_report_handlers
 from handlers.project import register_project_handlers
 from handlers.category import register_category_handlers
 from handlers.invitations import register_invitation_handlers
@@ -21,8 +22,9 @@ def register_all_handlers(application):
     register_project_management_handlers(application)  # Register management UI
     register_start_handlers(application)
 
-    # Важный порядок! Экспорт и другие кнопки меню — до expense.text_handler (который ловит любой текст)
+    # Важный порядок! Кнопки меню — до expense.text_handler (который ловит любой текст)
     register_export_handlers(application)
+    register_report_handlers(application)      # Отчёт — до expense
     register_stats_handlers(application)
     register_category_handlers(application)
     register_budget_handlers(application)      # Бюджет — до expense (expense ловит любой текст)

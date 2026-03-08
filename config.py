@@ -88,6 +88,7 @@ MAIN_MENU_BUTTONS = {
     "stats":     "📈 Статистика",
     "categories":"📂 Категории",
     "export":    "📤 Экспорт",
+    "report":    "📊 Отчёт",
     "projects":  "📁 Проекты",
     "help":      "❓ Помощь",
     "main_menu": "⬅️ Главное меню",
