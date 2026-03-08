@@ -185,7 +185,7 @@ def _page_overview(pdf: PdfPages, df: pd.DataFrame, today: datetime.date):
                     transform=kpi_ax.transAxes)
 
     fig.suptitle(f"Отчёт по расходам  •  {MONTH_NAMES_RU[cur_month]} {cur_year}",
-             fontsize=25, fontweight='bold', color='#2A2A2A', y=0.95)
+             fontsize=25, fontweight='bold', color='#2A2A2A', y=0.95, x=0.545, ha="center")
 
 
     # ── Line-график ──────────────────────────────────────────────────────────
@@ -834,6 +834,8 @@ def _page_heatmaps(pdf: PdfPages, df: pd.DataFrame, today: datetime.date):
         cbar_kws={'label': '₽'},
         annot_kws={'fontsize': 14},
     )
+    for _coll in ax1.collections:
+        _coll.set_alpha(0.9)
     ax1.set_title("Средние расходы по дням недели, ₽",
                   fontsize=20, fontweight='bold', color='#333333', loc='left', pad=20)
     ax1.set_ylabel('')
@@ -846,6 +848,8 @@ def _page_heatmaps(pdf: PdfPages, df: pd.DataFrame, today: datetime.date):
         cbar_kws={'label': '₽'},
         yticklabels=pivot2_labels,
     )
+    for _coll in ax2.collections:
+        _coll.set_alpha(0.9)
     ax2.set_title("Суммы расходов по дням месяца × месяцам, ₽",
                   fontsize=20, fontweight='bold', color='#333333', loc='left', pad=20)
     ax2.set_xlabel("День месяца", fontsize=14, color='#555555')
@@ -1031,6 +1035,8 @@ def _page_scatter3_hm3(pdf: PdfPages, df: pd.DataFrame, today: datetime.date):
             cbar_kws={'label': '₽'},
             annot_kws={'fontsize': 14},
         )
+        for _coll in ax2.collections:
+            _coll.set_alpha(0.9)
         ax2.set_title("Расходы по категориям × дням недели, ₽",
                       fontsize=20, fontweight='bold', color='#333333', loc='left', pad=20)
         ax2.set_xlabel("День недели", fontsize=14, color='#555555')
