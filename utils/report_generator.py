@@ -180,7 +180,7 @@ def _page_overview(pdf: PdfPages, df: pd.DataFrame, today: datetime.date):
         kpi_ax.add_patch(rect)
         kpi_ax.text(x0 + 0.1, 0.72, label, ha='center', va='top',
                     fontsize=20, color='#555555', transform=kpi_ax.transAxes)
-        kpi_ax.text(x0 + 0.1, 0.35, value, ha='center', va='center',
+        kpi_ax.text(x0 + 0.1, 0.3, value, ha='center', va='center',
                     fontsize=25, fontweight='bold', color=color,
                     transform=kpi_ax.transAxes)
 
@@ -214,7 +214,7 @@ def _page_overview(pdf: PdfPages, df: pd.DataFrame, today: datetime.date):
     ax_top = fig.add_axes([0.09, 0.43, 0.44, 0.16])
     ax_top.set_axis_off()
     ax_top.set_title("Топ-5 категорий за год", fontsize=20, fontweight='bold',
-                     color='#333333', loc='left', pad=2)
+                     color='#333333', loc='left', pad=3)
 
     col_labels = ['Категория', 'Сумма', '%', 'Самая дорогая покупка']
     table_data = []
