@@ -446,7 +446,7 @@ def _page_structure_table(pdf: PdfPages, df: pd.DataFrame, today: datetime.date)
 
     for (r, c), cell in tbl.get_celld().items():
         cell.set_edgecolor('#dddddd')
-        cell.set_fontsize(16)
+        cell.set_fontsize(18)
         if r == 0:
             cell.set_facecolor('#4E79A7')
             cell.set_text_props(color='white', fontweight='bold', fontsize=18)
