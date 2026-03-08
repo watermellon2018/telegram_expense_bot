@@ -18,6 +18,7 @@ matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import matplotlib.ticker as mticker
 import matplotlib.patches as mpatches
+import matplotlib.gridspec as gridspec
 from matplotlib.backends.backend_pdf import PdfPages
 import seaborn as sns
 
@@ -68,6 +69,8 @@ def _set_style():
         'savefig.dpi': 120,
         'axes.spines.top': False,
         'axes.spines.right': False,
+        'xtick.labelsize': 12,
+        'ytick.labelsize': 12,
     })
 
 
@@ -95,7 +98,7 @@ def _month_label(year: int, month: int, today: datetime.date) -> str:
     """Подпись месяца: «Янв» или «Янв'25» если год не текущий."""
     short = MONTH_SHORT_RU[month]
     if year != today.year:
-        return f"{short}'{str(year)[2:]}"
+        return f"{short} {str(year)[2:]}"
     return short
 
 
@@ -140,7 +143,7 @@ def _page_overview(pdf: PdfPages, df: pd.DataFrame, today: datetime.date):
     pivot_rows = []
     for y, m in months:
         sub = df[(df['date'].dt.year == y) & (df['date'].dt.month == m)]
-        row_data = {'Месяц': f"{MONTH_SHORT_RU[m]}'{str(y)[2:]}"}
+        row_data = {'Месяц': f"{MONTH_SHORT_RU[m]} {str(y)[2:]}"}
         for cat in top_cats:
             cat_sub = sub[sub['category'] == cat]
             if not cat_sub.empty and len(cat_sub) > 0:
@@ -155,7 +158,7 @@ def _page_overview(pdf: PdfPages, df: pd.DataFrame, today: datetime.date):
     _set_style()
 
     # ── KPI-блоки ────────────────────────────────────────────────────────────
-    kpi_ax = fig.add_axes([0.05, 0.86, 0.95, 0.10])
+    kpi_ax = fig.add_axes([0.09, 0.83, 0.95, 0.10])
     kpi_ax.set_axis_off()
 
     kpi_items = [
@@ -181,14 +184,13 @@ def _page_overview(pdf: PdfPages, df: pd.DataFrame, today: datetime.date):
                     fontsize=25, fontweight='bold', color=color,
                     transform=kpi_ax.transAxes)
 
-    fig.text(0.5, 0.975, f"Отчёт по расходам  •  {MONTH_NAMES_RU[cur_month]} {cur_year}",
-             ha='center', fontsize=20, fontweight='bold', color='#2A2A2A')
-    fig.text(0.5, 0.965, "Раздел 1 — Обзор / Итоги года (скользящие 12 месяцев)",
-             ha='center', fontsize=14, color='#888888')
+    fig.suptitle(f"Отчёт по расходам  •  {MONTH_NAMES_RU[cur_month]} {cur_year}",
+             fontsize=25, fontweight='bold', color='#2A2A2A', y=0.95)
+
 
     # ── Line-график ──────────────────────────────────────────────────────────
     ax_line = fig.add_subplot(4, 1, 2)
-    ax_line.set_position([0.09, 0.66, 0.87, 0.17])
+    ax_line.set_position([0.09, 0.63, 0.92, 0.17])
     
     max_v = max(monthly_totals) if monthly_totals else 1
     ax_line.fill_between(range(12), monthly_totals, alpha=0.10, color="#4E79A7")
@@ -198,18 +200,18 @@ def _page_overview(pdf: PdfPages, df: pd.DataFrame, today: datetime.date):
     for i, v in enumerate(monthly_totals):
         if v > 0:
             ax_line.text(i, v + max_v * 0.04, _fmt(v),
-                         ha='center', fontsize=11, fontweight='bold', color='#444444')
+                         ha='center', fontsize=12, fontweight='bold', color='#444444')
     ax_line.set_xticks(range(12))
-    ax_line.set_xticklabels(month_labels, fontsize=11)
+    ax_line.set_xticklabels(month_labels, fontsize=12)
     ax_line.yaxis.set_major_formatter(mticker.FuncFormatter(_rub_formatter))
     ax_line.set_ylim(0, max_v * 1.25)
     ax_line.set_title("Расходы по месяцам (скользящий год)",
-                      fontsize=16, fontweight='bold', color='#333333', loc='left', pad=10)
-    ax_line.tick_params(colors='#666666')
+                      fontsize=20, fontweight='bold', color='#333333', loc='left', pad=10)
+    ax_line.tick_params(colors='#666666', labelsize=12)
     sns.despine(ax=ax_line)
 
     # ── Топ-5 категорий ──────────────────────────────────────────────────────
-    ax_top = fig.add_axes([0.06, 0.44, 0.45, 0.16])
+    ax_top = fig.add_axes([0.09, 0.43, 0.44, 0.16])
     ax_top.set_axis_off()
     ax_top.set_title("Топ-5 категорий за год", fontsize=20, fontweight='bold',
                      color='#333333', loc='left', pad=2)
@@ -230,7 +232,7 @@ def _page_overview(pdf: PdfPages, df: pd.DataFrame, today: datetime.date):
         colLabels=col_labels,
         cellLoc='center',
         loc='upper left',
-        bbox=[0.01, 0.01, 0.98, 0.95]
+        bbox=[0, 0, 0.93, 0.95]
     )
     tbl.auto_set_font_size(False)
     tbl.set_fontsize(18)  # larger font
@@ -275,7 +277,7 @@ def _page_overview(pdf: PdfPages, df: pd.DataFrame, today: datetime.date):
     # tbl.auto_set_column_width([0, 1, 2, 3])  # not used for compactness
 
     # ── Три виджета (справа от топ-5) ────────────────────────────────────────
-    widget_ax = fig.add_axes([0.53, 0.44, 0.44, 0.16])
+    widget_ax = fig.add_axes([0.53, 0.44, 0.51, 0.16])
     widget_ax.set_axis_off()
 
     n_tx = len(df)
@@ -284,31 +286,31 @@ def _page_overview(pdf: PdfPages, df: pd.DataFrame, today: datetime.date):
 
     widget_items = [
         ("Транзакций", f"{n_tx:,}".replace(",", "\u202f"), "#4E79A7"),
-        ("Ср. расход\nв месяц", _fmt(avg_monthly), "#59A14F"),
-        ("Средний\nчек", _fmt(avg_check), "#F28E2B"),
+        ("Средний расход\nв месяц", _fmt(avg_monthly), "#59A14F"),
+        ("Средний чек", _fmt(avg_check), "#F28E2B"),
     ]
 
     for i, (label, value, color) in enumerate(widget_items):
         x0 = i * 0.334
         rect = mpatches.FancyBboxPatch(
-            (x0 + 0.01, 0.06), 0.305, 0.88,
+            (x0 + 0.01, 0.06), 0.27, 0.68,
             boxstyle="round,pad=0.02",
             facecolor=color, alpha=0.15,
             transform=widget_ax.transAxes, clip_on=False,
         )
         widget_ax.add_patch(rect)
-        widget_ax.text(x0 + 0.163, 0.75, label, ha='center', va='top',
-                       fontsize=16, color='#555555',
+        widget_ax.text(x0 + 0.15, 0.5, label, ha='center', va='top',
+                       fontsize=20, color='#555555',
                        transform=widget_ax.transAxes, multialignment='center')
-        widget_ax.text(x0 + 0.163, 0.28, value, ha='center', va='center',
-                       fontsize=20, fontweight='bold', color=color,
+        widget_ax.text(x0 + 0.15, 0.25, value, ha='center', va='center',
+                       fontsize=25, fontweight='bold', color=color,
                        transform=widget_ax.transAxes)
 
     # ── Средний чек по категориям (pivot) ────────────────────────────────────
-    fig.text(0.06, 0.40, "Средний чек по категориям, ₽",
+    fig.text(0.09, 0.40, "Средний чек по категориям, ₽",
              fontsize=20, fontweight='bold', color='#333333')
 
-    ax_pivot = fig.add_axes([0.06, 0.05, 0.91, 0.34])
+    ax_pivot = fig.add_axes([0.09, 0.05, 0.93, 0.34])
     ax_pivot.set_axis_off()
 
     pivot_cols = ['Месяц'] + [_cap(c) for c in top_cats]
@@ -349,83 +351,7 @@ def _page_overview(pdf: PdfPages, df: pd.DataFrame, today: datetime.date):
         else:
             cell.set_facecolor('white')
 
-    pdf.savefig(fig, bbox_inches='tight', facecolor='white')
-    plt.close(fig)
-
-
-# ─── Страница 1b: Средний чек по категориям ─────────────────────────────────
-
-def _page_pivot_table(pdf: PdfPages, df: pd.DataFrame, today: datetime.date):
-    months = _rolling_months(today)
-    cat_totals = df.groupby('category')['amount'].sum().sort_values(ascending=False)
-    top_cats = list(cat_totals.head(min(8, len(cat_totals))).index)
-
-    pivot_rows = []
-    for y, m in months:
-        sub = df[(df['date'].dt.year == y) & (df['date'].dt.month == m)]
-        row_data = {'Месяц': f"{MONTH_SHORT_RU[m]}'{str(y)[2:]}"}
-        for cat in top_cats:
-            cat_sub = sub[sub['category'] == cat]
-            if not cat_sub.empty and len(cat_sub) > 0:
-                avg = cat_sub['amount'].sum() / len(cat_sub)
-                row_data[_cap(cat)] = f"{int(round(avg)):,}".replace(",", "\u202f")
-            else:
-                row_data[_cap(cat)] = '—'
-        pivot_rows.append(row_data)
-
-    fig = plt.figure(figsize=(22, 8))
-    fig.patch.set_facecolor('white')
-    _set_style()
-
-    fig.text(0.5, 0.97, "Раздел 1 — Обзор",
-             ha='center', fontsize=20, fontweight='bold', color='#2A2A2A')
-    fig.text(0.5, 0.945, "Средний чек по категориям, ₽ (скользящие 12 месяцев)",
-             ha='center', fontsize=14, color='#888888')
-
-    ax = fig.add_axes([0.05, 0.07, 0.90, 0.84])
-    ax.set_axis_off()
-
-    pivot_cols = ['Месяц'] + [_cap(c) for c in top_cats]
-    pivot_vals = [[row.get(col, '—') for col in pivot_cols] for row in pivot_rows]
-
-    n_cats = len(top_cats)
-    month_col_w = 0.10
-    cat_col_w = round((1.0 - month_col_w) / n_cats, 4) if n_cats else 0.11
-
-    tbl = ax.table(
-        cellText=pivot_vals,
-        colLabels=pivot_cols,
-        cellLoc='center',
-        loc='center',
-        bbox=[0, 0, 1, 1],
-    )
-    tbl.auto_set_font_size(False)
-    tbl.set_fontsize(18)
-
-    # Ширины столбцов
-    for row_i in range(len(pivot_vals) + 1):
-        tbl[(row_i, 0)].set_width(month_col_w)
-        for col_i in range(1, n_cats + 1):
-            tbl[(row_i, col_i)].set_width(cat_col_w)
-
-    # Стиль ячеек
-    for (r, c), cell in tbl.get_celld().items():
-        cell.set_edgecolor('#dddddd')
-        cell.set_linewidth(0.6)
-        cell.PAD = 0.06
-        cell.set_fontsize(18)
-        if r == 0:
-            cell.set_facecolor('#4E79A7')
-            cell.set_text_props(color='white', fontweight='bold')
-        elif c == 0:
-            cell.set_facecolor('#e8eef4')
-            cell.set_text_props(fontweight='bold')
-        elif r % 2 == 0:
-            cell.set_facecolor('#f5f7fa')
-        else:
-            cell.set_facecolor('white')
-
-    pdf.savefig(fig, bbox_inches='tight', facecolor='white')
+    pdf.savefig(fig, bbox_inches='tight', pad_inches=0.5, facecolor='white')
     plt.close(fig)
 
 
@@ -436,19 +362,23 @@ def _page_structure_table(pdf: PdfPages, df: pd.DataFrame, today: datetime.date)
     cur_m, cur_y = today.month, today.year
     prev_m = cur_m - 1 if cur_m > 1 else 12
     prev_y = cur_y if cur_m > 1 else cur_y - 1
+    six_ago_m = cur_m - 6 if cur_m > 6 else cur_m - 6 + 12
+    six_ago_y = cur_y if cur_m > 6 else cur_y - 1
+    monthly_sums = {(y, m): df[(df['date'].dt.year == y) & (df['date'].dt.month == m)]['amount'].sum()
+                    for y, m in months}
+    non_zero = {k: v for k, v in monthly_sums.items() if v > 0}
+    richest = max(non_zero, key=non_zero.get) if non_zero else months[-1]
 
-    fig = plt.figure(figsize=(28, 18))
+    fig = plt.figure(figsize=(22, 22))
     fig.patch.set_facecolor('white')
     _set_style()
-    fig.text(0.5, 0.975, "Раздел 2 — Структура расходов",
-             ha='center', fontsize=20, fontweight='bold', color='#2A2A2A')
-    fig.text(0.5, 0.960, "Сводная таблица по месяцам",
-             ha='center', fontsize=14, color='#888888')
+    fig.suptitle("Раздел 2 — Структура расходов",
+                 fontsize=25, fontweight='bold', color='#2A2A2A', y=0.95)
 
-    ax = fig.add_axes([0.07, 0.58, 0.91, 0.37])
+    ax = fig.add_axes([0.17, 0.575, 0.78, 0.34])
     ax.set_axis_off()
 
-    col_labels = [f"{MONTH_SHORT_RU[m]}'{str(y)[2:]}" for y, m in months]
+    col_labels = [f"{MONTH_SHORT_RU[m]} {str(y)[2:]}" for y, m in months]
     row_labels = [
         'Факт (₽)',
         'Бюджет (₽)',
@@ -516,7 +446,7 @@ def _page_structure_table(pdf: PdfPages, df: pd.DataFrame, today: datetime.date)
 
     for (r, c), cell in tbl.get_celld().items():
         cell.set_edgecolor('#dddddd')
-        cell.set_fontsize(18)
+        cell.set_fontsize(16)
         if r == 0:
             cell.set_facecolor('#4E79A7')
             cell.set_text_props(color='white', fontweight='bold', fontsize=18)
@@ -528,21 +458,34 @@ def _page_structure_table(pdf: PdfPages, df: pd.DataFrame, today: datetime.date)
         else:
             cell.set_facecolor('white')
 
-    # ── Круговые диаграммы: текущий и прошлый месяц ──────────────────────────
-    fig.text(0.03, 0.535, "Круговые диаграммы",
-             fontsize=20, fontweight='bold', color='#333333')
-    fig.text(0.03, 0.516, f"Текущий месяц — {MONTH_NAMES_RU[cur_m]} {cur_y}  ·  "
-                          f"Прошлый месяц — {MONTH_NAMES_RU[prev_m]} {prev_y}",
-             fontsize=14, color='#888888')
+    # ── Круговые диаграммы: все 4 в один ряд ─────────────────────────────────
+    ry, rm = richest
+    fig.text(0.5, 0.54, "Круговые диаграммы",
+             ha='center', fontsize=23, fontweight='bold', color='#333333')
 
-    ax_pie1 = fig.add_axes([0.04, 0.15, 0.43, 0.34])
-    ax_pie2 = fig.add_axes([0.53, 0.15, 0.43, 0.34])
-    _pie_for_period(ax_pie1, df, cur_y, cur_m,
-                    f"Текущий месяц — {MONTH_NAMES_RU[cur_m]} {cur_y}")
-    _pie_for_period(ax_pie2, df, prev_y, prev_m,
-                    f"Прошлый месяц — {MONTH_NAMES_RU[prev_m]} {prev_y}")
+    pie_w, pie_h, pie_y = 0.21, 0.36, 0.14
+    pie_title_y = pie_y + pie_h + 0.008   # фиксированная y для всех заголовков
+    pie_xs = [0.04, 0.28, 0.52, 0.76]
+    pie_titles = [
+        f"Текущий — {MONTH_NAMES_RU[cur_m]} {cur_y}",
+        f"Прошлый — {MONTH_NAMES_RU[prev_m]} {prev_y}",
+        f"6 мес. назад — {MONTH_NAMES_RU[six_ago_m]} {six_ago_y}",
+        f"Самый дорогой — {MONTH_NAMES_RU[rm]} {ry}",
+    ]
+    for px, ptitle in zip(pie_xs, pie_titles):
+        fig.text(px + pie_w / 2, pie_title_y, ptitle,
+                 ha='center', va='bottom', fontsize=16, fontweight='bold', color='#333333')
 
-    pdf.savefig(fig, bbox_inches='tight', facecolor='white')
+    ax_pie1 = fig.add_axes([pie_xs[0], pie_y, pie_w, pie_h])
+    ax_pie2 = fig.add_axes([pie_xs[1], pie_y, pie_w, pie_h])
+    ax_pie3 = fig.add_axes([pie_xs[2], pie_y, pie_w, pie_h])
+    ax_pie4 = fig.add_axes([pie_xs[3], pie_y, pie_w, pie_h])
+    _pie_for_period(ax_pie1, df, cur_y,     cur_m,     "")
+    _pie_for_period(ax_pie2, df, prev_y,    prev_m,    "")
+    _pie_for_period(ax_pie3, df, six_ago_y, six_ago_m, "")
+    _pie_for_period(ax_pie4, df, ry,        rm,        "")
+
+    pdf.savefig(fig, bbox_inches='tight', pad_inches=0.5, facecolor='white')
     plt.close(fig)
 
 
@@ -552,8 +495,9 @@ def _pie_for_period(ax, df: pd.DataFrame, year: int, month: int, title: str):
     sub = df[(df['date'].dt.year == year) & (df['date'].dt.month == month)]
     if sub.empty:
         ax.text(0.5, 0.5, 'Нет данных', ha='center', va='center',
-                fontsize=11, color='#999999', transform=ax.transAxes)
-        ax.set_title(title, fontsize=20, fontweight='bold', color='#333333', pad=6)
+                fontsize=16, fontweight='bold', color='#999999', transform=ax.transAxes)
+        if title:
+            ax.set_title(title, fontsize=20, fontweight='bold', color='#333333', pad=6)
         ax.axis('off')
         return
 
@@ -573,43 +517,13 @@ def _pie_for_period(ax, df: pd.DataFrame, year: int, month: int, title: str):
                        startangle=90, counterclock=False,
                        wedgeprops=dict(width=0.5, edgecolor='white', linewidth=0.5))
     ax.text(0, 0, _fmt(total), ha='center', va='center',
-            fontsize=9, fontweight='bold', color='#2A2A2A')
+            fontsize=15, fontweight='bold', color='#2A2A2A')
 
     legend_texts = [f"{lbl}  {v/total*100:.0f}%" for lbl, v in zip(labels, values)]
-    ax.legend(wedges, legend_texts, loc='lower center', bbox_to_anchor=(0.5, -0.30),
-              fontsize=7, frameon=False, ncol=2)
-    ax.set_title(title, fontsize=20, fontweight='bold', color='#333333', pad=6)
-
-
-def _page_pie_charts(pdf: PdfPages, df: pd.DataFrame, today: datetime.date):
-    cur_m, cur_y = today.month, today.year
-    six_ago_m = cur_m - 6 if cur_m > 6 else cur_m - 6 + 12
-    six_ago_y = cur_y if cur_m > 6 else cur_y - 1
-
-    # Самый дорогой месяц
-    months = _rolling_months(today)
-    monthly_sums = {(y, m): df[(df['date'].dt.year == y) & (df['date'].dt.month == m)]['amount'].sum()
-                    for y, m in months}
-    non_zero = {k: v for k, v in monthly_sums.items() if v > 0}
-    richest = max(non_zero, key=non_zero.get) if non_zero else months[-1]
-
-    fig, axes = plt.subplots(1, 2, figsize=(18, 9))
-    fig.patch.set_facecolor('white')
-    _set_style()
-    fig.suptitle("Раздел 2 — Структура расходов",
-                 fontsize=20, fontweight='bold', color='#2A2A2A', y=0.98)
-    fig.text(0.5, 0.953, "Круговые диаграммы — 6 месяцев назад и самый дорогой",
-             ha='center', fontsize=14, color='#888888')
-
-    _pie_for_period(axes[0], df, six_ago_y, six_ago_m,
-                    f"6 мес. назад — {MONTH_NAMES_RU[six_ago_m]} {six_ago_y}")
-    ry, rm = richest
-    _pie_for_period(axes[1], df, ry, rm,
-                    f"Самый дорогой — {MONTH_NAMES_RU[rm]} {ry}")
-
-    plt.tight_layout(pad=2.0, rect=[0, 0, 1, 0.94])
-    pdf.savefig(fig, bbox_inches='tight', facecolor='white')
-    plt.close(fig)
+    ax.legend(wedges, legend_texts, loc='lower center', bbox_to_anchor=(0.5, -0.17),
+              fontsize=14, frameon=False, ncol=2)
+    if title:
+        ax.set_title(title, fontsize=20, fontweight='bold', color='#333333', pad=6)
 
 
 # ─── Страница 4: Bar-сравнение + Stacked bar ─────────────────────────────────
@@ -620,7 +534,7 @@ def _page_bar_charts(pdf: PdfPages, df: pd.DataFrame, today: datetime.date):
     monthly_totals = [float(df[(df['date'].dt.year == y) & (df['date'].dt.month == m)]['amount'].sum())
                       for y, m in months]
 
-    # Топ категорий для stacked bar
+    # Топ категорий для stacked bar и line chart
     top_cats = df.groupby('category')['amount'].sum().sort_values(ascending=False)
     top_cats_list = list(top_cats.head(min(10, len(top_cats))).index)
 
@@ -632,15 +546,18 @@ def _page_bar_charts(pdf: PdfPages, df: pd.DataFrame, today: datetime.date):
             for y, m in months
         ]
 
-    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(18, 16))
+    fig = plt.figure(figsize=(26, 20))
     fig.patch.set_facecolor('white')
     _set_style()
     fig.suptitle("Раздел 2 — Структура расходов",
-                 fontsize=20, fontweight='bold', color='#2A2A2A', y=0.99)
-    fig.text(0.5, 0.973, "Сравнение месяцев",
-             ha='center', fontsize=14, color='#888888')
+                 fontsize=25, fontweight='bold', color='#2A2A2A', y=0.95)
 
-    # ── Grouped bar: факт / бюджет (Н/Д) ────────────────────────────────────
+    gs = gridspec.GridSpec(2, 2, figure=fig, height_ratios=[1, 1], hspace=0.40)
+    ax1 = fig.add_subplot(gs[0, 0])
+    ax2 = fig.add_subplot(gs[0, 1])
+    ax3 = fig.add_subplot(gs[1, :])   # полная ширина
+
+    # ── Bar 1: фактические расходы по месяцам ────────────────────────────────
     x = np.arange(12)
     max_v = max(monthly_totals) if monthly_totals else 1
     bar_colors = [plt.cm.Blues(0.35 + 0.55 * (v / max_v)) for v in monthly_totals]
@@ -650,17 +567,17 @@ def _page_bar_charts(pdf: PdfPages, df: pd.DataFrame, today: datetime.date):
         if v > 0:
             ax1.text(bar.get_x() + bar.get_width() / 2,
                      bar.get_height() + max_v * 0.012,
-                     _fmt(v), ha='center', va='bottom', fontsize=7, fontweight='bold', color='#444444')
+                     _fmt(v), ha='center', va='bottom', fontsize=11, fontweight='bold', color='#444444')
     ax1.set_xticks(x)
-    ax1.set_xticklabels(month_labels, fontsize=9)
+    ax1.set_xticklabels(month_labels, fontsize=12)
     ax1.set_title("Фактические расходы по месяцам",
-                  fontsize=20, fontweight='bold', color='#333333', loc='left', pad=8)
-    ax1.set_ylabel("Сумма, ₽", fontsize=10, color='#555555')
+                  fontsize=20, fontweight='bold', color='#333333', loc='left', pad=20)
+    ax1.set_ylabel("Сумма, ₽", fontsize=14, color='#555555')
     ax1.yaxis.set_major_formatter(mticker.FuncFormatter(_rub_formatter))
     ax1.set_ylim(0, max_v * 1.20)
     sns.despine(ax=ax1)
 
-    # ── Stacked bar ──────────────────────────────────────────────────────────
+    # ── Bar 2: накопленная структура по категориям ────────────────────────────
     bottom = np.zeros(12)
     for i, cat in enumerate(top_cats_list):
         vals = np.array(stacked[cat])
@@ -668,19 +585,59 @@ def _page_bar_charts(pdf: PdfPages, df: pd.DataFrame, today: datetime.date):
         ax2.bar(x, vals, bottom=bottom, color=color, label=_cap(cat),
                 edgecolor='white', linewidth=0.5, width=0.7)
         bottom += vals
-
     ax2.set_xticks(x)
-    ax2.set_xticklabels(month_labels, fontsize=11)
+    ax2.set_xticklabels(month_labels, fontsize=12)
     ax2.set_title("Структура расходов по категориям (накопленная)",
-                  fontsize=20, fontweight='bold', color='#333333', loc='left', pad=8)
-    ax2.set_ylabel("Сумма, ₽", fontsize=10, color='#555555')
+                  fontsize=20, fontweight='bold', color='#333333', loc='left', pad=20)
+    ax2.set_ylabel("Сумма, ₽", fontsize=14, color='#555555')
     ax2.yaxis.set_major_formatter(mticker.FuncFormatter(_rub_formatter))
-    ax2.legend(loc='upper left', fontsize=8, frameon=False,
-               ncol=2, bbox_to_anchor=(1.01, 1.0))
+    _n_leg_cols_bar = 1 if len(top_cats_list) <= 6 else 2
+    ax2.legend(
+        loc='upper left',
+        bbox_to_anchor=(1.01, 1.0),
+        fontsize=14,
+        frameon=False,
+        ncol=_n_leg_cols_bar,
+        handlelength=1.4,
+        handletextpad=0.4,
+        labelspacing=0.35,
+        borderpad=0,
+        columnspacing=0.8,
+    )
     sns.despine(ax=ax2)
 
-    plt.tight_layout(pad=2.0, rect=[0, 0, 0.90, 0.95])
-    pdf.savefig(fig, bbox_inches='tight', facecolor='white')
+    # ── Line: расходы по категориям за год ───────────────────────────────────
+    for i, cat in enumerate(top_cats_list):
+        vals = stacked[cat]
+        color = _get_cat_color(cat, i)
+        ax3.plot(range(12), vals, marker='o', color=color, linewidth=2,
+                 markersize=5, label=_cap(cat), markerfacecolor='white',
+                 markeredgewidth=1.5, markeredgecolor=color)
+    ax3.set_xticks(range(12))
+    ax3.set_xticklabels(month_labels, fontsize=12)
+    ax3.set_title("Расходы по категориям — динамика за год",
+                  fontsize=20, fontweight='bold', color='#333333', loc='left', pad=20)
+    ax3.set_ylabel("Сумма, ₽", fontsize=14, color='#555555')
+    ax3.yaxis.set_major_formatter(mticker.FuncFormatter(_rub_formatter))
+    _n_leg_cols = 1 if len(top_cats_list) <= 6 else 2
+    ax3.legend(
+        loc='upper left',
+        bbox_to_anchor=(1.01, 1.0),
+        fontsize=14,
+        frameon=False,
+        ncol=_n_leg_cols,
+        handlelength=1.4,
+        handletextpad=0.4,
+        labelspacing=0.35,
+        borderpad=0,
+        columnspacing=0.8,
+    )
+    sns.despine(ax=ax3)
+
+    # rect[2]: оставляем место под легенду — шире при 2 столбцах
+    _right = 0.84 if _n_leg_cols == 2 else 0.88
+    plt.tight_layout(pad=2.0, rect=[0.04, 0, _right, 0.95])
+    pdf.savefig(fig, bbox_inches='tight', pad_inches=0.5, facecolor='white')
     plt.close(fig)
 
 
@@ -707,22 +664,20 @@ def _page_multiline(pdf: PdfPages, df: pd.DataFrame, today: datetime.date):
                 markeredgewidth=1.5, markeredgecolor=color)
 
     ax.set_xticks(range(12))
-    ax.set_xticklabels(month_labels, fontsize=9)
+    ax.set_xticklabels(month_labels, fontsize=12)
     ax.set_title("Расходы по категориям — динамика за год",
-                 fontsize=20, fontweight='bold', color='#333333', loc='left', pad=8)
-    ax.set_ylabel("Сумма, ₽", fontsize=10, color='#555555')
+                 fontsize=20, fontweight='bold', color='#333333', loc='left', pad=20)
+    ax.set_ylabel("Сумма, ₽", fontsize=14, color='#555555')
     ax.yaxis.set_major_formatter(mticker.FuncFormatter(_rub_formatter))
     ax.legend(loc='upper left', fontsize=9, frameon=False,
               ncol=2, bbox_to_anchor=(1.01, 1.0))
     sns.despine(ax=ax)
 
     fig.suptitle("Раздел 2 — Структура расходов",
-                 fontsize=20, fontweight='bold', color='#2A2A2A', y=0.98)
-    fig.text(0.5, 0.963, "Многолинейный график категорий",
-             ha='center', fontsize=14, color='#888888')
+                 fontsize=25, fontweight='bold', color='#2A2A2A', y=0.95)
 
-    plt.tight_layout(pad=2.0, rect=[0, 0, 0.85, 0.94])
-    pdf.savefig(fig, bbox_inches='tight', facecolor='white')
+    plt.tight_layout(pad=2.0, rect=[0.04, 0, 0.85, 0.94])
+    pdf.savefig(fig, bbox_inches='tight', pad_inches=0.5, facecolor='white')
     plt.close(fig)
 
 
@@ -757,9 +712,8 @@ def _page_trends(pdf: PdfPages, df: pd.DataFrame, today: datetime.date):
     fig.patch.set_facecolor('white')
     _set_style()
     fig.suptitle("Раздел 3 — Тренды",
-                 fontsize=20, fontweight='bold', color='#2A2A2A', y=0.98)
-    fig.text(0.5, 0.963, "Прогноз и распределение текущего месяца",
-             ha='center', fontsize=14, color='#888888')
+                 fontsize=25, fontweight='bold', color='#2A2A2A', y=0.95)
+
 
     # ── Trend-линия ──────────────────────────────────────────────────────────
     max_v = max(max(monthly_totals, default=0), next_trend, 1)
@@ -774,7 +728,7 @@ def _page_trends(pdf: PdfPages, df: pd.DataFrame, today: datetime.date):
     # Прогноз следующего месяца
     next_m = today.month % 12 + 1
     next_y = today.year if today.month < 12 else today.year + 1
-    next_label = f"{MONTH_SHORT_RU[next_m]}'{str(next_y)[2:]}"
+    next_label = f"{MONTH_SHORT_RU[next_m]} {str(next_y)[2:]}"
     ax1.annotate(
         f"Прогноз {next_label}:\n{_fmt(forecast_val)}",
         xy=(11, monthly_totals[-1] if monthly_totals else 0),
@@ -785,10 +739,10 @@ def _page_trends(pdf: PdfPages, df: pd.DataFrame, today: datetime.date):
     )
 
     ax1.set_xticks(range(12))
-    ax1.set_xticklabels(month_labels, fontsize=9)
+    ax1.set_xticklabels(month_labels, fontsize=12)
     ax1.set_title("Тренд расходов за год + прогноз",
-                  fontsize=20, fontweight='bold', color='#333333', loc='left', pad=8)
-    ax1.set_ylabel("Сумма, ₽", fontsize=10, color='#555555')
+                  fontsize=20, fontweight='bold', color='#333333', loc='left', pad=20)
+    ax1.set_ylabel("Сумма, ₽", fontsize=14, color='#555555')
     ax1.yaxis.set_major_formatter(mticker.FuncFormatter(_rub_formatter))
     ax1.set_ylim(0, max_v * 1.30)
     ax1.legend(fontsize=9, frameon=False)
@@ -815,13 +769,13 @@ def _page_trends(pdf: PdfPages, df: pd.DataFrame, today: datetime.date):
                              fontsize=8, color='#E15759',
                              arrowprops=dict(arrowstyle='->', color='#E15759', lw=0.8))
 
-        ax2.set_xlabel("Сумма покупки, ₽", fontsize=10, color='#555555')
-        ax2.set_ylabel("Доля транзакций, %", fontsize=10, color='#555555')
+        ax2.set_xlabel("Сумма покупки, ₽", fontsize=14, color='#555555')
+        ax2.set_ylabel("Доля транзакций, %", fontsize=14, color='#555555')
         ax2.xaxis.set_major_formatter(mticker.FuncFormatter(_rub_formatter))
         ax2.set_ylim(0, 105)
         ax2.set_title(
             f"ECDF покупок — {MONTH_NAMES_RU[today.month]} {today.year}",
-            fontsize=20, fontweight='bold', color='#333333', loc='left', pad=8)
+            fontsize=20, fontweight='bold', color='#333333', loc='left', pad=20)
         sns.despine(ax=ax2)
     else:
         ax2.text(0.5, 0.5, f"Нет данных\nза {MONTH_NAMES_RU[today.month]} {today.year}",
@@ -829,8 +783,8 @@ def _page_trends(pdf: PdfPages, df: pd.DataFrame, today: datetime.date):
                  transform=ax2.transAxes)
         ax2.axis('off')
 
-    plt.tight_layout(pad=2.0, rect=[0, 0, 1, 0.94])
-    pdf.savefig(fig, bbox_inches='tight', facecolor='white')
+    plt.tight_layout(pad=2.0, rect=[0.04, 0, 1, 0.94])
+    pdf.savefig(fig, bbox_inches='tight', pad_inches=0.5, facecolor='white')
     plt.close(fig)
 
 
@@ -869,9 +823,7 @@ def _page_heatmaps(pdf: PdfPages, df: pd.DataFrame, today: datetime.date):
     fig.patch.set_facecolor('white')
     _set_style()
     fig.suptitle("Раздел 4 — Паттерны",
-                 fontsize=20, fontweight='bold', color='#2A2A2A', y=0.98)
-    fig.text(0.5, 0.963, "Тепловые карты",
-             ha='center', fontsize=14, color='#888888')
+                 fontsize=25, fontweight='bold', color='#2A2A2A', y=0.95)
 
     # HM1
     hm1_array = hm1_data.values.reshape(1, 7)
@@ -880,10 +832,10 @@ def _page_heatmaps(pdf: PdfPages, df: pd.DataFrame, today: datetime.date):
         ax=ax1, cmap='YlOrRd', annot=True,
         fmt='.0f', linewidths=0.5, linecolor='white',
         cbar_kws={'label': '₽'},
-        annot_kws={'fontsize': 9},
+        annot_kws={'fontsize': 14},
     )
     ax1.set_title("Средние расходы по дням недели, ₽",
-                  fontsize=20, fontweight='bold', color='#333333', loc='left', pad=8)
+                  fontsize=20, fontweight='bold', color='#333333', loc='left', pad=20)
     ax1.set_ylabel('')
     ax1.set_yticklabels([])
 
@@ -895,13 +847,13 @@ def _page_heatmaps(pdf: PdfPages, df: pd.DataFrame, today: datetime.date):
         yticklabels=pivot2_labels,
     )
     ax2.set_title("Суммы расходов по дням месяца × месяцам, ₽",
-                  fontsize=20, fontweight='bold', color='#333333', loc='left', pad=8)
-    ax2.set_xlabel("День месяца", fontsize=10, color='#555555')
+                  fontsize=20, fontweight='bold', color='#333333', loc='left', pad=20)
+    ax2.set_xlabel("День месяца", fontsize=14, color='#555555')
     ax2.set_ylabel("")
-    ax2.tick_params(axis='y', labelsize=8, rotation=0)
+    ax2.tick_params(axis='y', labelsize=12, rotation=0)
 
-    plt.tight_layout(pad=2.0, rect=[0, 0, 1, 0.94])
-    pdf.savefig(fig, bbox_inches='tight', facecolor='white')
+    plt.tight_layout(pad=2.0, rect=[0.04, 0, 1, 0.94])
+    pdf.savefig(fig, bbox_inches='tight', pad_inches=0.5, facecolor='white')
     plt.close(fig)
 
 
@@ -934,10 +886,8 @@ def _page_scatter(pdf: PdfPages, df: pd.DataFrame, today: datetime.date):
     fig.patch.set_facecolor('white')
     _set_style()
     fig.suptitle("Раздел 4 — Паттерны",
-                 fontsize=20, fontweight='bold', color='#2A2A2A', y=0.98)
-    fig.text(0.5, 0.963,
-             f"Scatter-графики (текущий месяц: {MONTH_NAMES_RU[cur_m]} {cur_y})",
-             ha='center', fontsize=14, color='#888888')
+                 fontsize=25, fontweight='bold', color='#2A2A2A', y=0.98)
+
 
     # ── Scatter 1: сумма × день месяца ───────────────────────────────────────
     ax1 = axes[0]
@@ -949,13 +899,13 @@ def _page_scatter(pdf: PdfPages, df: pd.DataFrame, today: datetime.date):
             ax1.scatter(sub['amount'], sub['day'],
                         color=cat_color_map[cat], alpha=0.75, s=60,
                         label=_cap(cat), edgecolors='white', linewidth=0.5)
-        ax1.set_xlabel("Сумма покупки, ₽", fontsize=10, color='#555555')
-        ax1.set_ylabel("День месяца", fontsize=10, color='#555555')
+        ax1.set_xlabel("Сумма покупки, ₽", fontsize=14, color='#555555')
+        ax1.set_ylabel("День месяца", fontsize=14, color='#555555')
         ax1.xaxis.set_major_formatter(mticker.FuncFormatter(_rub_formatter))
         ax1.set_yticks(range(1, today.day + 1))
         ax1.legend(fontsize=7, frameon=False, ncol=2, loc='lower right')
         ax1.set_title("Покупки: сумма × день месяца",
-                      fontsize=20, fontweight='bold', color='#333333', loc='left', pad=8)
+                      fontsize=20, fontweight='bold', color='#333333', loc='left', pad=20)
         sns.despine(ax=ax1)
     else:
         ax1.text(0.5, 0.5, 'Нет данных', ha='center', va='center',
@@ -974,21 +924,21 @@ def _page_scatter(pdf: PdfPages, df: pd.DataFrame, today: datetime.date):
             ax2.scatter(sub['amount'], sub['hour'],
                         color=cat_color_map[cat], alpha=0.75, s=60,
                         label=_cap(cat), edgecolors='white', linewidth=0.5)
-        ax2.set_xlabel("Сумма покупки, ₽", fontsize=10, color='#555555')
-        ax2.set_ylabel("Час дня (0–23)", fontsize=10, color='#555555')
+        ax2.set_xlabel("Сумма покупки, ₽", fontsize=14, color='#555555')
+        ax2.set_ylabel("Час дня (0–23)", fontsize=14, color='#555555')
         ax2.xaxis.set_major_formatter(mticker.FuncFormatter(_rub_formatter))
         ax2.set_yticks(range(0, 24, 2))
         ax2.legend(fontsize=7, frameon=False, ncol=2, loc='lower right')
         ax2.set_title("Покупки: сумма × час дня",
-                      fontsize=20, fontweight='bold', color='#333333', loc='left', pad=8)
+                      fontsize=20, fontweight='bold', color='#333333', loc='left', pad=20)
         sns.despine(ax=ax2)
     else:
         ax2.text(0.5, 0.5, 'Нет данных', ha='center', va='center',
                  fontsize=12, color='#999999', transform=ax2.transAxes)
         ax2.axis('off')
 
-    plt.tight_layout(pad=2.0, rect=[0, 0, 1, 0.94])
-    pdf.savefig(fig, bbox_inches='tight', facecolor='white')
+    plt.tight_layout(pad=2.0, rect=[0.04, 0, 1, 0.94])
+    pdf.savefig(fig, bbox_inches='tight', pad_inches=0.5, facecolor='white')
     plt.close(fig)
 
 
@@ -1039,9 +989,7 @@ def _page_scatter3_hm3(pdf: PdfPages, df: pd.DataFrame, today: datetime.date):
     fig.patch.set_facecolor('white')
     _set_style()
     fig.suptitle("Раздел 4 — Паттерны",
-                 fontsize=20, fontweight='bold', color='#2A2A2A', y=0.98)
-    fig.text(0.5, 0.963, "Scatter за год + Тепловая карта категорий",
-             ha='center', fontsize=14, color='#888888')
+                 fontsize=25, fontweight='bold', color='#2A2A2A', y=0.95)
 
     # ── Scatter 3 ─────────────────────────────────────────────────────────────
     if not day_agg.empty:
@@ -1051,8 +999,8 @@ def _page_scatter3_hm3(pdf: PdfPages, df: pd.DataFrame, today: datetime.date):
             c=day_agg['color'],
             alpha=0.70, edgecolors='white', linewidth=0.5,
         )
-        ax1.set_xlabel("День месяца (1–31)", fontsize=10, color='#555555')
-        ax1.set_ylabel("Сумма трат за день, ₽", fontsize=10, color='#555555')
+        ax1.set_xlabel("День месяца (1–31)", fontsize=14, color='#555555')
+        ax1.set_ylabel("Сумма трат за день, ₽", fontsize=14, color='#555555')
         ax1.yaxis.set_major_formatter(mticker.FuncFormatter(_rub_formatter))
         ax1.set_xticks(range(1, 32, 2))
 
@@ -1062,11 +1010,11 @@ def _page_scatter3_hm3(pdf: PdfPages, df: pd.DataFrame, today: datetime.date):
                            label=_month_label(y, m, today))
             for y, m in months
         ]
-        ax1.legend(handles=legend_patches, fontsize=7, frameon=False,
-                   ncol=2, loc='upper right', title='Месяц')
+        ax1.legend(handles=legend_patches, fontsize=8, frameon=False,
+                   ncol=2, loc='upper right')
         ax1.set_title(
             "Сумма трат в день × день месяца\n(размер = кол-во транзакций, цвет = месяц)",
-            fontsize=20, fontweight='bold', color='#333333', loc='left', pad=8,
+            fontsize=20, fontweight='bold', color='#333333', loc='left', pad=20,
         )
         sns.despine(ax=ax1)
     else:
@@ -1081,20 +1029,20 @@ def _page_scatter3_hm3(pdf: PdfPages, df: pd.DataFrame, today: datetime.date):
             annot=True, fmt='.0f',
             linewidths=0.5, linecolor='white',
             cbar_kws={'label': '₽'},
-            annot_kws={'fontsize': 8},
+            annot_kws={'fontsize': 14},
         )
         ax2.set_title("Расходы по категориям × дням недели, ₽",
-                      fontsize=20, fontweight='bold', color='#333333', loc='left', pad=8)
-        ax2.set_xlabel("День недели", fontsize=10, color='#555555')
+                      fontsize=20, fontweight='bold', color='#333333', loc='left', pad=20)
+        ax2.set_xlabel("День недели", fontsize=14, color='#555555')
         ax2.set_ylabel("")
-        ax2.tick_params(axis='y', labelsize=9, rotation=0)
+        ax2.tick_params(axis='y', labelsize=12, rotation=0)
     else:
         ax2.text(0.5, 0.5, 'Нет данных', ha='center', va='center',
                  fontsize=12, color='#999999', transform=ax2.transAxes)
         ax2.axis('off')
 
-    plt.tight_layout(pad=2.0, rect=[0, 0, 1, 0.94])
-    pdf.savefig(fig, bbox_inches='tight', facecolor='white')
+    plt.tight_layout(pad=2.0, rect=[0.04, 0, 1, 0.94])
+    pdf.savefig(fig, bbox_inches='tight', pad_inches=0.5, facecolor='white')
     plt.close(fig)
 
 
@@ -1123,9 +1071,7 @@ def _page_boxplots(pdf: PdfPages, df: pd.DataFrame, today: datetime.date):
     fig.patch.set_facecolor('white')
     _set_style()
     fig.suptitle("Раздел 4 — Паттерны",
-                 fontsize=20, fontweight='bold', color='#2A2A2A', y=0.98)
-    fig.text(0.5, 0.963, "Box plots",
-             ha='center', fontsize=14, color='#888888')
+                 fontsize=25, fontweight='bold', color='#2A2A2A', y=0.95)
 
     # ── Box 1: месяц × сумма ─────────────────────────────────────────────────
     if not df2.empty:
@@ -1141,12 +1087,13 @@ def _page_boxplots(pdf: PdfPages, df: pd.DataFrame, today: datetime.date):
         for patch, color in zip(bp['boxes'], PALETTE):
             patch.set_facecolor(color)
             patch.set_alpha(0.6)
+        ax1.margins(x=0.05) # left margin 
 
         ax1.set_xticks(range(1, 13))
-        ax1.set_xticklabels(month_labels, fontsize=9)
+        ax1.set_xticklabels(month_labels, fontsize=12)
         ax1.set_title("Распределение сумм покупок по месяцам",
-                      fontsize=20, fontweight='bold', color='#333333', loc='left', pad=8)
-        ax1.set_ylabel("Сумма покупки, ₽", fontsize=10, color='#555555')
+                      fontsize=20, fontweight='bold', color='#333333', loc='left', pad=20)
+        ax1.set_ylabel("Сумма покупки, ₽", fontsize=14, color='#555555')
         ax1.yaxis.set_major_formatter(mticker.FuncFormatter(_rub_formatter))
 
         # Подпись 3 самых крупных выбросов
@@ -1200,12 +1147,12 @@ def _page_boxplots(pdf: PdfPages, df: pd.DataFrame, today: datetime.date):
             patch.set_alpha(0.6)
 
         ax2.set_xticks(range(1, len(top_cats) + 1))
-        ax2.set_xticklabels([_cap(c) for c in top_cats], fontsize=9)
+        ax2.set_xticklabels([_cap(c) for c in top_cats], fontsize=12)
         ax2.set_title(
             f"Распределение сумм по категориям — {MONTH_NAMES_RU[cur_m]} {cur_y}",
-            fontsize=20, fontweight='bold', color='#333333', loc='left', pad=8,
+            fontsize=20, fontweight='bold', color='#333333', loc='left', pad=20,
         )
-        ax2.set_ylabel("Сумма покупки, ₽", fontsize=10, color='#555555')
+        ax2.set_ylabel("Сумма покупки, ₽", fontsize=14, color='#555555')
         ax2.yaxis.set_major_formatter(mticker.FuncFormatter(_rub_formatter))
 
         # Подписи выбросов
@@ -1237,8 +1184,8 @@ def _page_boxplots(pdf: PdfPages, df: pd.DataFrame, today: datetime.date):
                  transform=ax2.transAxes)
         ax2.axis('off')
 
-    plt.tight_layout(pad=2.0, rect=[0, 0, 1, 0.94])
-    pdf.savefig(fig, bbox_inches='tight', facecolor='white')
+    plt.tight_layout(pad=2.0, rect=[0.04, 0, 1, 0.94])
+    pdf.savefig(fig, bbox_inches='tight', pad_inches=0.5, facecolor='white')
     plt.close(fig)
 
 
@@ -1261,10 +1208,8 @@ def _render_full_report(df: pd.DataFrame, today: datetime.date, save_path: str):
         d['Subject'] = 'Анализ личных расходов'
 
         _page_overview(pdf, df, today)           # Стр. 1: обзор (KPI + line + топ-5 + pivot)
-        _page_structure_table(pdf, df, today)    # Стр. 2: сводная таблица + пироги тек/пред мес
-        _page_pie_charts(pdf, df, today)         # Стр. 3: 2 круговых (6 мес. назад + дорогой)
-        _page_bar_charts(pdf, df, today)         # Стр. 4: bar-сравнение + stacked bar
-        _page_multiline(pdf, df, today)          # Стр. 5: multi-line chart
+        _page_structure_table(pdf, df, today)    # Стр. 2: сводная таблица + 4 круговых диаграммы
+        _page_bar_charts(pdf, df, today)         # Стр. 4: 2 гистограммы + line расходы по категориям
         _page_trends(pdf, df, today)             # Стр. 6: тренд + ECDF
         _page_heatmaps(pdf, df, today)           # Стр. 7: heatmaps (д. недели + д. месяца)
         _page_scatter(pdf, df, today)            # Стр. 8: scatter 1+2 (тек. месяц)
