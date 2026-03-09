@@ -20,6 +20,7 @@ from telegram.ext import (
 )
 from utils import excel
 from utils import budgets as budgets_utils
+from utils.budget_notifier import check_user_budget_now
 from utils.permissions import Permission, has_permission
 from utils.helpers import get_main_menu_keyboard, main_menu_button_regex
 from utils.logger import get_logger, log_event, log_error
@@ -317,10 +318,11 @@ async def set_budget_threshold(update: Update, context: ContextTypes.DEFAULT_TYP
             f"✅ Бюджет установлен!\n\n"
             f"💰 Бюджет: {_fmt_amount(amount)}\n"
             f"🔔 Уведомление при: {_fmt_amount(threshold)}",
-            reply_markup=_budget_menu_keyboard(),
+            reply_markup=_budget_menu_keyboard(notify_enabled=True),
         )
         log_event(logger, "budget_set", user_id=user_id, amount=amount,
                   threshold=threshold, month=now.month, year=now.year, notify=True)
+        await check_user_budget_now(context.bot, user_id, project_id)
     else:
         await update.message.reply_text(
             "❌ Ошибка при сохранении бюджета.",
@@ -420,6 +422,7 @@ async def edit_notification_threshold(update: Update, context: ContextTypes.DEFA
             reply_markup=_budget_menu_keyboard(notify_enabled=True),
         )
         log_event(logger, "notification_updated", user_id=user_id, threshold=threshold)
+        await check_user_budget_now(context.bot, user_id, project_id)
     else:
         await update.message.reply_text(
             "❌ Ошибка при обновлении уведомления.",
