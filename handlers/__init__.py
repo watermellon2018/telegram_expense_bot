@@ -12,6 +12,7 @@ from handlers.category import register_category_handlers
 from handlers.invitations import register_invitation_handlers
 from handlers.project_management import register_project_management_handlers
 from handlers.budget import register_budget_handlers
+from handlers.analysis import register_analysis_handlers
 
 def register_all_handlers(application):
     """
@@ -23,6 +24,7 @@ def register_all_handlers(application):
     register_start_handlers(application)
 
     # Важный порядок! Кнопки меню — до expense.text_handler (который ловит любой текст)
+    register_analysis_handlers(application)    # Подменю «Анализ» — до дочерних обработчиков
     register_export_handlers(application)
     register_report_handlers(application)      # Отчёт — до expense
     register_stats_handlers(application)

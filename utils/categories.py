@@ -193,7 +193,7 @@ async def get_category_by_id(user_id: int, category_id: int) -> Optional[Dict]:
                       SELECT 1 FROM projects p
                       LEFT JOIN project_members pm ON p.project_id = pm.project_id AND pm.user_id = $2
                       WHERE p.project_id = c.project_id
-                        AND p.is_active = TRUE
+                        AND p.deleted_at IS NULL
                         AND (p.user_id = $2 OR pm.user_id = $2)
                   )
               )

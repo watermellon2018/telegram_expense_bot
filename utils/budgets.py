@@ -256,6 +256,47 @@ async def disable_notification(user_id: int, month: int, year: int,
         return None
 
 
+async def enable_notification(user_id: int, month: int, year: int,
+                              project_id=None) -> Optional[dict]:
+    """
+    Включить уведомления для бюджета, используя уже сохранённый порог.
+    Работает только если notify_threshold задан (не NULL).
+    В отличие от set_notification — не сбрасывает историю уведомлений.
+    """
+    project_id = _normalize_project_id(project_id)
+    try:
+        if project_id is None:
+            row = await db.fetchrow(
+                """
+                UPDATE budgets
+                SET notify_enabled = TRUE, updated_at = now()
+                WHERE user_id = $1 AND month = $2 AND year = $3
+                  AND project_id IS NULL
+                  AND notify_threshold IS NOT NULL
+                RETURNING *
+                """,
+                str(user_id), month, year
+            )
+        else:
+            row = await db.fetchrow(
+                """
+                UPDATE budgets
+                SET notify_enabled = TRUE, updated_at = now()
+                WHERE user_id = $1 AND month = $2 AND year = $3
+                  AND project_id = $4
+                  AND notify_threshold IS NOT NULL
+                RETURNING *
+                """,
+                str(user_id), month, year, project_id
+            )
+        log_event(logger, "enable_notification_success", user_id=user_id, month=month, year=year)
+        return _row_to_dict(row) if row else None
+    except Exception as e:
+        log_error(logger, e, "enable_notification_error",
+                  user_id=user_id, month=month, year=year)
+        return None
+
+
 async def get_all_active_budgets_with_notifications(month: int, year: int) -> list[dict]:
     """
     Получить все бюджеты с включёнными уведомлениями за текущий месяц.

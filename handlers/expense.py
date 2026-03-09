@@ -6,6 +6,7 @@ from telegram import Update, ReplyKeyboardMarkup, ReplyKeyboardRemove, InlineKey
 from telegram.ext import ContextTypes, CommandHandler, filters, MessageHandler, ConversationHandler, CallbackQueryHandler
 from utils import excel, helpers, projects, categories
 from utils.helpers import main_menu_button_regex
+from utils.budget_notifier import check_user_budget_now
 from utils.logger import get_logger, log_command, log_event, log_error
 import config
 
@@ -116,6 +117,7 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
                      category_name=category_found['name'])
 
         await update.message.reply_text(confirmation)
+        await check_user_budget_now(context.bot, user_id, project_id)
     else:
         log_event(logger, "text_not_parsed_as_expense", request_id=request_id,
                  status="skipped", user_id=user_id, 
@@ -203,6 +205,7 @@ async def add_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
             confirmation += f"\n📊 Общие расходы"
 
         await update.message.reply_text(confirmation)
+        await check_user_budget_now(context.bot, user_id, project_id)
         return ConversationHandler.END
 
     # Если команда без аргументов, начинаем диалог
@@ -461,6 +464,9 @@ async def handle_description(update: Update, context: ContextTypes.DEFAULT_TYPE)
         confirmation += f"\n📊 Общие расходы"
 
     await update.message.reply_text(confirmation, reply_markup=helpers.get_main_menu_keyboard())
+
+    if success:
+        await check_user_budget_now(context.bot, user_id, project_id)
 
     # Очищаем данные пользователя
     for key in ['amount', 'category_id', 'category_name']:

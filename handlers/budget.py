@@ -20,6 +20,7 @@ from telegram.ext import (
 )
 from utils import excel
 from utils import budgets as budgets_utils
+from utils.budget_notifier import check_user_budget_now
 from utils.permissions import Permission, has_permission
 from utils.helpers import get_main_menu_keyboard, main_menu_button_regex
 from utils.logger import get_logger, log_event, log_error
@@ -42,11 +43,18 @@ logger = get_logger("handlers.budget")
 # Вспомогательные функции
 # ---------------------------------------------------------------------------
 
-def _budget_menu_keyboard() -> ReplyKeyboardMarkup:
+def _budget_menu_keyboard(notify_enabled: bool = False) -> ReplyKeyboardMarkup:
+    """
+    Клавиатура меню бюджета.
+    notify_enabled=True  → кнопка «Отключить уведомления»
+    notify_enabled=False → кнопка «Включить уведомления»
+    """
     btn = config.BUDGET_MENU_BUTTONS
+    notify_btn = btn["disable_notify"] if notify_enabled else btn["enable_notify"]
     keyboard = [
-        [btn["status"],  btn["set"]],
-        [btn["edit_notify"], btn["disable_notify"], btn["back"]],
+        [btn["status"], btn["set"]],
+        [btn["edit_notify"], notify_btn],
+        [btn["back"]],
     ]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
@@ -109,10 +117,16 @@ def _format_budget_status_text(budget: dict, spending: float,
 async def budget_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Показывает меню раздела «Бюджет»."""
     user_id = update.effective_user.id
+    project_id = context.user_data.get('active_project_id')
     log_event(logger, "budget_menu_opened", user_id=user_id)
+
+    now = datetime.datetime.now()
+    budget = await budgets_utils.get_or_inherit_budget(user_id, now.month, now.year, project_id)
+    notify_enabled = bool(budget and budget.get('notify_enabled'))
+
     await update.message.reply_text(
         "💰 Управление бюджетом",
-        reply_markup=_budget_menu_keyboard(),
+        reply_markup=_budget_menu_keyboard(notify_enabled),
     )
 
 
@@ -145,11 +159,12 @@ async def budget_status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         )
         return
 
+    notify_enabled = bool(budget.get('notify_enabled'))
     expenses = await excel.get_month_expenses(user_id, month, year, project_id)
     spending = float(expenses.get('total', 0)) if expenses else 0.0
 
     text = _format_budget_status_text(budget, spending, month, year)
-    await update.message.reply_text(text, reply_markup=_budget_menu_keyboard())
+    await update.message.reply_text(text, reply_markup=_budget_menu_keyboard(notify_enabled))
     log_event(logger, "budget_status_shown", user_id=user_id, month=month, year=year)
 
 
@@ -303,10 +318,11 @@ async def set_budget_threshold(update: Update, context: ContextTypes.DEFAULT_TYP
             f"✅ Бюджет установлен!\n\n"
             f"💰 Бюджет: {_fmt_amount(amount)}\n"
             f"🔔 Уведомление при: {_fmt_amount(threshold)}",
-            reply_markup=_budget_menu_keyboard(),
+            reply_markup=_budget_menu_keyboard(notify_enabled=True),
         )
         log_event(logger, "budget_set", user_id=user_id, amount=amount,
                   threshold=threshold, month=now.month, year=now.year, notify=True)
+        await check_user_budget_now(context.bot, user_id, project_id)
     else:
         await update.message.reply_text(
             "❌ Ошибка при сохранении бюджета.",
@@ -403,9 +419,10 @@ async def edit_notification_threshold(update: Update, context: ContextTypes.DEFA
     if result:
         await update.message.reply_text(
             f"✅ Порог уведомления изменён: {_fmt_amount(threshold)}",
-            reply_markup=_budget_menu_keyboard(),
+            reply_markup=_budget_menu_keyboard(notify_enabled=True),
         )
         log_event(logger, "notification_updated", user_id=user_id, threshold=threshold)
+        await check_user_budget_now(context.bot, user_id, project_id)
     else:
         await update.message.reply_text(
             "❌ Ошибка при обновлении уведомления.",
@@ -436,13 +453,66 @@ async def disable_notifications_handler(update: Update,
     if result:
         await update.message.reply_text(
             "🔕 Уведомления о бюджете отключены.",
-            reply_markup=_budget_menu_keyboard(),
+            reply_markup=_budget_menu_keyboard(notify_enabled=False),
         )
         log_event(logger, "notifications_disabled", user_id=user_id)
     else:
         await update.message.reply_text(
             "ℹ️ Бюджет не установлен или уведомления уже отключены.",
+            reply_markup=_budget_menu_keyboard(notify_enabled=False),
+        )
+
+
+# ---------------------------------------------------------------------------
+# Включить уведомления
+# ---------------------------------------------------------------------------
+
+async def enable_notifications_handler(update: Update,
+                                       context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Включает уведомления с ранее сохранённым порогом."""
+    user_id = update.effective_user.id
+    project_id = context.user_data.get('active_project_id')
+
+    if not await has_permission(user_id, project_id, Permission.SET_BUDGET):
+        await update.message.reply_text(
+            "❌ У вас нет прав для изменения уведомлений.",
             reply_markup=_budget_menu_keyboard(),
+        )
+        return
+
+    now = datetime.datetime.now()
+    budget = await budgets_utils.get_budget(user_id, now.month, now.year, project_id)
+
+    if budget is None:
+        await update.message.reply_text(
+            "ℹ️ Бюджет на текущий месяц не установлен.\n"
+            "Нажмите «💰 Установить бюджет», чтобы задать лимит.",
+            reply_markup=_budget_menu_keyboard(),
+        )
+        return
+
+    threshold = budget.get('notify_threshold')
+    if not threshold:
+        await update.message.reply_text(
+            "ℹ️ Порог уведомления не задан.\n"
+            "Используйте «🔔 Настроить уведомление», чтобы задать порог.",
+            reply_markup=_budget_menu_keyboard(notify_enabled=False),
+        )
+        return
+
+    result = await budgets_utils.enable_notification(
+        user_id, now.month, now.year, project_id
+    )
+    if result:
+        await update.message.reply_text(
+            f"🔔 Уведомления включены. Порог: {_fmt_amount(threshold)}",
+            reply_markup=_budget_menu_keyboard(notify_enabled=True),
+        )
+        log_event(logger, "notifications_enabled", user_id=user_id, threshold=threshold)
+    else:
+        await update.message.reply_text(
+            "❌ Ошибка при включении уведомлений. Попробуйте позже.",
+            reply_markup=_budget_menu_keyboard(notify_enabled=False),
         )
 
 
@@ -513,6 +583,14 @@ def register_budget_handlers(application) -> None:
         MessageHandler(
             filters.Regex(_budget_menu_button_regex("disable_notify")),
             disable_notifications_handler,
+        )
+    )
+
+    # Включить уведомления
+    application.add_handler(
+        MessageHandler(
+            filters.Regex(_budget_menu_button_regex("enable_notify")),
+            enable_notifications_handler,
         )
     )
 
