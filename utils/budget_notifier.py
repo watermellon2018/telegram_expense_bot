@@ -55,7 +55,10 @@ def _should_send(notified_at, last_notified_spending, current_spending: float) -
     """
     if notified_at is None:
         return True
-    now = datetime.datetime.utcnow()
+    now = datetime.datetime.now(datetime.timezone.utc)
+    # asyncpg возвращает timestamptz как aware datetime; приводим к единому типу
+    if notified_at.tzinfo is None:
+        notified_at = notified_at.replace(tzinfo=datetime.timezone.utc)
     days_passed = (now - notified_at).total_seconds() / 86400
     spending_changed = (last_notified_spending is None or
                         abs(current_spending - last_notified_spending) > 0.01)
@@ -84,7 +87,7 @@ async def check_budget_notifications(bot) -> None:
     Основная функция планировщика.
     Проверяет все активные бюджеты и отправляет уведомления при необходимости.
     """
-    now = datetime.datetime.utcnow()
+    now = datetime.datetime.now(datetime.timezone.utc)
     month = now.month
     year = now.year
 
