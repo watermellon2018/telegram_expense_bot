@@ -182,11 +182,13 @@ async def get_month_expenses(user_id, month=None, year=None, project_id=None):
     Args:
         user_id: ID of the requesting user (for access validation)
         month: Month number (1-12)
-        year: Year (currently not used in filtering, but kept for API compatibility)
+        year: Year (used for filtering by EXTRACT(YEAR FROM date))
         project_id: Project ID or None for personal expenses
     """
     if month is None:
         month = datetime.datetime.now().month
+    if year is None:
+        year = datetime.datetime.now().year
     project_id = _normalize_project_id(project_id)
 
     try:
@@ -194,10 +196,10 @@ async def get_month_expenses(user_id, month=None, year=None, project_id=None):
         if project_id is not None:
             from utils.permissions import Permission, has_permission
             if not await has_permission(user_id, project_id, Permission.VIEW_STATS):
-                log_error(logger, Exception("Permission denied"), 
+                log_error(logger, Exception("Permission denied"),
                          "get_month_expenses_permission_denied", user_id=user_id, project_id=project_id)
                 return {'total': 0, 'by_category': {}, 'count': 0}
-        
+
         # For projects: get expenses from ALL members
         # For personal: get only user's expenses
         if project_id is not None:
@@ -208,9 +210,11 @@ async def get_month_expenses(user_id, month=None, year=None, project_id=None):
                 JOIN categories c ON e.category_id = c.category_id
                 WHERE e.project_id = $1
                   AND e.month = $2
+                  AND EXTRACT(YEAR FROM e.date) = $3
                 """,
                 project_id,
                 month,
+                year,
             )
         else:
             rows = await db.fetch(
@@ -221,9 +225,11 @@ async def get_month_expenses(user_id, month=None, year=None, project_id=None):
                 WHERE e.user_id = $1
                   AND e.month = $2
                   AND e.project_id IS NULL
+                  AND EXTRACT(YEAR FROM e.date) = $3
                 """,
                 str(user_id),
                 month,
+                year,
             )
         if not rows:
             return {

@@ -70,9 +70,14 @@ jobs:
       - name: Deploy new version
         id: deploy
         run: |
+          if [ -f /opt/money_bot/current_version ]; then
+            cp /opt/money_bot/current_version /opt/money_bot/previous_version
+          fi
+
           export BOT_TAG=${{ steps.tags.outputs.tag }}
           docker compose pull money_bot
           docker compose up -d --no-deps money_bot
+          
           echo "deployed=true" >> $GITHUB_OUTPUT
 
       - name: Wait for health check
@@ -122,29 +127,27 @@ jobs:
           fi
           
           echo "Deployment verified successfully!"
-
+      
+      - name: Save new current version
+        if: success()
+        run: |
+          echo "${{ steps.tags.outputs.tag }}" > /opt/money_bot/current_version
+          echo "Current version updated"
+      
       - name: Rollback on failure
         if: failure()
         run: |
-          PREVIOUS_IMAGE="${{ steps.save_current.outputs.current_image }}"
-          if [ -z "$PREVIOUS_IMAGE" ]; then
+          if [ -f /opt/money_bot/previous_version ]; then
+            BOT_TAG=$(cat /opt/money_bot/previous_version)
+          else
             echo "No previous version to rollback to. Stopping container."
             docker compose stop money_bot || true
             exit 1
           fi
           
-          echo "Rolling back to previous version: ${PREVIOUS_IMAGE}"
-          
-          # Update docker-compose to use previous image
-          sed -i "s|image:.*|image: ${PREVIOUS_IMAGE}|" docker-compose.yml
-          
-          # Pull and start previous version
+          echo "Rolling back to $BOT_TAG"
           docker compose pull money_bot
           docker compose up -d --no-deps money_bot
-          
-          echo "Rollback completed to: ${PREVIOUS_IMAGE}"
-          
-          # Wait a bit and verify rollback
           sleep 10
           if docker ps | grep -q money_bot; then
             echo "Rollback verified - container is running"
@@ -152,4 +155,4 @@ jobs:
             echo "Rollback failed - container is not running"
             exit 1
           fi
-
+          echo "Rollback completed to: ${BOT_TAG}"

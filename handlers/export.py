@@ -1,6 +1,7 @@
 """
 Обработчики команд для экспорта данных в Excel
 """
+import asyncio
 import config
 from utils.export import get_month_name
 
@@ -157,24 +158,62 @@ async def export_stats_command(update: Update, context: ContextTypes.DEFAULT_TYP
         )
 
 
+def _build_excel_file(expenses_df: pd.DataFrame, tmp_path: str, month: int) -> None:
+    """Синхронная генерация Excel-файла. Вызывается через run_in_executor."""
+    with pd.ExcelWriter(tmp_path, engine='openpyxl') as writer:
+        expenses_df.to_excel(writer, sheet_name='Все расходы', index=False)
+
+        if not expenses_df.empty:
+            category_stats = expenses_df.groupby('category')['amount'].agg(['sum', 'count', 'mean']).round(2)
+            category_stats.columns = ['Общая сумма', 'Количество', 'Средняя сумма']
+            category_stats.to_excel(writer, sheet_name='Статистика по категориям')
+
+            if not month:
+                monthly_stats = expenses_df.groupby('month')['amount'].agg(['sum', 'count', 'mean']).round(2)
+                monthly_stats.columns = ['Общая сумма', 'Количество', 'Средняя сумма']
+                monthly_stats.to_excel(writer, sheet_name='Статистика по месяцам')
+
+            if month:
+                expenses_df = expenses_df.copy()
+                expenses_df['day'] = pd.to_datetime(expenses_df['date']).dt.day
+                daily_stats = expenses_df.groupby('day')['amount'].agg(['sum', 'count', 'mean']).round(2)
+                daily_stats.columns = ['Общая сумма', 'Количество', 'Средняя сумма']
+                daily_stats.to_excel(writer, sheet_name='Статистика по дням')
+
+            top_expenses = expenses_df.nlargest(10, 'amount')[['date', 'category', 'amount', 'description']]
+            top_expenses.to_excel(writer, sheet_name='Топ-10 расходов', index=False)
+
+            summary_stats = pd.DataFrame({
+                'Показатель': ['Общая сумма', 'Количество расходов', 'Средняя сумма', 'Максимальная сумма', 'Минимальная сумма'],
+                'Значение': [
+                    expenses_df['amount'].sum(),
+                    len(expenses_df),
+                    expenses_df['amount'].mean(),
+                    expenses_df['amount'].max(),
+                    expenses_df['amount'].min(),
+                ]
+            })
+            summary_stats.to_excel(writer, sheet_name='Общая статистика', index=False)
+
+
 async def perform_export(update: Update, user_id: int, project_id: int, year: int = None, month: int = None) -> None:
     """
     Выполняет экспорт данных в Excel файл
     """
     import time
     start_time = time.time()
-    
+
     log_event(logger, "export_start", user_id=user_id, project_id=project_id, year=year, month=month)
-    
+
     # Определяем, откуда пришел запрос - из сообщения или callback query
     if update.callback_query:
         message = update.callback_query.message
     else:
         message = update.message
-    
+
     # Получаем все данные
     expenses_df = await excel.get_all_expenses(user_id, year, project_id)
-    
+
     if expenses_df is None or expenses_df.empty:
         log_event(logger, "export_no_data", user_id=user_id, project_id=project_id, year=year, month=month)
         if year:
@@ -182,11 +221,11 @@ async def perform_export(update: Update, user_id: int, project_id: int, year: in
         else:
             await message.reply_text("❌ У вас пока нет данных о расходах.")
         return
-    
+
     # Конвертируем amount в numeric, если это необходимо
     if 'amount' in expenses_df.columns:
         expenses_df['amount'] = pd.to_numeric(expenses_df['amount'], errors='coerce')
-    
+
     # Фильтруем по месяцу, если указан
     if month:
         expenses_df = expenses_df[expenses_df['month'] == month]
@@ -194,52 +233,16 @@ async def perform_export(update: Update, user_id: int, project_id: int, year: in
             month_name = get_month_name(month)
             await message.reply_text(f"❌ Нет данных за {month_name} {year} года.")
             return
-    
+
     try:
-        # Создаем временный файл со статистикой
+        # Создаем временный файл
         with tempfile.NamedTemporaryFile(delete=False, suffix='.xlsx') as tmp_file:
             tmp_path = tmp_file.name
-        
-        # Создаем Excel файл со статистикой
-        with pd.ExcelWriter(tmp_path, engine='openpyxl') as writer:
-            # Основные данные
-            expenses_df.to_excel(writer, sheet_name='Все расходы', index=False)
-            
-            # Статистика по категориям
-            if not expenses_df.empty:
-                category_stats = expenses_df.groupby('category')['amount'].agg(['sum', 'count', 'mean']).round(2)
-                category_stats.columns = ['Общая сумма', 'Количество', 'Средняя сумма']
-                category_stats.to_excel(writer, sheet_name='Статистика по категориям')
-                
-                # Статистика по месяцам (если не фильтруем по месяцу)
-                if not month:
-                    monthly_stats = expenses_df.groupby('month')['amount'].agg(['sum', 'count', 'mean']).round(2)
-                    monthly_stats.columns = ['Общая сумма', 'Количество', 'Средняя сумма']
-                    monthly_stats.to_excel(writer, sheet_name='Статистика по месяцам')
-                
-                # Статистика по дням (если фильтруем по месяцу)
-                if month:
-                    # Добавляем день из даты
-                    expenses_df['day'] = pd.to_datetime(expenses_df['date']).dt.day
-                    daily_stats = expenses_df.groupby('day')['amount'].agg(['sum', 'count', 'mean']).round(2)
-                    daily_stats.columns = ['Общая сумма', 'Количество', 'Средняя сумма']
-                    daily_stats.to_excel(writer, sheet_name='Статистика по дням')
-                
-                # Топ-10 самых дорогих расходов
-                top_expenses = expenses_df.nlargest(10, 'amount')[['date', 'category', 'amount', 'description']]
-                top_expenses.to_excel(writer, sheet_name='Топ-10 расходов', index=False)
-                
-                # Общая статистика
-                total_amount = expenses_df['amount'].sum()
-                total_count = len(expenses_df)
-                avg_amount = expenses_df['amount'].mean()
-                
-                summary_stats = pd.DataFrame({
-                    'Показатель': ['Общая сумма', 'Количество расходов', 'Средняя сумма', 'Максимальная сумма', 'Минимальная сумма'],
-                    'Значение': [total_amount, total_count, avg_amount, expenses_df['amount'].max(), expenses_df['amount'].min()]
-                })
-                summary_stats.to_excel(writer, sheet_name='Общая статистика', index=False)
-        
+
+        # Генерируем Excel в отдельном потоке — не блокируем event loop
+        loop = asyncio.get_event_loop()
+        await loop.run_in_executor(None, _build_excel_file, expenses_df, tmp_path, month)
+
         # Отправляем файл
         with open(tmp_path, 'rb') as file:
             if month:

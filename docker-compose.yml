@@ -1,6 +1,6 @@
 services:
   money_bot:
-    image: ghcr.io/watermellon2018/money_bot:latest
+    image: ghcr.io/watermellon2018/money_bot:${BOT_TAG}
     container_name: money_bot
     restart: always
     env_file:

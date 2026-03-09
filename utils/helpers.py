@@ -256,9 +256,21 @@ def get_main_menu_keyboard():
     from telegram import ReplyKeyboardMarkup
     btn = config.MAIN_MENU_BUTTONS
     keyboard = [
-        [btn["add"], btn["day"], btn["month"]],
-        [btn["categories"], btn["projects"]],
-        [btn["stats"], btn["export"], btn["help"]],
+        [btn["add"],      btn["day"],        btn["month"]],
+        [btn["budget"],   btn["categories"], btn["projects"]],
+        [btn["analysis"], btn["help"]],
+    ]
+    return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+
+
+def get_analysis_menu_keyboard():
+    """Возвращает клавиатуру подменю «Анализ»."""
+    import config
+    from telegram import ReplyKeyboardMarkup
+    btn = config.ANALYSIS_MENU_BUTTONS
+    keyboard = [
+        [btn["stats"],  btn["report"]],
+        [btn["export"], btn["back"]],
     ]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
@@ -279,6 +291,18 @@ def project_menu_button_regex(key: str) -> str:
     """Точное совпадение с кнопкой меню проектов (для filters.Regex)."""
     import config
     return "^" + re.escape(config.PROJECT_MENU_BUTTONS[key]) + "$"
+
+
+def budget_menu_button_regex(key: str) -> str:
+    """Точное совпадение с кнопкой меню бюджета (для filters.Regex)."""
+    import config
+    return "^" + re.escape(config.BUDGET_MENU_BUTTONS[key]) + "$"
+
+
+def analysis_menu_button_regex(key: str) -> str:
+    """Точное совпадение с кнопкой подменю «Анализ» (для filters.Regex)."""
+    import config
+    return "^" + re.escape(config.ANALYSIS_MENU_BUTTONS[key]) + "$"
 
 
 async def get_active_project_id(user_id: int, context: ContextTypes.DEFAULT_TYPE) -> int:
