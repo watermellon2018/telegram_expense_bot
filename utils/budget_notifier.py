@@ -55,7 +55,10 @@ def _should_send(notified_at, last_notified_spending, current_spending: float) -
     """
     if notified_at is None:
         return True
-    now = datetime.datetime.utcnow()
+    now = datetime.datetime.now(datetime.timezone.utc)
+    # asyncpg возвращает timestamptz как aware datetime; приводим к единому типу
+    if notified_at.tzinfo is None:
+        notified_at = notified_at.replace(tzinfo=datetime.timezone.utc)
     days_passed = (now - notified_at).total_seconds() / 86400
     spending_changed = (last_notified_spending is None or
                         abs(current_spending - last_notified_spending) > 0.01)
@@ -84,7 +87,7 @@ async def check_budget_notifications(bot) -> None:
     Основная функция планировщика.
     Проверяет все активные бюджеты и отправляет уведомления при необходимости.
     """
-    now = datetime.datetime.utcnow()
+    now = datetime.datetime.now(datetime.timezone.utc)
     month = now.month
     year = now.year
 
@@ -159,3 +162,27 @@ async def _process_budget(bot, budget: dict, month: int, year: int,
             overspent_notified_at=now if overspent_sent else None,
             last_notified_spending=current_spending,
         )
+
+
+async def check_user_budget_now(bot, user_id: int, project_id=None) -> None:
+    """
+    Немедленная проверка бюджета конкретного пользователя.
+    Вызывается после изменения порога или суммы бюджета,
+    чтобы не ждать следующего запуска планировщика (каждые 4 ч).
+    """
+    now = datetime.datetime.now(datetime.timezone.utc)
+    month, year = now.month, now.year
+
+    budget = await budgets_utils.get_budget(user_id, month, year, project_id)
+    if not budget:
+        return
+    if not budget.get('notify_enabled') or not budget.get('notify_threshold'):
+        return
+
+    try:
+        await _process_budget(bot, budget, month, year, now)
+        log_event(logger, "check_user_budget_now_done",
+                  user_id=user_id, project_id=project_id)
+    except Exception as e:
+        log_error(logger, e, "check_user_budget_now_error",
+                  user_id=user_id, project_id=project_id)
