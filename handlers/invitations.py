@@ -336,7 +336,7 @@ def register_invitation_handlers(application):
         },
         fallbacks=[CommandHandler("cancel", _cancel_invite)],
         name="invite_conversation",
-        persistent=False
+        persistent=False,
     )
     application.add_handler(invite_conv_handler)
     

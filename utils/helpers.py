@@ -256,9 +256,9 @@ def get_main_menu_keyboard():
     from telegram import ReplyKeyboardMarkup
     btn = config.MAIN_MENU_BUTTONS
     keyboard = [
-        [btn["add"],      btn["day"],        btn["month"]],
-        [btn["budget"],   btn["categories"], btn["projects"]],
-        [btn["analysis"], btn["help"]],
+        [btn["add"],       btn["day"],        btn["month"]    ],
+        [btn["budget"],    btn["recurring"],   btn["categories"]],
+        [btn["projects"],  btn["analysis"],   btn["help"]     ],
     ]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 

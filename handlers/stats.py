@@ -8,7 +8,7 @@ from telegram import Update, ReplyKeyboardMarkup
 from telegram.constants import ParseMode
 from telegram.ext import ContextTypes, CommandHandler, filters, MessageHandler, ConversationHandler, CallbackQueryHandler
 from utils import excel, helpers, visualization, projects
-from utils.helpers import main_menu_button_regex
+from utils.helpers import main_menu_button_regex, analysis_menu_button_regex
 from utils.logger import get_logger, log_command, log_event, log_error
 import config
 import os
@@ -274,6 +274,6 @@ def register_stats_handlers(application):
     application.add_handler(CommandHandler("category", category_command))
     # Categories button now handled by category menu (handlers/category.py)
     application.add_handler(CommandHandler("stats", stats_command))
-    application.add_handler(MessageHandler(filters.Regex(main_menu_button_regex("stats")), stats_command))
+    application.add_handler(MessageHandler(filters.Regex(analysis_menu_button_regex("stats")), stats_command))
     application.add_handler(CommandHandler("day", day_command))
     application.add_handler(MessageHandler(filters.Regex(main_menu_button_regex("day")), day_command))

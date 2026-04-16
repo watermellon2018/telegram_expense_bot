@@ -623,6 +623,6 @@ def register_category_handlers(application):
         },
         fallbacks=[CommandHandler("cancel", cancel_category_delete)],
         name="delete_category_conversation",
-        persistent=False
+        persistent=False,
     )
     application.add_handler(delete_conv_handler)

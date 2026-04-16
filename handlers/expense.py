@@ -2,6 +2,8 @@
 Обработчики команд для добавления расходов
 """
 
+import asyncio
+
 from telegram import Update, ReplyKeyboardMarkup, ReplyKeyboardRemove, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes, CommandHandler, filters, MessageHandler, ConversationHandler, CallbackQueryHandler
 from utils import excel, helpers, projects, categories
@@ -467,6 +469,21 @@ async def handle_description(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
     if success:
         await check_user_budget_now(context.bot, user_id, project_id)
+
+        # Проверяем паттерн постоянного расхода — неблокирующая фоновая задача.
+        # Запускаем только если есть описание (без него паттерн не определить).
+        if description:
+            from handlers.recurring import suggest_recurring_if_pattern
+            asyncio.create_task(
+                suggest_recurring_if_pattern(
+                    context.bot,
+                    str(user_id),
+                    project_id,
+                    category_id,
+                    description,
+                    context.bot_data,
+                )
+            )
 
     # Очищаем данные пользователя
     for key in ['amount', 'category_id', 'category_name']:
