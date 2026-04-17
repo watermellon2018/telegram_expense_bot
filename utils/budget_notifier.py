@@ -3,8 +3,8 @@
 Запускается каждые 4 часа через APScheduler.
 
 Логика уведомлений:
-- Порог: spending >= notify_threshold → один раз, затем раз в 2 дня если траты изменились.
-- Перерасход: spending > amount → один раз, затем раз в 2 дня если траты изменились.
+- Порог: spending >= notify_threshold → один раз за месяц.
+- Перерасход: spending > amount → один раз за месяц.
 - Если трат нет и не было → не беспокоить.
 - Для проектов: уведомить ВСЕХ участников.
 """
@@ -15,9 +15,6 @@ from utils import budgets as budgets_utils, excel
 from utils.projects import get_project_members
 
 logger = get_logger("utils.budget_notifier")
-
-RESEND_INTERVAL_DAYS = 2  # Повторное уведомление не чаще чем раз в N дней
-
 
 def _fmt_threshold_message(budget_amount: float, spending: float, threshold: float,
                             month_name: str, year: int) -> str:
@@ -48,21 +45,11 @@ def _fmt_overspent_message(budget_amount: float, spending: float,
 
 def _should_send(notified_at, last_notified_spending, current_spending: float) -> bool:
     """
-    Определяет, нужно ли отправлять уведомление.
-    Условия:
-    - Ещё не отправляли (notified_at IS NULL), ИЛИ
-    - Прошло >= RESEND_INTERVAL_DAYS дней И траты изменились с момента последнего уведомления.
+    Для защиты от спама отправляем только один раз за месяц.
+    Сброс флага выполняется при изменении бюджета/порога
+    (см. utils.budgets.set_budget / set_notification).
     """
-    if notified_at is None:
-        return True
-    now = datetime.datetime.now(datetime.timezone.utc)
-    # asyncpg возвращает timestamptz как aware datetime; приводим к единому типу
-    if notified_at.tzinfo is None:
-        notified_at = notified_at.replace(tzinfo=datetime.timezone.utc)
-    days_passed = (now - notified_at).total_seconds() / 86400
-    spending_changed = (last_notified_spending is None or
-                        abs(current_spending - last_notified_spending) > 0.01)
-    return days_passed >= RESEND_INTERVAL_DAYS and spending_changed
+    return notified_at is None
 
 
 def _get_month_name(month: int) -> str:
@@ -87,7 +74,9 @@ async def check_budget_notifications(bot) -> None:
     Основная функция планировщика.
     Проверяет все активные бюджеты и отправляет уведомления при необходимости.
     """
-    now = datetime.datetime.now(datetime.timezone.utc)
+    # Используем локальное время процесса, чтобы месяц/год совпадали
+    # с датами, которыми сохраняются расходы.
+    now = datetime.datetime.now()
     month = now.month
     year = now.year
 
@@ -170,7 +159,7 @@ async def check_user_budget_now(bot, user_id: int, project_id=None) -> None:
     Вызывается после изменения порога или суммы бюджета,
     чтобы не ждать следующего запуска планировщика (каждые 4 ч).
     """
-    now = datetime.datetime.now(datetime.timezone.utc)
+    now = datetime.datetime.now()
     month, year = now.month, now.year
 
     budget = await budgets_utils.get_budget(user_id, month, year, project_id)

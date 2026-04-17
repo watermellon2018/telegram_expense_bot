@@ -136,7 +136,8 @@ async def test_handle_description_with_text(mock_update, mock_context):
         'category_id': 1,
         'category_name': 'продукты'
     })
-    
+    mock_context.bot_data = {}
+
     with patch('handlers.expense.excel.add_expense', new=AsyncMock(return_value=True)):
         result = await handle_description(mock_update, mock_context)
         
