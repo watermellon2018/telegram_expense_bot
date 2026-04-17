@@ -346,6 +346,24 @@ async def _cancel_set(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
 # Диалог: настроить уведомление
 # ---------------------------------------------------------------------------
 
+async def _cancel_edit_notification(update: Update,
+                                    context: ContextTypes.DEFAULT_TYPE) -> int:
+    await update.message.reply_text(
+        "Изменение уведомления отменено.",
+        reply_markup=_budget_menu_keyboard(),
+    )
+    return ConversationHandler.END
+
+
+async def _back_to_main_menu_from_edit_notification(
+        update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    await update.message.reply_text(
+        "Главное меню",
+        reply_markup=get_main_menu_keyboard(),
+    )
+    return ConversationHandler.END
+
+
 async def edit_notification_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Начало диалога изменения порога уведомления."""
     user_id = update.effective_user.id
@@ -359,7 +377,11 @@ async def edit_notification_start(update: Update, context: ContextTypes.DEFAULT_
         return ConversationHandler.END
 
     now = datetime.datetime.now()
-    budget = await budgets_utils.get_or_inherit_budget(user_id, now.month, now.year, project_id)
+    current_budget = await budgets_utils.get_budget(user_id, now.month, now.year, project_id)
+    inherited = current_budget is None
+    budget = current_budget or await budgets_utils.get_or_inherit_budget(
+        user_id, now.month, now.year, project_id
+    )
 
     if budget is None:
         await update.message.reply_text(
@@ -370,9 +392,17 @@ async def edit_notification_start(update: Update, context: ContextTypes.DEFAULT_
 
     current = budget.get('notify_threshold')
     hint = f"Текущий порог: {_fmt_amount(current)}\n\n" if current else ""
+    inherited_note = ""
+    if inherited:
+        inherited_note = (
+            f"ℹ️ Текущий месяц унаследует бюджет {_fmt_amount(budget['amount'])} "
+            f"из {budget['month']:02d}.{budget['year']}.\n\n"
+        )
+
     await update.message.reply_text(
         f"🔔 Настройка уведомления о бюджете\n\n"
         f"💰 Бюджет: {_fmt_amount(budget['amount'])}\n"
+        f"{inherited_note}"
         f"{hint}"
         f"Введите новый порог уведомления:",
         reply_markup=ReplyKeyboardMarkup([["Отмена"]], resize_keyboard=True),
@@ -382,19 +412,24 @@ async def edit_notification_start(update: Update, context: ContextTypes.DEFAULT_
 
 async def edit_notification_threshold(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Обрабатывает новый порог уведомления."""
-    text = update.message.text.strip()
-    if text == "Отмена":
-        await update.message.reply_text(
-            "Изменение уведомления отменено.",
-            reply_markup=_budget_menu_keyboard(),
-        )
-        return ConversationHandler.END
-
     user_id = update.effective_user.id
     project_id = context.user_data.get('active_project_id')
     now = datetime.datetime.now()
 
-    budget = await budgets_utils.get_or_inherit_budget(user_id, now.month, now.year, project_id)
+    text = update.message.text.strip()
+    if text == "Отмена":
+        return await _cancel_edit_notification(update, context)
+
+    # Для корректной записи порога нужен бюджет именно текущего месяца.
+    # Если есть только унаследованный — материализуем его в текущем месяце.
+    budget = await budgets_utils.get_budget(user_id, now.month, now.year, project_id)
+    if budget is None:
+        inherited = await budgets_utils.get_or_inherit_budget(user_id, now.month, now.year, project_id)
+        if inherited is not None:
+            budget = await budgets_utils.set_budget(
+                user_id, now.month, now.year, inherited['amount'], project_id
+            )
+
     if budget is None:
         await update.message.reply_text(
             "❌ Бюджет не найден.",
@@ -556,9 +591,9 @@ def register_budget_handlers(application) -> None:
             EDITING_THRESHOLD: [MessageHandler(filters.TEXT & ~filters.COMMAND, edit_notification_threshold)],
         },
         fallbacks=[
-            MessageHandler(filters.Regex(r"^Отмена$"), lambda u, c: ConversationHandler.END),
+            MessageHandler(filters.Regex(r"^Отмена$"), _cancel_edit_notification),
             MessageHandler(filters.Regex(main_menu_button_regex("main_menu")),
-                           lambda u, c: ConversationHandler.END),
+                           _back_to_main_menu_from_edit_notification),
         ],
         name="edit_notification_conversation",
         persistent=False,
