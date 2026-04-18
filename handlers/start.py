@@ -8,6 +8,13 @@ from utils import excel, projects, helpers
 from utils.logger import get_logger, log_command, log_event, log_error
 import config
 from utils import helpers as btn_helpers
+from metrics import (
+    track_command,
+    track_handler_start,
+    track_handler_success,
+    track_handler_error,
+    classify_error_type,
+)
 
 logger = get_logger("handlers.start")
 
@@ -16,6 +23,9 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     Обрабатывает команду /start
     Также обрабатывает приглашения в проекты: /start inv_TOKEN
     """
+    track_command("start")
+    track_handler_start("start")
+    error_type = None
     user_id = update.effective_user.id
     first_name = update.effective_user.first_name
         
@@ -74,13 +84,22 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         log_event(logger, "start_success", user_id=user_id, status="success")
         
     except Exception as e:
+        error_type = classify_error_type(e)
         log_error(logger, e, "start_error", user_id=user_id)
         await update.message.reply_text("❌ Произошла ошибка при запуске бота. Попробуйте позже.")
+    finally:
+        if error_type:
+            track_handler_error("start", error_type)
+        else:
+            track_handler_success("start")
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """
     Обрабатывает команду /help
     """
+    track_command("help")
+    track_handler_start("help")
+    error_type = None
     user_id = update.effective_user.id
     
     log_command(logger, "help", user_id=user_id)
@@ -127,13 +146,21 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         await update.message.reply_text(message)
         log_event(logger, "help_success", user_id=user_id, status="success")
     except Exception as e:
+        error_type = classify_error_type(e)
         log_error(logger, e, "help_error", user_id=user_id)
         await update.message.reply_text("❌ Произошла ошибка при получении справки.")
+    finally:
+        if error_type:
+            track_handler_error("help", error_type)
+        else:
+            track_handler_success("help")
 
 async def projects_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """
     Отображает меню управления проектами
     """
+    track_handler_start("projects_menu")
+    error_type = None
     user_id = update.effective_user.id
     
     log_event(logger, "projects_menu_opened", user_id=user_id)
@@ -155,28 +182,57 @@ async def projects_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         )
         log_event(logger, "projects_menu_success", user_id=user_id)
     except Exception as e:
+        error_type = classify_error_type(e)
         log_error(logger, e, "projects_menu_error", user_id=user_id)
+    finally:
+        if error_type:
+            track_handler_error("projects_menu", error_type)
+        else:
+            track_handler_success("projects_menu")
 
 async def main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """
     Возвращает в главное меню
     """
-    reply_markup = helpers.get_main_menu_keyboard()
-    
-    await update.message.reply_text(
-        "✅ Возвращение в главное меню",
-        reply_markup=reply_markup
-    )
+    track_handler_start("main_menu")
+    error_type = None
+    try:
+        reply_markup = helpers.get_main_menu_keyboard()
+        await update.message.reply_text(
+            "✅ Возвращение в главное меню",
+            reply_markup=reply_markup
+        )
+    except Exception as e:
+        error_type = classify_error_type(e)
+        log_error(logger, e, "main_menu_error")
+        await update.message.reply_text("❌ Не удалось открыть главное меню. Попробуйте позже.")
+    finally:
+        if error_type:
+            track_handler_error("main_menu", error_type)
+        else:
+            track_handler_success("main_menu")
 
 
 async def settings_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """
     Отображает подменю настроек.
     """
-    await update.message.reply_text(
-        "⚙️ Настройки\n\nВыберите действие:",
-        reply_markup=helpers.get_settings_menu_keyboard()
-    )
+    track_handler_start("settings_menu")
+    error_type = None
+    try:
+        await update.message.reply_text(
+            "⚙️ Настройки\n\nВыберите действие:",
+            reply_markup=helpers.get_settings_menu_keyboard()
+        )
+    except Exception as e:
+        error_type = classify_error_type(e)
+        log_error(logger, e, "settings_menu_error")
+        await update.message.reply_text("❌ Не удалось открыть настройки. Попробуйте позже.")
+    finally:
+        if error_type:
+            track_handler_error("settings_menu", error_type)
+        else:
+            track_handler_success("settings_menu")
 
 def register_start_handlers(application):
     """
