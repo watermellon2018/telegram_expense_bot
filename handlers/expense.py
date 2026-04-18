@@ -2,6 +2,8 @@
 Обработчики команд для добавления расходов
 """
 
+import asyncio
+
 from telegram import Update, ReplyKeyboardMarkup, ReplyKeyboardRemove, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes, CommandHandler, filters, MessageHandler, ConversationHandler, CallbackQueryHandler
 from utils import excel, helpers, projects, categories
@@ -9,6 +11,16 @@ from utils.helpers import main_menu_button_regex
 from utils.budget_notifier import check_user_budget_now
 from utils.logger import get_logger, log_command, log_event, log_error
 import config
+from metrics import (
+    track_command,
+    track_handler_start,
+    track_handler_success,
+    track_handler_error,
+    track_flow_started,
+    track_flow_completed,
+    track_flow_cancelled,
+    classify_error_type,
+)
 
 logger = get_logger("handlers.expense")
 
@@ -127,93 +139,109 @@ async def add_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
     """
     Обрабатывает команду /add для начала диалога добавления расхода
     """
+    track_command("add")
+    track_handler_start("add_command")
+    track_flow_started("add_expense")
+    error_type = None
     from utils.permissions import Permission, has_permission
 
-    user_id = update.effective_user.id
-    message_text = update.message.text
+    try:
+        user_id = update.effective_user.id
+        message_text = update.message.text
 
-    # Проверяем право добавления расхода до любой обработки
-    project_id = await helpers.get_active_project_id(user_id, context)
-    if not await has_permission(user_id, project_id, Permission.ADD_EXPENSE):
+        # Проверяем право добавления расхода до любой обработки
+        project_id = await helpers.get_active_project_id(user_id, context)
+        if not await has_permission(user_id, project_id, Permission.ADD_EXPENSE):
+            await update.message.reply_text(
+                "❌ У вас нет прав на добавление расходов в этом проекте.\n"
+                "Роль «Наблюдатель» позволяет только просматривать данные."
+            )
+            return ConversationHandler.END
+
+        # Проверяем, содержит ли команда аргументы (только для /add ...; кнопка "➕ Добавить" — без аргументов)
+        if message_text.strip().startswith("/add") and len(message_text.split()) > 1:
+            # Если команда содержит аргументы, обрабатываем как раньше
+            expense_data = helpers.parse_add_command(message_text)
+
+            if not expense_data:
+                log_event(logger, "invalid_command_format", user_id=user_id,
+                         command_text=message_text, reason="parse_failed")
+                await update.message.reply_text(
+                    "❌ Неверный формат команды. Используйте:\n"
+                    "/add <сумма> <категория> [описание]\n"
+                    "Например: /add 100 продукты хлеб и молоко"
+                )
+                return ConversationHandler.END
+
+            # Ищем категорию по имени одним SQL-запросом
+            category_found = await categories.get_category_by_name(
+                user_id, expense_data['category'], project_id
+            )
+
+            if not category_found:
+                log_event(logger, "invalid_category_in_command", user_id=user_id,
+                         category=expense_data['category'], amount=expense_data['amount'],
+                         reason="category_not_found")
+                await update.message.reply_text(
+                    f"❌ Категория '{expense_data['category']}' не найдена.\n"
+                    f"Используйте команду /add без аргументов для выбора категории."
+                )
+                return ConversationHandler.END
+            
+            # Добавляем расход
+            success = await excel.add_expense(
+                user_id,
+                expense_data['amount'],
+                category_found['category_id'],
+                expense_data['description'],
+                project_id
+            )
+            
+            if not success:
+                await update.message.reply_text("❌ Ошибка при добавлении расхода.")
+                return ConversationHandler.END
+
+            # Отправляем подтверждение
+            category_emoji = config.DEFAULT_CATEGORIES.get(category_found['name'], '📦')
+
+            confirmation = (
+                f"✅ Расход добавлен:\n"
+                f"💰 Сумма: {expense_data['amount']}\n"
+                f"{category_emoji} Категория: {category_found['name']}"
+            )
+
+            if expense_data['description']:
+                confirmation += f"\n📝 Описание: {expense_data['description']}"
+            
+            # Добавляем информацию о проекте
+            if project_id is not None:
+                project = await projects.get_project_by_id(user_id, project_id)
+                if project:
+                    confirmation += f"\n📁 Проект: {project['project_name']}"
+            else:
+                confirmation += f"\n📊 Общие расходы"
+
+            await update.message.reply_text(confirmation)
+            await check_user_budget_now(context.bot, user_id, project_id)
+            track_flow_completed("add_expense")
+            return ConversationHandler.END
+
+        # Если команда без аргументов, начинаем диалог
         await update.message.reply_text(
-            "❌ У вас нет прав на добавление расходов в этом проекте.\n"
-            "Роль «Наблюдатель» позволяет только просматривать данные."
+            "Введите сумму расхода:"
         )
+
+        return ENTERING_AMOUNT
+    except Exception as e:
+        error_type = classify_error_type(e)
+        log_error(logger, e, "add_command_error")
+        await update.message.reply_text("❌ Ошибка при запуске добавления расхода.")
         return ConversationHandler.END
-
-    # Проверяем, содержит ли команда аргументы (только для /add ...; кнопка "➕ Добавить" — без аргументов)
-    if message_text.strip().startswith("/add") and len(message_text.split()) > 1:
-        # Если команда содержит аргументы, обрабатываем как раньше
-        expense_data = helpers.parse_add_command(message_text)
-
-        if not expense_data:
-            log_event(logger, "invalid_command_format", user_id=user_id,
-                     command_text=message_text, reason="parse_failed")
-            await update.message.reply_text(
-                "❌ Неверный формат команды. Используйте:\n"
-                "/add <сумма> <категория> [описание]\n"
-                "Например: /add 100 продукты хлеб и молоко"
-            )
-            return ConversationHandler.END
-
-        # Ищем категорию по имени одним SQL-запросом
-        category_found = await categories.get_category_by_name(
-            user_id, expense_data['category'], project_id
-        )
-
-        if not category_found:
-            log_event(logger, "invalid_category_in_command", user_id=user_id,
-                     category=expense_data['category'], amount=expense_data['amount'],
-                     reason="category_not_found")
-            await update.message.reply_text(
-                f"❌ Категория '{expense_data['category']}' не найдена.\n"
-                f"Используйте команду /add без аргументов для выбора категории."
-            )
-            return ConversationHandler.END
-        
-        # Добавляем расход
-        success = await excel.add_expense(
-            user_id,
-            expense_data['amount'],
-            category_found['category_id'],
-            expense_data['description'],
-            project_id
-        )
-        
-        if not success:
-            await update.message.reply_text("❌ Ошибка при добавлении расхода.")
-            return ConversationHandler.END
-
-        # Отправляем подтверждение
-        category_emoji = config.DEFAULT_CATEGORIES.get(category_found['name'], '📦')
-
-        confirmation = (
-            f"✅ Расход добавлен:\n"
-            f"💰 Сумма: {expense_data['amount']}\n"
-            f"{category_emoji} Категория: {category_found['name']}"
-        )
-
-        if expense_data['description']:
-            confirmation += f"\n📝 Описание: {expense_data['description']}"
-        
-        # Добавляем информацию о проекте
-        if project_id is not None:
-            project = await projects.get_project_by_id(user_id, project_id)
-            if project:
-                confirmation += f"\n📁 Проект: {project['project_name']}"
+    finally:
+        if error_type:
+            track_handler_error("add_command", error_type)
         else:
-            confirmation += f"\n📊 Общие расходы"
-
-        await update.message.reply_text(confirmation)
-        await check_user_budget_now(context.bot, user_id, project_id)
-        return ConversationHandler.END
-
-    # Если команда без аргументов, начинаем диалог
-    await update.message.reply_text(
-        "Введите сумму расхода:"
-    )
-
-    return ENTERING_AMOUNT
+            track_handler_success("add_command")
 
 
 async def handle_amount(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -410,6 +438,8 @@ async def handle_description(update: Update, context: ContextTypes.DEFAULT_TYPE)
     """
     Обрабатывает ввод описания расхода
     """
+    track_handler_start("add_expense_handle_description")
+    error_type = None
     user_id = update.effective_user.id
     text = update.message.text
 
@@ -419,71 +449,111 @@ async def handle_description(update: Update, context: ContextTypes.DEFAULT_TYPE)
     category_name = context.user_data.get('category_name', '')
     project_id = context.user_data.get('active_project_id')
 
-    if not category_id:
-        log_error(logger, Exception("category_id missing"), "expense_add_failed_no_category",
-                 user_id=user_id, project_id=project_id, amount=amount)
-        await update.message.reply_text("❌ Ошибка: категория не выбрана.")
+    try:
+        if not category_id:
+            log_error(logger, Exception("category_id missing"), "expense_add_failed_no_category",
+                     user_id=user_id, project_id=project_id, amount=amount)
+            await update.message.reply_text("❌ Ошибка: категория не выбрана.")
+            return ConversationHandler.END
+
+        # Проверяем, хочет ли пользователь пропустить описание
+        if text == '/skip':
+            description = ""
+        else:
+            description = text
+
+        # Добавляем расход
+        success = await excel.add_expense(user_id, amount, category_id, description, project_id)
+        
+        if success:
+            log_event(logger, "expense_added", user_id=user_id, project_id=project_id,
+                     amount=amount, category_id=category_id, category_name=category_name,
+                     has_description=bool(description))
+        else:
+            log_error(logger, Exception("Failed to add expense"), "expense_add_failed",
+                     user_id=user_id, project_id=project_id, amount=amount, 
+                     category_id=category_id, category_name=category_name)
+
+        # Отправляем подтверждение
+        emoji = config.DEFAULT_CATEGORIES.get(category_name, '📦')
+
+        confirmation = (
+            f"✅ Расход добавлен:\n"
+            f"💰 Сумма: {amount:.2f}\n"
+            f"{emoji} Категория: {category_name}"
+        )
+
+        if description:
+            confirmation += f"\n📝 Описание: {description}"
+        
+        # Добавляем информацию о проекте
+        if project_id is not None:
+            project = await projects.get_project_by_id(user_id, project_id)
+            if project:
+                confirmation += f"\n📁 Проект: {project['project_name']}"
+        else:
+            confirmation += f"\n📊 Общие расходы"
+
+        await update.message.reply_text(confirmation, reply_markup=helpers.get_main_menu_keyboard())
+
+        if success:
+            await check_user_budget_now(context.bot, user_id, project_id)
+            track_flow_completed("add_expense")
+
+            # Проверяем паттерн постоянного расхода — неблокирующая фоновая задача.
+            # Запускаем только если есть описание (без него паттерн не определить).
+            if description:
+                from handlers.recurring import suggest_recurring_if_pattern
+                asyncio.create_task(
+                    suggest_recurring_if_pattern(
+                        context.bot,
+                        str(user_id),
+                        project_id,
+                        category_id,
+                        description,
+                        context.bot_data,
+                    )
+                )
+
+        # Очищаем данные пользователя
+        for key in ['amount', 'category_id', 'category_name']:
+            context.user_data.pop(key, None)
+
         return ConversationHandler.END
-
-    # Проверяем, хочет ли пользователь пропустить описание
-    if text == '/skip':
-        description = ""
-    else:
-        description = text
-
-    # Добавляем расход
-    success = await excel.add_expense(user_id, amount, category_id, description, project_id)
-    
-    if success:
-        log_event(logger, "expense_added", user_id=user_id, project_id=project_id,
-                 amount=amount, category_id=category_id, category_name=category_name,
-                 has_description=bool(description))
-    else:
-        log_error(logger, Exception("Failed to add expense"), "expense_add_failed",
-                 user_id=user_id, project_id=project_id, amount=amount, 
-                 category_id=category_id, category_name=category_name)
-
-    # Отправляем подтверждение
-    emoji = config.DEFAULT_CATEGORIES.get(category_name, '📦')
-
-    confirmation = (
-        f"✅ Расход добавлен:\n"
-        f"💰 Сумма: {amount:.2f}\n"
-        f"{emoji} Категория: {category_name}"
-    )
-
-    if description:
-        confirmation += f"\n📝 Описание: {description}"
-    
-    # Добавляем информацию о проекте
-    if project_id is not None:
-        project = await projects.get_project_by_id(user_id, project_id)
-        if project:
-            confirmation += f"\n📁 Проект: {project['project_name']}"
-    else:
-        confirmation += f"\n📊 Общие расходы"
-
-    await update.message.reply_text(confirmation, reply_markup=helpers.get_main_menu_keyboard())
-
-    if success:
-        await check_user_budget_now(context.bot, user_id, project_id)
-
-    # Очищаем данные пользователя
-    for key in ['amount', 'category_id', 'category_name']:
-        context.user_data.pop(key, None)
-
-    return ConversationHandler.END
+    except Exception as e:
+        error_type = classify_error_type(e)
+        log_error(logger, e, "handle_description_error", user_id=user_id, project_id=project_id)
+        await update.message.reply_text("❌ Ошибка при добавлении расхода. Попробуйте снова.")
+        return ConversationHandler.END
+    finally:
+        if error_type:
+            track_handler_error("add_expense_handle_description", error_type)
+        else:
+            track_handler_success("add_expense_handle_description")
 
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """
     Отменяет диалог добавления расхода
     """
+    track_handler_start("add_expense_cancel")
+    error_type = None
     # Очищаем данные пользователя
-    for key in ['amount', 'category_id', 'category_name']:
-        context.user_data.pop(key, None)
-    
-    return await helpers.cancel_conversation(update, context, "Добавление расхода отменено.")
+    try:
+        for key in ['amount', 'category_id', 'category_name']:
+            context.user_data.pop(key, None)
+        track_flow_cancelled("add_expense")
+        return await helpers.cancel_conversation(update, context, "Добавление расхода отменено.")
+    except Exception as e:
+        error_type = classify_error_type(e)
+        log_error(logger, e, "cancel_expense_error")
+        await update.message.reply_text("❌ Не удалось отменить добавление расхода.")
+        return ConversationHandler.END
+    finally:
+        if error_type:
+            track_handler_error("add_expense_cancel", error_type)
+        else:
+            track_handler_success("add_expense_cancel")
 
 
 async def direct_amount_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:

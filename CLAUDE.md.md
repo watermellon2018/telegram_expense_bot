@@ -1,0 +1,3 @@
+Add under a ## Deployment section at the top level of CLAUDE.md\n\nWhen working with Docker/deployment configs, always confirm the target environment (CPU vs GPU/CUDA) before generating Dockerfiles or related configuration.
+Add under a ## Project Overview section near the top of CLAUDE.md\n\nThis project uses Python as the primary language. Configuration files are in YAML. Always prefer Python conventions and type hints.
+Add under a ## Workflow section in CLAUDE.md\n\nWhen refactoring across multiple files, use TodoWrite to track progress and ensure all files are updated consistently. Resume from the todo list if a session is interrupted.

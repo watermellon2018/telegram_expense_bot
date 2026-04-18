@@ -17,6 +17,7 @@ import seaborn as sns
 import datetime
 import logging
 from utils import excel
+from utils import incomes as income_utils
 import config
 
 logger = logging.getLogger(__name__)
@@ -546,4 +547,135 @@ async def create_category_distribution_chart(user_id, year=None, save_path=None)
     return await loop.run_in_executor(
         None,
         functools.partial(_render_distribution_chart, raw_names, amounts_vals, year, save_path)
+    )
+
+
+def _render_income_vs_expense_chart(months_labels: list, income_amounts: list, expense_amounts: list, year: int, save_path: str) -> str:
+    """Синхронный рендер сравнительного графика доходов и расходов по месяцам."""
+    fig, ax = plt.subplots(figsize=(12, 6))
+    fig.patch.set_facecolor("white")
+
+    x = list(range(len(months_labels)))
+    width = 0.36
+
+    income_bars = ax.bar(
+        [v - width / 2 for v in x],
+        income_amounts,
+        width=width,
+        color="#4CAF50",
+        edgecolor="white",
+        linewidth=1.2,
+        label="Доходы",
+    )
+    expense_bars = ax.bar(
+        [v + width / 2 for v in x],
+        expense_amounts,
+        width=width,
+        color="#E15759",
+        edgecolor="white",
+        linewidth=1.2,
+        label="Расходы",
+    )
+
+    max_val = max(max(income_amounts, default=0), max(expense_amounts, default=0), 1)
+    for bar in income_bars:
+        if bar.get_height() > 0:
+            ax.text(
+                bar.get_x() + bar.get_width() / 2,
+                bar.get_height() + max_val * 0.01,
+                _fmt_amount(bar.get_height()),
+                ha="center",
+                va="bottom",
+                fontsize=7,
+                color="#2F6F36",
+            )
+    for bar in expense_bars:
+        if bar.get_height() > 0:
+            ax.text(
+                bar.get_x() + bar.get_width() / 2,
+                bar.get_height() + max_val * 0.01,
+                _fmt_amount(bar.get_height()),
+                ha="center",
+                va="bottom",
+                fontsize=7,
+                color="#8B2C2A",
+            )
+
+    ax.set_xticks(x)
+    ax.set_xticklabels(months_labels)
+    ax.set_title(
+        f"Доходы vs. расходы по месяцам за {year} год",
+        loc="right",
+        fontsize=12,
+        fontweight="bold",
+        color="#333333",
+    )
+    ax.set_xlabel("Месяц", fontsize=10, color="#555555")
+    ax.set_ylabel("Сумма, руб.", fontsize=10, color="#555555")
+    ax.yaxis.set_major_formatter(mticker.FuncFormatter(lambda val, _: f"{int(val):,}".replace(",", "\u202f")))
+    ax.set_ylim(0, max_val * 1.2)
+    ax.legend(frameon=False)
+    sns.despine(left=False, bottom=False)
+
+    plt.savefig(save_path, bbox_inches="tight", facecolor="white")
+    plt.close(fig)
+    return save_path
+
+
+async def create_income_distribution_chart(user_id, year=None, save_path=None, project_id=None):
+    """Создаёт диаграмму распределения доходов по категориям за год."""
+    if year is None:
+        year = datetime.datetime.now().year
+
+    incomes_df = await income_utils.get_all_incomes(user_id, year, project_id)
+    if incomes_df is None or incomes_df.empty:
+        return None
+
+    incomes_df["amount"] = incomes_df["amount"].astype(float)
+    category_incomes = incomes_df.groupby("category")["amount"].sum().sort_values(ascending=True)
+
+    top_n = 5
+    if len(category_incomes) > top_n:
+        other_sum = float(category_incomes.iloc[:-(top_n - 1)].sum())
+        category_incomes = category_incomes.iloc[-(top_n - 1):]
+        category_incomes["прочее"] = other_sum
+        category_incomes = category_incomes.sort_values(ascending=True)
+
+    raw_names = list(category_incomes.index)
+    amounts_vals = [float(v) for v in category_incomes.values]
+
+    if save_path is None:
+        user_dir = excel.create_user_dir(user_id)
+        save_path = os.path.join(user_dir, f"income_distribution_{year}.png")
+
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(
+        None,
+        functools.partial(_render_distribution_chart, raw_names, amounts_vals, year, save_path),
+    )
+
+
+async def create_income_vs_expense_chart(user_id, year=None, save_path=None, project_id=None):
+    """Создаёт сравнительный график «доходы vs расходы» по месяцам."""
+    if year is None:
+        year = datetime.datetime.now().year
+
+    comparison = await income_utils.get_yearly_income_vs_expense(user_id, year, project_id)
+    incomes_by_month = comparison.get("incomes", {})
+    expenses_by_month = comparison.get("expenses", {})
+    if not incomes_by_month and not expenses_by_month:
+        return None
+
+    months_labels = [MONTH_NAMES_SHORT_RU[i] for i in range(1, 13)]
+    income_amounts = [float(incomes_by_month.get(i, 0.0)) for i in range(1, 13)]
+    expense_amounts = [float(expenses_by_month.get(i, 0.0)) for i in range(1, 13)]
+
+    if save_path is None:
+        user_dir = excel.create_user_dir(user_id)
+        save_path = os.path.join(user_dir, f"income_vs_expense_{year}.png")
+
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(
+        None,
+        functools.partial(_render_income_vs_expense_chart, months_labels, income_amounts, expense_amounts, year, save_path),
     )

@@ -256,9 +256,9 @@ def get_main_menu_keyboard():
     from telegram import ReplyKeyboardMarkup
     btn = config.MAIN_MENU_BUTTONS
     keyboard = [
-        [btn["add"],      btn["day"],        btn["month"]],
-        [btn["budget"],   btn["categories"], btn["projects"]],
-        [btn["analysis"], btn["help"]],
+        [btn["add"],     btn["month"],       btn["day"]      ],
+        [btn["incomes"], btn["budget"],      btn["settings"] ],
+        [btn["projects"], btn["analysis"], btn["help"] ],
     ]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
@@ -271,6 +271,30 @@ def get_analysis_menu_keyboard():
     keyboard = [
         [btn["stats"],  btn["report"]],
         [btn["export"], btn["back"]],
+    ]
+    return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+
+
+def get_income_menu_keyboard():
+    """Возвращает клавиатуру подменю «Доходы»."""
+    import config
+    from telegram import ReplyKeyboardMarkup
+    btn = config.INCOME_MENU_BUTTONS
+    keyboard = [
+        [btn["add"], btn["categories"]],
+        [btn["recurring"], btn["back"]],
+    ]
+    return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+
+
+def get_settings_menu_keyboard():
+    """Возвращает клавиатуру подменю «Настройки»."""
+    import config
+    from telegram import ReplyKeyboardMarkup
+    btn = config.SETTINGS_MENU_BUTTONS
+    keyboard = [
+        [btn["categories"], btn["recurring"]],
+        [btn["back"]],
     ]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
@@ -303,6 +327,18 @@ def analysis_menu_button_regex(key: str) -> str:
     """Точное совпадение с кнопкой подменю «Анализ» (для filters.Regex)."""
     import config
     return "^" + re.escape(config.ANALYSIS_MENU_BUTTONS[key]) + "$"
+
+
+def income_menu_button_regex(key: str) -> str:
+    """Точное совпадение с кнопкой подменю «Доходы» (для filters.Regex)."""
+    import config
+    return "^" + re.escape(config.INCOME_MENU_BUTTONS[key]) + "$"
+
+
+def settings_menu_button_regex(key: str) -> str:
+    """Точное совпадение с кнопкой подменю «Настройки» (для filters.Regex)."""
+    import config
+    return "^" + re.escape(config.SETTINGS_MENU_BUTTONS[key]) + "$"
 
 
 async def get_active_project_id(user_id: int, context: ContextTypes.DEFAULT_TYPE) -> int:

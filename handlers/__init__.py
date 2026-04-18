@@ -13,6 +13,11 @@ from handlers.invitations import register_invitation_handlers
 from handlers.project_management import register_project_management_handlers
 from handlers.budget import register_budget_handlers
 from handlers.analysis import register_analysis_handlers
+from handlers.recurring import register_recurring_handlers
+from handlers.income_menu import register_income_menu_handlers
+from handlers.income import register_income_handlers
+from handlers.income_category import register_income_category_handlers
+from handlers.recurring_income import register_recurring_income_handlers
 
 def register_all_handlers(application):
     """
@@ -28,6 +33,11 @@ def register_all_handlers(application):
     register_export_handlers(application)
     register_report_handlers(application)      # Отчёт — до expense
     register_stats_handlers(application)
+    register_income_menu_handlers(application)  # Подменю «Доходы»
+    register_income_category_handlers(application)
+    register_recurring_income_handlers(application)
+    register_income_handlers(application)
     register_category_handlers(application)
     register_budget_handlers(application)      # Бюджет — до expense (expense ловит любой текст)
-    register_expense_handlers(application)
+    register_recurring_handlers(application)   # Постоянные расходы — до expense
+    register_expense_handlers(application)     # ПОСЛЕДНИМ: ловит любой текст

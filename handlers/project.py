@@ -636,7 +636,7 @@ def register_project_handlers(application):
         },
         fallbacks=[CommandHandler("cancel", project_cancel)],
         name="delete_project_conversation",
-        persistent=False
+        persistent=False,
     )
     application.add_handler(delete_conv_handler)
 

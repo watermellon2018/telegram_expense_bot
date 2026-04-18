@@ -4,6 +4,7 @@ Defines permissions for different user roles in projects.
 """
 
 from typing import Optional
+from typing import Set
 from enum import Enum
 from . import projects
 from utils.logger import get_logger, log_event, log_error
@@ -172,7 +173,7 @@ async def require_permission(
 async def get_user_permissions(
     user_id: int,
     project_id: Optional[int]
-) -> set[Permission]:
+) -> Set[Permission]:
     """
     Get all permissions for a user in a project.
     
@@ -261,7 +262,7 @@ def get_role_description(role: str) -> str:
     return descriptions.get(role, role)
 
 
-def get_role_permissions_list(role: str) -> list[str]:
+def get_role_permissions_list(role: str) -> list:
     """Get list of permission descriptions for a role"""
     permissions = ROLE_PERMISSIONS.get(role, set())
     return [get_permission_description(p) for p in permissions]
