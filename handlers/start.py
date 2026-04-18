@@ -58,6 +58,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             f"👋 Привет, {first_name}!\n\n"
             f"Я бот для учета и анализа расходов. С моей помощью вы можете:\n"
             f"• Записывать свои расходы по категориям\n"
+            f"• Записывать доходы в отдельном разделе\n"
             f"• Получать статистику за месяц\n"
             f"• Анализировать расходы с помощью графиков\n\n"
             f"Чтобы добавить расход, используйте команду:\n"
@@ -101,6 +102,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             "• /members - список участников\n\n"
             "💰 Учет расходов:\n"
             "• /add <сумма> <категория> [описание] - добавить расход\n"
+            "• Раздел «💵 Доходы» - добавить доход, управлять категориями и постоянными доходами\n"
             "• /month - статистика за текущий месяц\n"
             "• /day - статистика за текущий день\n"
             "• /stats - общая статистика расходов\n"
@@ -166,6 +168,16 @@ async def main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         reply_markup=reply_markup
     )
 
+
+async def settings_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """
+    Отображает подменю настроек.
+    """
+    await update.message.reply_text(
+        "⚙️ Настройки\n\nВыберите действие:",
+        reply_markup=helpers.get_settings_menu_keyboard()
+    )
+
 def register_start_handlers(application):
     """
     Регистрирует обработчики команд /start и /help
@@ -175,5 +187,6 @@ def register_start_handlers(application):
     
     # Обработчики для кнопок меню (тексты из config.MAIN_MENU_BUTTONS)
     application.add_handler(MessageHandler(filters.Regex(btn_helpers.main_menu_button_regex("projects")), projects_menu))
+    application.add_handler(MessageHandler(filters.Regex(btn_helpers.main_menu_button_regex("settings")), settings_menu))
     application.add_handler(MessageHandler(filters.Regex(btn_helpers.main_menu_button_regex("main_menu")), main_menu))
     application.add_handler(MessageHandler(filters.Regex(btn_helpers.main_menu_button_regex("help")), help_command))

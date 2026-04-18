@@ -7,7 +7,7 @@ import asyncio
 from telegram import Update, ReplyKeyboardMarkup
 from telegram.constants import ParseMode
 from telegram.ext import ContextTypes, CommandHandler, filters, MessageHandler, ConversationHandler, CallbackQueryHandler
-from utils import excel, helpers, visualization, projects
+from utils import excel, helpers, visualization, projects, incomes
 from utils.helpers import main_menu_button_regex, analysis_menu_button_regex
 from utils.logger import get_logger, log_command, log_event, log_error
 import config
@@ -42,9 +42,10 @@ async def month_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         log_event(logger, "month_stats_requested", user_id=user_id,
                  project_id=project_id, month=month, year=year)
 
-        # Получаем статистику расходов и бюджет параллельно
-        expenses, budget = await asyncio.gather(
+        # Получаем статистику расходов, доходов и бюджет параллельно
+        expenses, month_incomes, budget = await asyncio.gather(
             excel.get_month_expenses(user_id, month, year, project_id),
+            incomes.get_month_incomes(user_id, month, year, project_id),
             budgets_utils.get_or_inherit_budget(user_id, month, year, project_id),
         )
 
@@ -52,8 +53,18 @@ async def month_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             log_event(logger, "month_stats_empty", user_id=user_id,
                      project_id=project_id, month=month, year=year)
 
-        # Форматируем отчет
+        # Форматируем расходную часть отчета
         report = helpers.format_month_expenses(expenses, month, year)
+
+        # Добавляем сводку по доходам и итоговый баланс за месяц
+        income_total = float(month_incomes.get('total', 0)) if month_incomes else 0.0
+        expense_total = float(expenses.get('total', 0)) if expenses else 0.0
+        net_total = income_total - expense_total
+        report += (
+            "\n\n💵 Доходы за месяц:\n"
+            f"💰 Общая сумма доходов: {income_total:.2f}\n"
+            f"📈 Чистый результат месяца: {net_total:.2f}"
+        )
 
         # Добавляем статус бюджета (если задан)
         if budget:
@@ -66,11 +77,11 @@ async def month_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         # Отправляем отчет
         await update.message.reply_text(report, reply_markup=helpers.get_main_menu_keyboard())
         
-        total = expenses.get('total', 0) if expenses else 0
+        total = expense_total
         count = expenses.get('count', 0) if expenses else 0
         log_event(logger, "month_stats_sent", user_id=user_id, 
                  project_id=project_id, month=month, year=year,
-                 total=total, count=count)
+                 total=total, income_total=income_total, net_total=net_total, count=count)
 
         # Если есть расходы, отправляем круговую диаграмму
         if expenses and expenses['total'] > 0:
@@ -183,10 +194,12 @@ async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     # Получаем текущий год
     year = datetime.datetime.now().year
 
-    # Генерируем все три графика параллельно
-    category_chart, budget_chart = await asyncio.gather(
+    # Генерируем графики параллельно
+    category_chart, budget_chart, income_category_chart, income_vs_expense_chart = await asyncio.gather(
         visualization.create_category_distribution_chart(user_id, year),
         visualization.create_budget_comparison_chart(user_id, year, project_id=project_id),
+        visualization.create_income_distribution_chart(user_id, year, project_id=project_id),
+        visualization.create_income_vs_expense_chart(user_id, year, project_id=project_id),
     )
 
     # 1. Распределение по категориям
@@ -194,7 +207,17 @@ async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         with open(category_chart, 'rb') as photo:
             await update.message.reply_photo(photo=photo, caption=f"Распределение расходов по категориям за {year} год")
 
-    # 3. Бюджет vs. расходы (только если бюджет задан)
+    # 2. Доходы по категориям
+    if income_category_chart and os.path.exists(income_category_chart):
+        with open(income_category_chart, 'rb') as photo:
+            await update.message.reply_photo(photo=photo, caption=f"Распределение доходов по категориям за {year} год")
+
+    # 3. Доходы vs расходы по месяцам
+    if income_vs_expense_chart and os.path.exists(income_vs_expense_chart):
+        with open(income_vs_expense_chart, 'rb') as photo:
+            await update.message.reply_photo(photo=photo, caption=f"Доходы vs расходы по месяцам за {year} год")
+
+    # 4. Бюджет vs. расходы (только если бюджет задан)
     if budget_chart and os.path.exists(budget_chart):
         with open(budget_chart, 'rb') as photo:
             await update.message.reply_photo(photo=photo, caption=f"Бюджет vs. расходы за {year} год")

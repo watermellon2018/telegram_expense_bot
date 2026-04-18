@@ -18,7 +18,7 @@ async def analysis_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     log_event(logger, "analysis_menu_opened", user_id=user_id)
 
     await update.message.reply_text(
-        "🔍 Анализ расходов\n\nВыберите действие:",
+        "🔍 Анализ финансов\n\nВыберите действие:",
         reply_markup=get_analysis_menu_keyboard(),
     )
 
