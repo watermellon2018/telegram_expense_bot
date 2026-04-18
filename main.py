@@ -3,6 +3,7 @@ import os
 import datetime
 import pytz
 import apscheduler.util
+from prometheus_client import start_http_server
 
 # 1. СТРОГИЙ ПАТЧ ТАЙМЗОНЫ (должен быть в самом верху)
 def patched_astimezone(obj):
@@ -18,6 +19,7 @@ from telegram.ext import Application, ContextTypes
 import config
 from handlers import register_all_handlers
 from utils.db import init_pool, close_pool
+from metrics import track_error_only, classify_error_type
 
 # Настройка структурированного логирования
 from utils.logger import get_logger
@@ -34,6 +36,9 @@ async def on_startup(application: Application):
     from utils.logger import log_event
     os.makedirs(config.DATA_DIR, exist_ok=True)
     await init_pool()
+    metrics_port = int(os.environ.get("METRICS_PORT", "8000"))
+    start_http_server(metrics_port, addr="0.0.0.0")
+    log_event(logger, "prometheus_metrics_started", port=metrics_port)
 
     # Запускаем планировщик уведомлений о бюджете и постоянных расходов
     from utils.budget_notifier import check_budget_notifications
@@ -133,6 +138,7 @@ def main():
             user_id=user_id,
             update_id=update_id
         )
+        track_error_only("global_error_handler", classify_error_type(context.error))
     
     application.add_error_handler(error_handler)
 

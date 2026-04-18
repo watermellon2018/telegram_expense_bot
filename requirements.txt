@@ -7,3 +7,4 @@ seaborn
 python-dotenv
 pytz
 apscheduler==3.6.3
+prometheus_client

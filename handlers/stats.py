@@ -14,6 +14,15 @@ import config
 import os
 import datetime
 import time
+from metrics import (
+    track_command,
+    track_handler_start,
+    track_handler_success,
+    track_handler_error,
+    track_flow_started,
+    track_flow_completed,
+    classify_error_type,
+)
 
 logger = get_logger("handlers.stats")
 
@@ -27,6 +36,10 @@ async def month_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     from utils import budgets as budgets_utils
     from handlers.budget import _format_budget_status_text
 
+    track_command("month")
+    track_handler_start("month_command")
+    track_flow_started("month")
+    error_type = None
     user_id = update.effective_user.id
     start_time = time.time()
 
@@ -106,121 +119,153 @@ async def month_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         duration = time.time() - start_time
         log_event(logger, "month_command_success", user_id=user_id, 
                  project_id=project_id, duration=duration)
+        track_flow_completed("month")
         
     except Exception as e:
+        error_type = classify_error_type(e)
         duration = time.time() - start_time
         log_error(logger, e, "month_command_error", user_id=user_id, duration=duration)
         await update.message.reply_text("❌ Произошла ошибка при получении статистики.")
+    finally:
+        if error_type:
+            track_handler_error("month_command", error_type)
+        else:
+            track_handler_success("month_command")
 
 async def category_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """
     Обрабатывает команду /category для получения статистики по категории
     """
+    track_command("category")
+    track_handler_start("category_command")
+    error_type = None
     from utils import categories
     
     user_id = update.effective_user.id
+    try:
+        # Проверяем, что указана категория
+        if not context.args or len(context.args) < 1:
+            # Получаем активный проект
+            project_id = context.user_data.get('active_project_id')
+            
+            # Получаем доступные категории для пользователя
+            await categories.ensure_system_categories_exist(user_id)
+            cats = await categories.get_categories_for_user_project(user_id, project_id)
+            
+            if not cats:
+                await update.message.reply_text("Нет доступных категорий.")
+                return
+            
+            # Формируем список категорий
+            categories_list_emoji = []
+            for cat in cats:
+                emoji = config.DEFAULT_CATEGORIES.get(cat['name'], '📦')
+                categories_list_emoji.append(f"{emoji}  {cat['name'].title()}")
+            
+            message = 'Доступные категории:\n'
+            message += '\n'.join(categories_list_emoji)
+            
+            await update.message.reply_text(
+                message
+            )
+            return
 
-    # Проверяем, что указана категория
-    if not context.args or len(context.args) < 1:
+        category_name = context.args[0].lower()
+
         # Получаем активный проект
         project_id = context.user_data.get('active_project_id')
         
-        # Получаем доступные категории для пользователя
+        # Ищем категорию по имени одним SQL-запросом
         await categories.ensure_system_categories_exist(user_id)
-        cats = await categories.get_categories_for_user_project(user_id, project_id)
-        
-        if not cats:
-            await update.message.reply_text("Нет доступных категорий.")
+        category_found = await categories.get_category_by_name(user_id, category_name, project_id)
+
+        if not category_found:
+            await update.message.reply_text(
+                f"❌ Категория '{category_name}' не найдена."
+            )
             return
+
+        # Получаем текущий год
+        year = datetime.datetime.now().year
+
+        # Получаем статистику расходов по категории
+        category_data = await excel.get_category_expenses(user_id, category_found['category_id'], year, project_id)
+
+        # Форматируем отчет
+        report = helpers.format_category_expenses(category_data, category_found['name'], year)
         
-        # Формируем список категорий
-        categories_list_emoji = []
-        for cat in cats:
-            emoji = config.DEFAULT_CATEGORIES.get(cat['name'], '📦')
-            categories_list_emoji.append(f"{emoji}  {cat['name'].title()}")
-        
-        message = 'Доступные категории:\n'
-        message += '\n'.join(categories_list_emoji)
-        
-        await update.message.reply_text(
-            message
-        )
-        return
+        # Добавляем информацию о проекте
+        report = await helpers.add_project_context_to_report(report, user_id, project_id)
 
-    category_name = context.args[0].lower()
+        # Отправляем отчет
+        await update.message.reply_text(report, reply_markup=helpers.get_main_menu_keyboard())
 
-    # Получаем активный проект
-    project_id = context.user_data.get('active_project_id')
-    
-    # Ищем категорию по имени одним SQL-запросом
-    await categories.ensure_system_categories_exist(user_id)
-    category_found = await categories.get_category_by_name(user_id, category_name, project_id)
-
-    if not category_found:
-        await update.message.reply_text(
-            f"❌ Категория '{category_name}' не найдена."
-        )
-        return
-
-    # Получаем текущий год
-    year = datetime.datetime.now().year
-
-    # Получаем статистику расходов по категории
-    category_data = await excel.get_category_expenses(user_id, category_found['category_id'], year, project_id)
-
-    # Форматируем отчет
-    report = helpers.format_category_expenses(category_data, category_found['name'], year)
-    
-    # Добавляем информацию о проекте
-    report = await helpers.add_project_context_to_report(report, user_id, project_id)
-
-    # Отправляем отчет
-    await update.message.reply_text(report, reply_markup=helpers.get_main_menu_keyboard())
-
-    # Если есть расходы, отправляем график тренда
-    if category_data and category_data['total'] > 0:
-        chart_path = await visualization.create_category_trend_chart(user_id, category_found['name'], year)
-        if chart_path and os.path.exists(chart_path):
-            with open(chart_path, 'rb') as photo:
-                await update.message.reply_photo(photo=photo, caption=f"Тренд расходов на {category_found['name']} за {year} год")
+        # Если есть расходы, отправляем график тренда
+        if category_data and category_data['total'] > 0:
+            chart_path = await visualization.create_category_trend_chart(user_id, category_found['name'], year)
+            if chart_path and os.path.exists(chart_path):
+                with open(chart_path, 'rb') as photo:
+                    await update.message.reply_photo(photo=photo, caption=f"Тренд расходов на {category_found['name']} за {year} год")
+    except Exception as e:
+        error_type = classify_error_type(e)
+        log_error(logger, e, "category_command_error", user_id=user_id)
+        await update.message.reply_text("❌ Ошибка при получении статистики по категории.")
+    finally:
+        if error_type:
+            track_handler_error("category_command", error_type)
+        else:
+            track_handler_success("category_command")
 
 async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """
     Обрабатывает команду /stats для получения общей статистики расходов
     """
+    track_command("stats")
+    track_handler_start("stats_command")
+    error_type = None
     user_id = update.effective_user.id
     project_id = context.user_data.get('active_project_id')
 
     # Получаем текущий год
     year = datetime.datetime.now().year
 
-    # Генерируем графики параллельно
-    category_chart, budget_chart, income_category_chart, income_vs_expense_chart = await asyncio.gather(
-        visualization.create_category_distribution_chart(user_id, year),
-        visualization.create_budget_comparison_chart(user_id, year, project_id=project_id),
-        visualization.create_income_distribution_chart(user_id, year, project_id=project_id),
-        visualization.create_income_vs_expense_chart(user_id, year, project_id=project_id),
-    )
+    try:
+        # Генерируем графики параллельно
+        category_chart, budget_chart, income_category_chart, income_vs_expense_chart = await asyncio.gather(
+            visualization.create_category_distribution_chart(user_id, year),
+            visualization.create_budget_comparison_chart(user_id, year, project_id=project_id),
+            visualization.create_income_distribution_chart(user_id, year, project_id=project_id),
+            visualization.create_income_vs_expense_chart(user_id, year, project_id=project_id),
+        )
 
-    # 1. Распределение по категориям
-    if category_chart and os.path.exists(category_chart):
-        with open(category_chart, 'rb') as photo:
-            await update.message.reply_photo(photo=photo, caption=f"Распределение расходов по категориям за {year} год")
+        # 1. Распределение по категориям
+        if category_chart and os.path.exists(category_chart):
+            with open(category_chart, 'rb') as photo:
+                await update.message.reply_photo(photo=photo, caption=f"Распределение расходов по категориям за {year} год")
 
-    # 2. Доходы по категориям
-    if income_category_chart and os.path.exists(income_category_chart):
-        with open(income_category_chart, 'rb') as photo:
-            await update.message.reply_photo(photo=photo, caption=f"Распределение доходов по категориям за {year} год")
+        # 2. Доходы по категориям
+        if income_category_chart and os.path.exists(income_category_chart):
+            with open(income_category_chart, 'rb') as photo:
+                await update.message.reply_photo(photo=photo, caption=f"Распределение доходов по категориям за {year} год")
 
-    # 3. Доходы vs расходы по месяцам
-    if income_vs_expense_chart and os.path.exists(income_vs_expense_chart):
-        with open(income_vs_expense_chart, 'rb') as photo:
-            await update.message.reply_photo(photo=photo, caption=f"Доходы vs расходы по месяцам за {year} год")
+        # 3. Доходы vs расходы по месяцам
+        if income_vs_expense_chart and os.path.exists(income_vs_expense_chart):
+            with open(income_vs_expense_chart, 'rb') as photo:
+                await update.message.reply_photo(photo=photo, caption=f"Доходы vs расходы по месяцам за {year} год")
 
-    # 4. Бюджет vs. расходы (только если бюджет задан)
-    if budget_chart and os.path.exists(budget_chart):
-        with open(budget_chart, 'rb') as photo:
-            await update.message.reply_photo(photo=photo, caption=f"Бюджет vs. расходы за {year} год")
+        # 4. Бюджет vs. расходы (только если бюджет задан)
+        if budget_chart and os.path.exists(budget_chart):
+            with open(budget_chart, 'rb') as photo:
+                await update.message.reply_photo(photo=photo, caption=f"Бюджет vs. расходы за {year} год")
+    except Exception as e:
+        error_type = classify_error_type(e)
+        log_error(logger, e, "stats_command_error", user_id=user_id, project_id=project_id)
+        await update.message.reply_text("❌ Ошибка при построении графиков статистики.")
+    finally:
+        if error_type:
+            track_handler_error("stats_command", error_type)
+        else:
+            track_handler_success("stats_command")
 
 async def handle_category_choice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """
@@ -267,25 +312,38 @@ async def day_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     """
     Команда /day для получения статистики за текущий день
     """
+    track_command("day")
+    track_handler_start("day_command")
+    error_type = None
     user_id = update.effective_user.id
     
-    # Получаем текущую дату
-    date = datetime.datetime.now().strftime('%Y-%m-%d')
-    
-    # Получаем активный проект
-    project_id = context.user_data.get('active_project_id')
-    
-    # Получаем статистику расходов
-    expenses = await excel.get_day_expenses(user_id, date, project_id)
-    
-    # Форматируем отчет
-    report = helpers.format_day_expenses(expenses, date)
-    
-    # Добавляем информацию о проекте
-    report = await helpers.add_project_context_to_report(report, user_id, project_id)
-    
-    # Отправляем отчет
-    await update.message.reply_text(report, reply_markup=helpers.get_main_menu_keyboard())
+    try:
+        # Получаем текущую дату
+        date = datetime.datetime.now().strftime('%Y-%m-%d')
+        
+        # Получаем активный проект
+        project_id = context.user_data.get('active_project_id')
+        
+        # Получаем статистику расходов
+        expenses = await excel.get_day_expenses(user_id, date, project_id)
+        
+        # Форматируем отчет
+        report = helpers.format_day_expenses(expenses, date)
+        
+        # Добавляем информацию о проекте
+        report = await helpers.add_project_context_to_report(report, user_id, project_id)
+        
+        # Отправляем отчет
+        await update.message.reply_text(report, reply_markup=helpers.get_main_menu_keyboard())
+    except Exception as e:
+        error_type = classify_error_type(e)
+        log_error(logger, e, "day_command_error", user_id=user_id)
+        await update.message.reply_text("❌ Ошибка при получении статистики за день.")
+    finally:
+        if error_type:
+            track_handler_error("day_command", error_type)
+        else:
+            track_handler_success("day_command")
     
 
 def register_stats_handlers(application):
