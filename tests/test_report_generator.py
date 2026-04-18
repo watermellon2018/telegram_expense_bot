@@ -411,25 +411,25 @@ class TestRenderFullReport:
         plt.close('all')
 
     def test_creates_pdf_file(self, sample_df, today, tmp_pdf):
-        rg._render_full_report(sample_df, today, tmp_pdf)
+        rg._render_full_report(sample_df, sample_df, today, tmp_pdf)
         assert os.path.exists(tmp_pdf)
 
     def test_pdf_is_large_enough(self, sample_df, today, tmp_pdf):
-        rg._render_full_report(sample_df, today, tmp_pdf)
+        rg._render_full_report(sample_df, sample_df, today, tmp_pdf)
         assert os.path.getsize(tmp_pdf) > 10_000
 
     def test_returns_save_path(self, sample_df, today, tmp_pdf):
-        result = rg._render_full_report(sample_df, today, tmp_pdf)
+        result = rg._render_full_report(sample_df, sample_df, today, tmp_pdf)
         assert result == tmp_pdf
 
     def test_runs_with_single_month_data(self, single_month_df, today, tmp_pdf):
         """Мало данных — не падает."""
-        rg._render_full_report(single_month_df, today, tmp_pdf)
+        rg._render_full_report(single_month_df, single_month_df, today, tmp_pdf)
         assert os.path.exists(tmp_pdf)
 
     def test_pdf_has_multiple_pages(self, sample_df, today, tmp_pdf):
         """Файл достаточно большой чтобы содержать несколько страниц."""
-        rg._render_full_report(sample_df, today, tmp_pdf)
+        rg._render_full_report(sample_df, sample_df, today, tmp_pdf)
         # Типичный многостраничный отчёт > 500 КБ
         assert os.path.getsize(tmp_pdf) > 100_000
 

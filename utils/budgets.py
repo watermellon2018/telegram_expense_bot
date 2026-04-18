@@ -4,6 +4,7 @@ CRUD-операции для работы с бюджетами.
 """
 
 import datetime
+from typing import List, Dict
 from typing import Optional
 from . import db
 from utils.logger import get_logger, log_event, log_error
@@ -297,7 +298,7 @@ async def enable_notification(user_id: int, month: int, year: int,
         return None
 
 
-async def get_all_active_budgets_with_notifications(month: int, year: int) -> list[dict]:
+async def get_all_active_budgets_with_notifications(month: int, year: int) -> List[Dict]:
     """
     Получить все бюджеты с включёнными уведомлениями за текущий месяц.
     Используется планировщиком проверки порогов.
@@ -353,7 +354,7 @@ async def update_notification_state(budget_id: int,
 
 
 async def get_budgets_for_year(user_id: int, year: int,
-                               project_id=None) -> list[dict]:
+                               project_id=None) -> List[Dict]:
     """
     Получить все бюджеты за год (для графика сравнения).
     Возвращает список, отсортированный по месяцу.

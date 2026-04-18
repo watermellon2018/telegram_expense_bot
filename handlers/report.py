@@ -1,5 +1,5 @@
 """
-Обработчик кнопки «📊 Отчёт» — генерирует и отправляет PDF-отчёт по расходам.
+Обработчик кнопки «📊 Отчёт» — генерирует и отправляет PDF-отчёт по финансам.
 """
 
 import os
@@ -45,7 +45,7 @@ async def report_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             await update.message.reply_document(
                 document=f,
                 filename=os.path.basename(pdf_path),
-                caption="📊 Ваш отчёт по расходам готов.",
+                caption="📊 Ваш финансовый отчёт готов.",
                 reply_markup=get_main_menu_keyboard(),
             )
 

@@ -23,6 +23,7 @@ from matplotlib.backends.backend_pdf import PdfPages
 import seaborn as sns
 
 from utils import excel
+from utils import incomes as income_utils
 import config
 
 logger = logging.getLogger(__name__)
@@ -1195,9 +1196,106 @@ def _page_boxplots(pdf: PdfPages, df: pd.DataFrame, today: datetime.date):
     plt.close(fig)
 
 
+def _page_income_overview(
+    pdf: PdfPages,
+    expense_df: pd.DataFrame,
+    income_df: pd.DataFrame,
+    today: datetime.date,
+    top_n: int = 5,
+):
+    """Страница отчета с аналитикой по доходам и балансу."""
+    _set_style()
+    months = _rolling_months(today)
+    month_labels = [_month_label(y, m, today) for y, m in months]
+
+    income_df = income_df.copy()
+    income_df["date"] = pd.to_datetime(income_df["date"])
+    income_df["amount"] = income_df["amount"].astype(float)
+    expense_df = expense_df.copy()
+    expense_df["date"] = pd.to_datetime(expense_df["date"])
+    expense_df["amount"] = expense_df["amount"].astype(float)
+
+    fig = plt.figure(figsize=(22, 14))
+    fig.patch.set_facecolor("white")
+    fig.suptitle("Раздел доходов", fontsize=25, fontweight="bold", color="#2A2A2A", y=0.97)
+
+    grid = fig.add_gridspec(2, 2, height_ratios=[1, 1], width_ratios=[1, 1], hspace=0.25, wspace=0.22)
+    ax_bar = fig.add_subplot(grid[0, 0])
+    ax_pie = fig.add_subplot(grid[0, 1])
+    ax_cmp = fig.add_subplot(grid[1, 0])
+    ax_net = fig.add_subplot(grid[1, 1])
+
+    # Доходы по категориям (top N)
+    cat_totals = income_df.groupby("category")["amount"].sum().sort_values(ascending=False)
+    if cat_totals.empty:
+        ax_bar.text(0.5, 0.5, "Нет данных по доходам", ha="center", va="center", transform=ax_bar.transAxes)
+        ax_pie.text(0.5, 0.5, "Нет данных по доходам", ha="center", va="center", transform=ax_pie.transAxes)
+        ax_bar.axis("off")
+        ax_pie.axis("off")
+    else:
+        if len(cat_totals) > top_n:
+            top = cat_totals.head(top_n)
+            other_sum = cat_totals.iloc[top_n:].sum()
+            if other_sum > 0:
+                top["прочее"] = float(other_sum)
+            cat_totals = top
+
+        bar_categories = [str(cat).capitalize() for cat in cat_totals.index]
+        bar_values = [float(v) for v in cat_totals.values]
+        bar_colors = ["#4CAF50", "#66BB6A", "#81C784", "#A5D6A7", "#C8E6C9", "#AED581"][:len(bar_values)]
+
+        bars = ax_bar.barh(bar_categories, bar_values, color=bar_colors, edgecolor="white", linewidth=1.2)
+        ax_bar.invert_yaxis()
+        ax_bar.set_title("Доходы по категориям", fontsize=18, fontweight="bold", loc="left")
+        ax_bar.xaxis.set_major_formatter(mticker.FuncFormatter(_rub_formatter))
+        for bar, value in zip(bars, bar_values):
+            ax_bar.text(bar.get_width() * 1.01, bar.get_y() + bar.get_height() / 2, _fmt(value), va="center", fontsize=10)
+        sns.despine(ax=ax_bar, left=True, bottom=False)
+
+        pie_colors = bar_colors
+        ax_pie.pie(bar_values, labels=bar_categories, autopct="%1.1f%%", startangle=90, colors=pie_colors)
+        ax_pie.set_title(f"Доли категорий доходов (top {top_n})", fontsize=18, fontweight="bold")
+
+    # Доходы vs расходы по месяцам
+    income_monthly = []
+    expense_monthly = []
+    net_monthly = []
+    for y, m in months:
+        income_sum = float(income_df[(income_df["date"].dt.year == y) & (income_df["date"].dt.month == m)]["amount"].sum())
+        expense_sum = float(expense_df[(expense_df["date"].dt.year == y) & (expense_df["date"].dt.month == m)]["amount"].sum())
+        income_monthly.append(income_sum)
+        expense_monthly.append(expense_sum)
+        net_monthly.append(income_sum - expense_sum)
+
+    x = np.arange(len(months))
+    width = 0.36
+    ax_cmp.bar(x - width / 2, income_monthly, width=width, label="Доходы", color="#4CAF50")
+    ax_cmp.bar(x + width / 2, expense_monthly, width=width, label="Расходы", color="#E15759")
+    ax_cmp.set_xticks(x)
+    ax_cmp.set_xticklabels(month_labels, fontsize=10)
+    ax_cmp.set_title("Доходы vs расходы по месяцам", fontsize=18, fontweight="bold", loc="left")
+    ax_cmp.yaxis.set_major_formatter(mticker.FuncFormatter(_rub_formatter))
+    ax_cmp.legend(frameon=False)
+    sns.despine(ax=ax_cmp, left=False, bottom=False)
+
+    # Тренд чистого баланса
+    ax_net.axhline(0, color="#999999", linewidth=1.0, linestyle="--")
+    ax_net.plot(x, net_monthly, marker="o", linewidth=2.5, color="#2E7D32")
+    ax_net.fill_between(x, 0, net_monthly, where=np.array(net_monthly) >= 0, alpha=0.15, color="#66BB6A")
+    ax_net.fill_between(x, 0, net_monthly, where=np.array(net_monthly) < 0, alpha=0.15, color="#E15759")
+    ax_net.set_xticks(x)
+    ax_net.set_xticklabels(month_labels, fontsize=10)
+    ax_net.set_title("Тренд чистого баланса (доходы - расходы)", fontsize=18, fontweight="bold", loc="left")
+    ax_net.yaxis.set_major_formatter(mticker.FuncFormatter(_rub_formatter))
+    sns.despine(ax=ax_net, left=False, bottom=False)
+
+    pdf.savefig(fig, bbox_inches="tight", pad_inches=0.5, facecolor="white")
+    plt.close(fig)
+
+
 # ─── Главная синхронная функция рендеринга ────────────────────────────────────
 
-def _render_full_report(df: pd.DataFrame, today: datetime.date, save_path: str):
+def _render_full_report(df: pd.DataFrame, income_df: pd.DataFrame, today: datetime.date, save_path: str):
     """Рендерит все страницы PDF синхронно. Вызывается в ThreadPoolExecutor."""
     _set_style()
 
@@ -1209,9 +1307,9 @@ def _render_full_report(df: pd.DataFrame, today: datetime.date, save_path: str):
     with PdfPages(save_path) as pdf:
         # Метаданные PDF
         d = pdf.infodict()
-        d['Title'] = f'Отчёт по расходам — {MONTH_NAMES_RU[today.month]} {today.year}'
+        d['Title'] = f'Отчёт по финансам — {MONTH_NAMES_RU[today.month]} {today.year}'
         d['Author'] = 'Telegram Expense Bot'
-        d['Subject'] = 'Анализ личных расходов'
+        d['Subject'] = 'Анализ личных финансов'
 
         _page_overview(pdf, df, today)           # Стр. 1: обзор (KPI + line + топ-5 + pivot)
         _page_structure_table(pdf, df, today)    # Стр. 2: сводная таблица + 4 круговых диаграммы
@@ -1221,6 +1319,8 @@ def _render_full_report(df: pd.DataFrame, today: datetime.date, save_path: str):
         _page_scatter(pdf, df, today)            # Стр. 8: scatter 1+2 (тек. месяц)
         _page_scatter3_hm3(pdf, df, today)       # Стр. 9: scatter 3 + heatmap кат×д.нед.
         _page_boxplots(pdf, df, today)           # Стр. 10: box plots
+        if income_df is not None and not income_df.empty:
+            _page_income_overview(pdf, df, income_df, today, top_n=5)
 
     return save_path
 
@@ -1236,10 +1336,12 @@ async def generate_pdf_report(user_id, project_id=None) -> Optional[str]:
     cur_year = today.year
     prev_year = cur_year - 1
 
-    # Загружаем данные двух лет параллельно (нужны, если скользящее окно захватывает прошлый год)
-    df_cur, df_prev = await asyncio.gather(
+    # Загружаем расходы и доходы за 2 года (нужны для скользящего окна 12 месяцев)
+    df_cur, df_prev, income_cur, income_prev = await asyncio.gather(
         excel.get_all_expenses(user_id, cur_year, project_id),
         excel.get_all_expenses(user_id, prev_year, project_id),
+        income_utils.get_all_incomes(user_id, cur_year, project_id),
+        income_utils.get_all_incomes(user_id, prev_year, project_id),
     )
 
     frames = []
@@ -1269,11 +1371,24 @@ async def generate_pdf_report(user_id, project_id=None) -> Optional[str]:
     if df_all.empty:
         return None
 
+    income_frames = []
+    if income_cur is not None and not income_cur.empty:
+        income_frames.append(income_cur)
+    if income_prev is not None and not income_prev.empty:
+        income_frames.append(income_prev)
+
+    income_all = pd.DataFrame(columns=["date", "amount", "category", "description", "created_at"])
+    if income_frames:
+        income_all = pd.concat(income_frames, ignore_index=True)
+        income_all["date"] = pd.to_datetime(income_all["date"])
+        income_all["amount"] = income_all["amount"].astype(float)
+        income_all = income_all[income_all["date"].dt.date >= window_start]
+
     user_dir = excel.create_user_dir(user_id)
     save_path = os.path.join(user_dir, f"report_{today.strftime('%Y%m%d')}.pdf")
 
     loop = asyncio.get_event_loop()
     return await loop.run_in_executor(
         None,
-        functools.partial(_render_full_report, df_all, today, save_path),
+        functools.partial(_render_full_report, df_all, income_all, today, save_path),
     )

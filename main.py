@@ -38,6 +38,7 @@ async def on_startup(application: Application):
     # Запускаем планировщик уведомлений о бюджете и постоянных расходов
     from utils.budget_notifier import check_budget_notifications
     from utils.recurring import process_recurring_expenses
+    from utils.recurring_incomes import process_recurring_incomes
     _scheduler = AsyncIOScheduler(timezone=pytz.UTC)
     _scheduler.add_job(
         check_budget_notifications,
@@ -58,9 +59,19 @@ async def on_startup(application: Application):
         replace_existing=True,
         next_run_time=datetime.datetime.now(pytz.UTC),  # Запуск сразу при старте
     )
+    # Воркер постоянных доходов: проверяет каждые 5 минут
+    _scheduler.add_job(
+        process_recurring_incomes,
+        'interval',
+        minutes=5,
+        args=[application.bot],
+        id='recurring_incomes',
+        replace_existing=True,
+        next_run_time=datetime.datetime.now(pytz.UTC),
+    )
     _scheduler.start()
     log_event(logger, "scheduler_started",
-              jobs=["budget_notifications", "recurring_expenses"],
+              jobs=["budget_notifications", "recurring_expenses", "recurring_incomes"],
               budget_interval_hours=4,
               recurring_interval_minutes=5)
 

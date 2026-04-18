@@ -10,6 +10,7 @@
 """
 
 import datetime
+from typing import List
 from utils.logger import get_logger, log_event, log_error
 from utils import budgets as budgets_utils, excel
 from utils.projects import get_project_members
@@ -60,7 +61,7 @@ def _get_month_name(month: int) -> str:
     return months[month - 1]
 
 
-async def _send_to_users(bot, user_ids: list[str], text: str) -> None:
+async def _send_to_users(bot, user_ids: List[str], text: str) -> None:
     """Отправить сообщение списку пользователей."""
     for uid in user_ids:
         try:
