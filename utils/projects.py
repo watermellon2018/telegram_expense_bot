@@ -325,7 +325,7 @@ async def get_project_stats(user_id: int, project_id: int) -> dict:
     """
     # Verify user has access to project
     if not await is_project_member(user_id, project_id):
-        return {'count': 0, 'total': 0.0}
+        return {'count': 0, 'total': 0.0, 'by_category': {}, 'by_participant': {}}
     
     row = await db.fetchrow(
         """
@@ -335,9 +335,43 @@ async def get_project_stats(user_id: int, project_id: int) -> dict:
         """,
         project_id
     )
+    category_rows = await db.fetch(
+        """
+        SELECT c.name as category, COALESCE(SUM(e.amount), 0) as total
+        FROM expenses e
+        JOIN categories c ON e.category_id = c.category_id
+        WHERE e.project_id = $1
+        GROUP BY c.name
+        ORDER BY total DESC
+        """,
+        project_id
+    )
+
+    participant_rows = await db.fetch(
+        """
+        SELECT e.user_id, COALESCE(SUM(e.amount), 0) as total
+        FROM expenses e
+        WHERE e.project_id = $1
+        GROUP BY e.user_id
+        ORDER BY total DESC
+        """,
+        project_id
+    )
+
+    by_category = {
+        r['category']: float(r['total'])
+        for r in category_rows
+    }
+    by_participant = {
+        (f"ID: {r['user_id']}" if r['user_id'] is not None else "Неизвестный участник"): float(r['total'])
+        for r in participant_rows
+    }
+
     return {
         'count': row['count'],
-        'total': float(row['total'])
+        'total': float(row['total']),
+        'by_category': by_category,
+        'by_participant': by_participant,
     }
 
 async def delete_project(user_id: int, project_id: int) -> dict:

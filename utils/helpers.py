@@ -54,7 +54,19 @@ def format_month_expenses(expenses, month=None, year=None):
     report = f"📊 Статистика расходов за {month_name} {year} года:\n\n"
     report += f"💰 Общая сумма: {expenses['total']:.2f}\n"
     report += f"🧾 Количество транзакций: {expenses['count']}\n\n"
-    
+
+    by_participant = expenses.get('by_participant', {}) if expenses else {}
+    if by_participant:
+        report += "👥 По участникам:\n"
+        sorted_participants = sorted(
+            by_participant.items(),
+            key=lambda x: x[1],
+            reverse=True
+        )
+        for participant_name, amount in sorted_participants:
+            report += f"- {participant_name}: {amount:.2f}\n"
+        report += "\n"
+
     report += "📋 Расходы по категориям:\n"
     
     # Сортируем категории по убыванию сумм
@@ -180,7 +192,19 @@ def format_day_expenses(expenses, date=None):
     report = f"📊 Статистика расходов за {date}:\n\n"
     report += f"💰 Общая сумма: {expenses['total']:.2f}\n"
     report += f"🧾 Количество транзакций: {expenses['count']}\n\n"
-    
+
+    by_participant = expenses.get('by_participant', {}) if expenses else {}
+    if by_participant:
+        report += "👥 По участникам:\n"
+        sorted_participants = sorted(
+            by_participant.items(),
+            key=lambda x: x[1],
+            reverse=True
+        )
+        for participant_name, amount in sorted_participants:
+            report += f"- {participant_name}: {amount:.2f}\n"
+        report += "\n"
+
     report += "📋 Расходы по категориям:\n"
     
     # Сортируем категории по убыванию сумм
