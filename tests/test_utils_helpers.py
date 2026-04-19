@@ -129,3 +129,71 @@ def test_get_month_name():
     assert helpers.get_month_name(1).lower() == "январь"
     assert helpers.get_month_name(6).lower() == "июнь"
     assert helpers.get_month_name(12).lower() == "декабрь"
+
+
+def test_format_month_expenses_participants_section_order_and_sorting():
+    """Блок участников должен быть после суммы/кол-ва и до категорий."""
+    expenses = {
+        "total": 150.0,
+        "count": 2,
+        "by_category": {"продукты": 100.0, "транспорт": 50.0},
+        "by_participant": {"ID: 2": 50.0, "ID: 1": 100.0},
+    }
+
+    report = helpers.format_month_expenses(expenses, month=4, year=2026)
+
+    total_pos = report.index("💰 Общая сумма")
+    count_pos = report.index("🧾 Количество транзакций")
+    participants_pos = report.index("👥 По участникам:")
+    categories_pos = report.index("📋 Расходы по категориям:")
+
+    assert total_pos < count_pos < participants_pos < categories_pos
+    assert report.index("- ID: 1: 100.00") < report.index("- ID: 2: 50.00")
+
+
+def test_format_month_expenses_without_participants_section():
+    """Блок участников не должен выводиться при пустой агрегации."""
+    expenses = {
+        "total": 100.0,
+        "count": 1,
+        "by_category": {"продукты": 100.0},
+        "by_participant": {},
+    }
+
+    report = helpers.format_month_expenses(expenses, month=4, year=2026)
+
+    assert "👥 По участникам:" not in report
+
+
+def test_format_day_expenses_participants_section_order_and_sorting():
+    """Для day-отчета порядок секций должен быть аналогичным month-отчету."""
+    expenses = {
+        "total": 300.0,
+        "count": 3,
+        "by_category": {"продукты": 200.0, "транспорт": 100.0},
+        "by_participant": {"ID: 2": 100.0, "ID: 1": 200.0},
+    }
+
+    report = helpers.format_day_expenses(expenses, date="2026-04-19")
+
+    total_pos = report.index("💰 Общая сумма")
+    count_pos = report.index("🧾 Количество транзакций")
+    participants_pos = report.index("👥 По участникам:")
+    categories_pos = report.index("📋 Расходы по категориям:")
+
+    assert total_pos < count_pos < participants_pos < categories_pos
+    assert report.index("- ID: 1: 200.00") < report.index("- ID: 2: 100.00")
+
+
+def test_format_day_expenses_without_participants_section():
+    """Для day-отчета блок участников скрывается при пустой агрегации."""
+    expenses = {
+        "total": 120.0,
+        "count": 1,
+        "by_category": {"продукты": 120.0},
+        "by_participant": {},
+    }
+
+    report = helpers.format_day_expenses(expenses, date="2026-04-19")
+
+    assert "👥 По участникам:" not in report
