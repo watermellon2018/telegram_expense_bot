@@ -115,6 +115,17 @@ async def month_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
                 log_event(logger, "month_chart_failed", user_id=user_id, 
                          project_id=project_id, month=month, year=year,
                          reason="chart_not_created")
+
+            if project_id is not None:
+                participant_chart_path = await visualization.create_monthly_participant_distribution_chart(
+                    user_id=user_id,
+                    project_id=project_id,
+                    month=month,
+                    year=year,
+                )
+                if participant_chart_path and os.path.exists(participant_chart_path):
+                    with open(participant_chart_path, 'rb') as photo:
+                        await update.message.reply_photo(photo=photo, caption="Распределение расходов по участникам")
         
         duration = time.time() - start_time
         log_event(logger, "month_command_success", user_id=user_id, 
@@ -232,11 +243,18 @@ async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     try:
         # Генерируем графики параллельно
         category_chart, budget_chart, income_category_chart, income_vs_expense_chart = await asyncio.gather(
-            visualization.create_category_distribution_chart(user_id, year),
+            visualization.create_category_distribution_chart(user_id, year, project_id=project_id),
             visualization.create_budget_comparison_chart(user_id, year, project_id=project_id),
             visualization.create_income_distribution_chart(user_id, year, project_id=project_id),
             visualization.create_income_vs_expense_chart(user_id, year, project_id=project_id),
         )
+        participant_chart = None
+        if project_id is not None:
+            participant_chart = await visualization.create_project_participant_distribution_chart(
+                user_id=user_id,
+                project_id=project_id,
+                year=year,
+            )
 
         # 1. Распределение по категориям
         if category_chart and os.path.exists(category_chart):
@@ -257,6 +275,11 @@ async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         if budget_chart and os.path.exists(budget_chart):
             with open(budget_chart, 'rb') as photo:
                 await update.message.reply_photo(photo=photo, caption=f"Бюджет vs. расходы за {year} год")
+
+        # 5. Расходы проекта по участникам
+        if participant_chart and os.path.exists(participant_chart):
+            with open(participant_chart, 'rb') as photo:
+                await update.message.reply_photo(photo=photo, caption=f"Распределение расходов по участникам за {year} год")
     except Exception as e:
         error_type = classify_error_type(e)
         log_error(logger, e, "stats_command_error", user_id=user_id, project_id=project_id)

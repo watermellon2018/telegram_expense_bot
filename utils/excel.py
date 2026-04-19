@@ -38,6 +38,16 @@ def _normalize_project_id(project_id):
     return int(project_id)
 
 
+def _format_participant_label(participant_user_id) -> str:
+    """
+    Формат отображаемого имени участника в статистике проекта.
+    В текущем UX для участников используется user_id.
+    """
+    if participant_user_id is None:
+        return "Неизвестный участник"
+    return f"ID: {participant_user_id}"
+
+
 async def add_expense(user_id, amount, category_id, description: str = "", project_id=None):
     """
     Добавляет новый расход в БД.
@@ -198,14 +208,14 @@ async def get_month_expenses(user_id, month=None, year=None, project_id=None):
             if not await has_permission(user_id, project_id, Permission.VIEW_STATS):
                 log_error(logger, Exception("Permission denied"),
                          "get_month_expenses_permission_denied", user_id=user_id, project_id=project_id)
-                return {'total': 0, 'by_category': {}, 'count': 0}
+                return {'total': 0, 'by_category': {}, 'by_participant': {}, 'count': 0}
 
         # For projects: get expenses from ALL members
         # For personal: get only user's expenses
         if project_id is not None:
             rows = await db.fetch(
                 """
-                SELECT e.amount, c.name as category
+                SELECT e.amount, c.name as category, e.user_id
                 FROM expenses e
                 JOIN categories c ON e.category_id = c.category_id
                 WHERE e.project_id = $1
@@ -232,23 +242,29 @@ async def get_month_expenses(user_id, month=None, year=None, project_id=None):
                 year,
             )
         if not rows:
-            return {
-                "total": 0,
-                "by_category": {},
-                "count": 0,
-            }
+                return {
+                    "total": 0,
+                    "by_category": {},
+                    "by_participant": {},
+                    "count": 0,
+                }
 
         total = 0.0
         by_category = {}
+        by_participant = {}
         for r in rows:
             amt = float(r["amount"])
             cat = r["category"]
             total += amt
             by_category[cat] = by_category.get(cat, 0.0) + amt
+            if project_id is not None:
+                participant_label = _format_participant_label(r.get("user_id"))
+                by_participant[participant_label] = by_participant.get(participant_label, 0.0) + amt
 
         result = {
             "total": total,
             "by_category": by_category,
+            "by_participant": by_participant,
             "count": len(rows),
         }
         log_event(logger, "get_month_expenses_success", user_id=user_id, 
@@ -475,14 +491,14 @@ async def get_day_expenses(user_id, date=None, project_id=None):
             if not await has_permission(user_id, project_id, Permission.VIEW_STATS):
                 log_error(logger, Exception("Permission denied"), 
                          "get_day_expenses_permission_denied", user_id=user_id, project_id=project_id)
-                return {'status': True, 'total': 0, 'by_category': {}, 'count': 0}
+                return {'status': True, 'total': 0, 'by_category': {}, 'by_participant': {}, 'count': 0}
         
         # For projects: get expenses from ALL members
         # For personal: get only user's expenses
         if project_id is not None:
             rows = await db.fetch(
                 """
-                SELECT e.amount, c.name as category
+                SELECT e.amount, c.name as category, e.user_id
                 FROM expenses e
                 JOIN categories c ON e.category_id = c.category_id
                 WHERE e.project_id = $1
@@ -505,25 +521,31 @@ async def get_day_expenses(user_id, date=None, project_id=None):
                 target_date,
             )
         if not rows:
-            return {
-                "status": True,
-                "total": 0,
-                "by_category": {},
-                "count": 0,
-            }
+                return {
+                    "status": True,
+                    "total": 0,
+                    "by_category": {},
+                    "by_participant": {},
+                    "count": 0,
+                }
 
         total = 0.0
         by_category = {}
+        by_participant = {}
         for r in rows:
             amt = float(r["amount"])
             cat = r["category"]
             total += amt
             by_category[cat] = by_category.get(cat, 0.0) + amt
+            if project_id is not None:
+                participant_label = _format_participant_label(r.get("user_id"))
+                by_participant[participant_label] = by_participant.get(participant_label, 0.0) + amt
 
         result = {
             "status": True,
             "total": total,
             "by_category": by_category,
+            "by_participant": by_participant,
             "count": len(rows),
         }
         log_event(logger, "get_day_expenses_success", user_id=user_id,

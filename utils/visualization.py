@@ -315,6 +315,45 @@ def _render_distribution_chart(raw_names: list, amounts_vals: list,
     return save_path
 
 
+def _render_named_distribution_chart(raw_names: list, amounts_vals: list,
+                                     title: str, save_path: str) -> str:
+    """Синхронный рендер горизонтальной столбчатой диаграммы с кастомным заголовком."""
+    colors = _get_colors(raw_names)
+    labels = [_cap(n) for n in raw_names]
+
+    fig, ax = plt.subplots(figsize=(10, max(5, len(raw_names) * 0.75)))
+    fig.patch.set_facecolor('white')
+
+    bars = ax.barh(labels, amounts_vals,
+                   color=colors, edgecolor='white', linewidth=1.5, height=0.6)
+
+    max_val = max(amounts_vals) if amounts_vals else 1
+    for bar, amount in zip(bars, amounts_vals):
+        ax.text(
+            bar.get_width() + max_val * 0.01,
+            bar.get_y() + bar.get_height() / 2,
+            _fmt_amount(amount),
+            va='center', fontsize=9, fontweight='bold', color='#444444',
+        )
+
+    ax.set_title(
+        title,
+        loc='right',
+        fontsize=12, fontweight='bold', color='#333333', pad=12,
+    )
+    ax.set_xlabel("Сумма, руб.", fontsize=10, color='#555555')
+    ax.xaxis.set_major_formatter(
+        mticker.FuncFormatter(lambda x, _: f"{int(x):,}".replace(",", "\u202f"))
+    )
+    ax.set_xlim(0, max_val * 1.22)
+    ax.tick_params(colors='#666666')
+    sns.despine(left=True, bottom=False)
+
+    plt.savefig(save_path, bbox_inches='tight', facecolor='white')
+    plt.close(fig)
+    return save_path
+
+
 # ---------------------------------------------------------------------------
 # Публичные async-функции: получают данные из БД, затем рендерят в потоке
 # ---------------------------------------------------------------------------
@@ -493,7 +532,7 @@ async def create_budget_comparison_chart(user_id, year=None, save_path=None, pro
     budget_by_month = {b['month']: b['amount'] for b in budgets_list}
 
     # Получаем фактические расходы
-    expenses_df = await excel.get_all_expenses(user_id, year)
+    expenses_df = await excel.get_all_expenses(user_id, year, project_id=project_id)
     spending_by_month: dict = {}
     if expenses_df is not None and not expenses_df.empty:
         expenses_df['amount'] = expenses_df['amount'].astype(float)
@@ -514,7 +553,7 @@ async def create_budget_comparison_chart(user_id, year=None, save_path=None, pro
     )
 
 
-async def create_category_distribution_chart(user_id, year=None, save_path=None):
+async def create_category_distribution_chart(user_id, year=None, save_path=None, project_id=None):
     """
     Создаёт горизонтальную столбчатую диаграмму распределения расходов по категориям за год.
     Рендеринг matplotlib выполняется в ThreadPoolExecutor, не блокируя event loop.
@@ -522,7 +561,7 @@ async def create_category_distribution_chart(user_id, year=None, save_path=None)
     if year is None:
         year = datetime.datetime.now().year
 
-    expenses_df = await excel.get_all_expenses(user_id, year)
+    expenses_df = await excel.get_all_expenses(user_id, year, project_id=project_id)
 
     if expenses_df is None or expenses_df.empty:
         return None
@@ -547,6 +586,64 @@ async def create_category_distribution_chart(user_id, year=None, save_path=None)
     return await loop.run_in_executor(
         None,
         functools.partial(_render_distribution_chart, raw_names, amounts_vals, year, save_path)
+    )
+
+
+async def create_monthly_participant_distribution_chart(user_id, project_id, month=None, year=None, save_path=None):
+    """Создаёт диаграмму распределения расходов проекта по участникам за месяц."""
+    if month is None:
+        month = datetime.datetime.now().month
+    if year is None:
+        year = datetime.datetime.now().year
+
+    expenses = await excel.get_month_expenses(user_id, month, year, project_id=project_id)
+    by_participant = expenses.get("by_participant", {}) if expenses else {}
+    if not by_participant:
+        return None
+
+    sorted_participants = sorted(by_participant.items(), key=lambda x: x[1], reverse=True)
+    raw_names = [name for name, _ in sorted_participants]
+    amounts_vals = [float(amount) for _, amount in sorted_participants]
+
+    if save_path is None:
+        user_dir = excel.create_user_dir(user_id)
+        save_path = os.path.join(user_dir, f"project_participants_month_{project_id}_{year}_{month}.png")
+
+    title = f"Расходы по участникам за {MONTH_NAMES_RU.get(month, str(month))} {year}"
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(
+        None,
+        functools.partial(_render_named_distribution_chart, raw_names, amounts_vals, title, save_path),
+    )
+
+
+async def create_project_participant_distribution_chart(user_id, project_id, year=None, save_path=None):
+    """Создаёт диаграмму распределения расходов проекта по участникам за год."""
+    if year is None:
+        year = datetime.datetime.now().year
+
+    expenses_df = await excel.get_all_expenses(user_id, year, project_id=project_id)
+    if expenses_df is None or expenses_df.empty:
+        return None
+
+    expenses_df["amount"] = expenses_df["amount"].astype(float)
+    expenses_df["participant"] = expenses_df["user_id"].apply(
+        lambda value: f"ID: {value}" if pd.notna(value) else "Неизвестный участник"
+    )
+
+    participant_expenses = expenses_df.groupby("participant")["amount"].sum().sort_values(ascending=True)
+    raw_names = list(participant_expenses.index)
+    amounts_vals = [float(v) for v in participant_expenses.values]
+
+    if save_path is None:
+        user_dir = excel.create_user_dir(user_id)
+        save_path = os.path.join(user_dir, f"project_participants_{project_id}_{year}.png")
+
+    title = f"Распределение расходов по участникам за {year} год"
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(
+        None,
+        functools.partial(_render_named_distribution_chart, raw_names, amounts_vals, title, save_path),
     )
 
 
