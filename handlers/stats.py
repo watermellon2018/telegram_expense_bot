@@ -7,7 +7,7 @@ import asyncio
 from telegram import Update, ReplyKeyboardMarkup
 from telegram.constants import ParseMode
 from telegram.ext import ContextTypes, CommandHandler, filters, MessageHandler, ConversationHandler, CallbackQueryHandler
-from utils import excel, helpers, visualization, projects, incomes
+from utils import cashback, excel, helpers, visualization, projects, incomes
 from utils.helpers import main_menu_button_regex, analysis_menu_button_regex
 from utils.logger import get_logger, log_command, log_event, log_error
 import config
@@ -83,6 +83,18 @@ async def month_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         if budget:
             spending = float(expenses.get('total', 0)) if expenses else 0.0
             report += "\n\n" + _format_budget_status_text(budget, spending, month, year)
+
+        # Добавляем теоретический кэшбэк за месяц (MVP, приблизительный расчет)
+        cashback_summary = await cashback.calculate_potential_cashback_for_period(
+            user_id=user_id,
+            year=year,
+            month=month,
+            project_id=project_id,
+        )
+        report += "\n\n" + cashback.format_cashback_summary(
+            cashback_summary,
+            title=f"💳 Теоретический кэшбэк за {month:02d}.{year}",
+        )
 
         # Добавляем информацию о проекте
         report = await helpers.add_project_context_to_report(report, user_id, project_id)

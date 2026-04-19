@@ -2,6 +2,7 @@
 
 from handlers.analysis import register_analysis_handlers
 from handlers.budget import register_budget_handlers
+from handlers.cashback import register_cashback_handlers
 from handlers.category import register_category_handlers
 from handlers.expense import register_expense_handlers
 from handlers.export import register_export_handlers
@@ -36,5 +37,6 @@ def register_all_handlers(application):
     register_income_handlers(application)
     register_category_handlers(application)
     register_budget_handlers(application)
+    register_cashback_handlers(application)
     register_recurring_handlers(application)
     register_expense_handlers(application)
