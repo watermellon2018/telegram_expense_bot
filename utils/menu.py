@@ -12,7 +12,8 @@ def get_main_menu_keyboard():
     keyboard = [
         [btn["add"], btn["month"], btn["day"]],
         [btn["incomes"], btn["budget"], btn["settings"]],
-        [btn["projects"], btn["analysis"], btn["help"]],
+        [btn["projects"], btn["analysis"], btn["cashback"]],
+        [btn["help"]],
     ]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
@@ -51,6 +52,62 @@ def get_settings_menu_keyboard():
     btn = config.SETTINGS_MENU_BUTTONS
     keyboard = [
         [btn["categories"], btn["recurring"]],
+        [btn["back"]],
+    ]
+    return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+
+
+def get_cashback_menu_keyboard():
+    """Return cashback submenu keyboard."""
+    import config
+    from telegram import ReplyKeyboardMarkup
+
+    btn = config.CASHBACK_MENU_BUTTONS
+    keyboard = [
+        [btn["cards"], btn["rules"]],
+        [btn["categories"], btn["stats"]],
+        [btn["back"]],
+    ]
+    return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+
+
+def get_cashback_cards_menu_keyboard():
+    """Return cashback cards submenu keyboard."""
+    import config
+    from telegram import ReplyKeyboardMarkup
+
+    btn = config.CASHBACK_CARDS_MENU_BUTTONS
+    keyboard = [
+        [btn["list"], btn["add"]],
+        [btn["edit"], btn["delete"]],
+        [btn["back"]],
+    ]
+    return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+
+
+def get_cashback_rules_menu_keyboard():
+    """Return cashback rules submenu keyboard."""
+    import config
+    from telegram import ReplyKeyboardMarkup
+
+    btn = config.CASHBACK_RULES_MENU_BUTTONS
+    keyboard = [
+        [btn["add"], btn["edit"]],
+        [btn["delete"]],
+        [btn["back"]],
+    ]
+    return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+
+
+def get_cashback_categories_menu_keyboard():
+    """Return cashback categories submenu keyboard."""
+    import config
+    from telegram import ReplyKeyboardMarkup
+
+    btn = config.CASHBACK_CATEGORIES_MENU_BUTTONS
+    keyboard = [
+        [btn["list"], btn["add"]],
+        [btn["delete"]],
         [btn["back"]],
     ]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
@@ -103,3 +160,31 @@ def settings_menu_button_regex(key: str) -> str:
     import config
 
     return "^" + re.escape(config.SETTINGS_MENU_BUTTONS[key]) + "$"
+
+
+def cashback_menu_button_regex(key: str) -> str:
+    """Match cashback menu button text exactly."""
+    import config
+
+    return "^" + re.escape(config.CASHBACK_MENU_BUTTONS[key]) + "$"
+
+
+def cashback_cards_menu_button_regex(key: str) -> str:
+    """Match cashback cards submenu button text exactly."""
+    import config
+
+    return "^" + re.escape(config.CASHBACK_CARDS_MENU_BUTTONS[key]) + "$"
+
+
+def cashback_rules_menu_button_regex(key: str) -> str:
+    """Match cashback rules submenu button text exactly."""
+    import config
+
+    return "^" + re.escape(config.CASHBACK_RULES_MENU_BUTTONS[key]) + "$"
+
+
+def cashback_categories_menu_button_regex(key: str) -> str:
+    """Match cashback categories submenu button text exactly."""
+    import config
+
+    return "^" + re.escape(config.CASHBACK_CATEGORIES_MENU_BUTTONS[key]) + "$"
