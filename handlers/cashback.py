@@ -213,18 +213,27 @@ async def cancel_to_categories_menu(update: Update, context: ContextTypes.DEFAUL
 async def cashback_stats(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = update.effective_user.id
     project_id = context.user_data.get("active_project_id")
-    now = datetime.datetime.now()
+    try:
+        args = getattr(context, "args", None) or []
+        month, year = _parse_month_year(args)
+    except (ValueError, TypeError):
+        await update.message.reply_text("❌ Неверный формат. Используйте: /cashback_stats [month] [year]")
+        return
+
+    if not (1 <= month <= 12):
+        await update.message.reply_text("❌ Месяц должен быть от 1 до 12.")
+        return
 
     summary = await cashback.calculate_potential_cashback_for_period(
         user_id=user_id,
-        year=now.year,
-        month=now.month,
+        year=year,
+        month=month,
         project_id=project_id,
     )
     await update.message.reply_text(
         cashback.format_cashback_summary(
             summary,
-            title=f"📈 Теоретический кэшбэк за {now.month:02d}.{now.year}",
+            title=f"📈 Теоретический кэшбэк за {month:02d}.{year}",
             include_effective_spent=False,
         ),
         reply_markup=helpers.get_cashback_menu_keyboard(),

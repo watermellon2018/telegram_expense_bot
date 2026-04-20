@@ -8,6 +8,7 @@ MVP-утилиты для теоретического кэшбэка.
 """
 
 import datetime
+import json
 from typing import Dict, List, Optional, Tuple
 
 from utils import db
@@ -49,6 +50,17 @@ def _fmt_amount(value: float) -> str:
     return f"{value:,.2f}".replace(",", " ")
 
 
+def _is_closed_month(year: int, month: int, today: Optional[datetime.date] = None) -> bool:
+    if month < 1 or month > 12:
+        return False
+    now = today or datetime.date.today()
+    if year < now.year:
+        return True
+    if year > now.year:
+        return False
+    return month < now.month
+
+
 def get_cashback_category_emoji(category_name: str) -> str:
     normalized = _normalize_name(category_name)
     if normalized in DEFAULT_CASHBACK_CATEGORY_EMOJIS:
@@ -83,6 +95,183 @@ async def ensure_global_cashback_categories_exist() -> None:
             )
     except Exception as e:
         log_error(logger, e, "ensure_global_cashback_categories_error")
+
+
+# ---------------------------------------------------------------------------
+# Monthly snapshots (closed month immutable analytics)
+# ---------------------------------------------------------------------------
+
+def _normalize_snapshot_breakdown(raw_value) -> List[Dict]:
+    if raw_value is None:
+        return []
+    if isinstance(raw_value, list):
+        return raw_value
+    if isinstance(raw_value, str):
+        try:
+            parsed = json.loads(raw_value)
+            return parsed if isinstance(parsed, list) else []
+        except json.JSONDecodeError:
+            return []
+    return []
+
+
+def _snapshot_row_to_summary(row) -> Dict:
+    by_category = _normalize_snapshot_breakdown(row["category_breakdown_json"])
+    return {
+        "success": True,
+        "year": int(row["year"]),
+        "month": int(row["month"]),
+        "project_id": None,
+        "total_spent": float(row["total_spent"] or 0.0),
+        "potential_cashback": float(row["total_potential_cashback"] or 0.0),
+        "effective_spent": float(row["effective_spent"] or 0.0),
+        "expenses_count": int(row["expenses_count"] or 0),
+        "by_category": by_category,
+        "rules_applied_count": None,
+        "matched_expenses_count": None,
+        "disclaimer": POTENTIAL_CASHBACK_DISCLAIMER,
+        "is_snapshot": True,
+        "snapshot_created_at": row["created_at"],
+    }
+
+
+async def get_cashback_monthly_snapshot(user_id: int, year: int, month: int) -> Optional[Dict]:
+    try:
+        row = await db.fetchrow(
+            """
+            SELECT
+                id,
+                user_id,
+                year,
+                month,
+                total_spent,
+                total_potential_cashback,
+                effective_spent,
+                expenses_count,
+                category_breakdown_json,
+                created_at
+            FROM cashback_monthly_snapshots
+            WHERE user_id = $1
+              AND year = $2
+              AND month = $3
+            """,
+            str(user_id),
+            year,
+            month,
+        )
+        if not row:
+            return None
+        return _snapshot_row_to_summary(row)
+    except Exception as e:
+        log_error(
+            logger,
+            e,
+            "get_cashback_monthly_snapshot_error",
+            user_id=user_id,
+            year=year,
+            month=month,
+        )
+        return None
+
+
+async def create_cashback_monthly_snapshot(
+    user_id: int,
+    year: int,
+    month: int,
+    summary: Dict,
+) -> Dict:
+    try:
+        await _ensure_user_exists(user_id)
+        breakdown = summary.get("by_category") or []
+        payload = json.dumps(breakdown, ensure_ascii=False)
+
+        created_row = await db.fetchrow(
+            """
+            INSERT INTO cashback_monthly_snapshots(
+                user_id,
+                year,
+                month,
+                total_spent,
+                total_potential_cashback,
+                effective_spent,
+                expenses_count,
+                category_breakdown_json,
+                created_at
+            )
+            VALUES($1, $2, $3, $4, $5, $6, $7, $8::jsonb, NOW())
+            ON CONFLICT (user_id, year, month) DO NOTHING
+            RETURNING
+                id,
+                user_id,
+                year,
+                month,
+                total_spent,
+                total_potential_cashback,
+                effective_spent,
+                expenses_count,
+                category_breakdown_json,
+                created_at
+            """,
+            str(user_id),
+            year,
+            month,
+            float(summary.get("total_spent", 0.0)),
+            float(summary.get("potential_cashback", 0.0)),
+            float(summary.get("effective_spent", 0.0)),
+            int(summary.get("expenses_count", 0)),
+            payload,
+        )
+
+        was_created = created_row is not None
+        row = created_row
+        if row is None:
+            row = await db.fetchrow(
+                """
+                SELECT
+                    id,
+                    user_id,
+                    year,
+                    month,
+                    total_spent,
+                    total_potential_cashback,
+                    effective_spent,
+                    expenses_count,
+                    category_breakdown_json,
+                    created_at
+                FROM cashback_monthly_snapshots
+                WHERE user_id = $1
+                  AND year = $2
+                  AND month = $3
+                """,
+                str(user_id),
+                year,
+                month,
+            )
+
+        if not row:
+            return {"success": False, "message": "Не удалось сохранить snapshot кэшбэка."}
+
+        result = _snapshot_row_to_summary(row)
+        result["snapshot_created"] = was_created
+        log_event(
+            logger,
+            "cashback_snapshot_saved",
+            user_id=user_id,
+            year=year,
+            month=month,
+            created=was_created,
+        )
+        return result
+    except Exception as e:
+        log_error(
+            logger,
+            e,
+            "create_cashback_monthly_snapshot_error",
+            user_id=user_id,
+            year=year,
+            month=month,
+        )
+        return {"success": False, "message": "Не удалось сохранить snapshot кэшбэка."}
 
 
 # ---------------------------------------------------------------------------
@@ -752,7 +941,7 @@ async def _get_effective_rule_map(
     return rule_map
 
 
-async def calculate_potential_cashback_for_period(
+async def _calculate_potential_cashback_for_period_dynamic(
     user_id: int,
     year: int,
     month: int,
@@ -809,6 +998,7 @@ async def calculate_potential_cashback_for_period(
         total_spent = 0.0
         total_potential_cashback = 0.0
         by_category: Dict[str, float] = {}
+        expenses_count = 0
         matched_categories_count = 0
 
         for row in expenses_rows:
@@ -817,6 +1007,7 @@ async def calculate_potential_cashback_for_period(
             normalized_expense_category = _normalize_name(expense_category_name)
 
             total_spent += amount
+            expenses_count += 1
 
             rule = rule_map.get(normalized_expense_category)
             if not rule:
@@ -838,6 +1029,7 @@ async def calculate_potential_cashback_for_period(
             "total_spent": total_spent,
             "potential_cashback": total_potential_cashback,
             "effective_spent": effective_spent,
+            "expenses_count": expenses_count,
             "by_category": [
                 {"category_name": category_name, "potential_cashback": value}
                 for category_name, value in sorted_by_category
@@ -858,6 +1050,72 @@ async def calculate_potential_cashback_for_period(
             user_card_id=user_card_id,
         )
         return {"success": False, "message": "Не удалось рассчитать теоретический кэшбэк."}
+
+
+async def calculate_potential_cashback_for_period(
+    user_id: int,
+    year: int,
+    month: int,
+    project_id: Optional[int] = None,
+    user_card_id: Optional[int] = None,
+) -> Dict:
+    """
+    Публичный расчёт кэшбэка с поддержкой immutable snapshot для закрытых месяцев.
+
+    Snapshot создаётся только для личной аналитики:
+    - project_id is None
+    - user_card_id is None
+    """
+    if project_id is not None or user_card_id is not None:
+        return await _calculate_potential_cashback_for_period_dynamic(
+            user_id=user_id,
+            year=year,
+            month=month,
+            project_id=project_id,
+            user_card_id=user_card_id,
+        )
+
+    if not _is_closed_month(year, month):
+        return await _calculate_potential_cashback_for_period_dynamic(
+            user_id=user_id,
+            year=year,
+            month=month,
+            project_id=project_id,
+            user_card_id=user_card_id,
+        )
+
+    snapshot = await get_cashback_monthly_snapshot(user_id=user_id, year=year, month=month)
+    if snapshot:
+        log_event(
+            logger,
+            "cashback_snapshot_hit",
+            user_id=user_id,
+            year=year,
+            month=month,
+        )
+        return snapshot
+
+    dynamic_summary = await _calculate_potential_cashback_for_period_dynamic(
+        user_id=user_id,
+        year=year,
+        month=month,
+        project_id=project_id,
+        user_card_id=user_card_id,
+    )
+    if not dynamic_summary.get("success"):
+        return dynamic_summary
+
+    snapshot_result = await create_cashback_monthly_snapshot(
+        user_id=user_id,
+        year=year,
+        month=month,
+        summary=dynamic_summary,
+    )
+    if snapshot_result.get("success"):
+        return snapshot_result
+
+    # Fallback без потери данных в ответе, если snapshot сохранить не удалось.
+    return dynamic_summary
 
 
 async def calculate_potential_cashback_for_last_12_months(
