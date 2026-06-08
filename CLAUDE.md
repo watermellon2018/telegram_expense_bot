@@ -35,8 +35,16 @@ pytest            # тесты (как в CI)
 
 - PostgreSQL, `asyncpg`, **сырой SQL, без ORM**. Запросы из доменного кода — через `utils/db.py`; атомарность — через `async with db.transaction() as conn:`.
 - Параметры — **только биндами** (`$1, $2, ...`), без ручной склейки SQL-строк.
-- **Alembic нет** (переход желателен в будущем). Миграции — сырые `.sql` в `migration/<feature>/`, применяются вручную через `psql`/asyncpg. Пиши их **идемпотентными** (`DO $$ ... IF NOT EXISTS ... $$`).
 - `utils/migration.py` — отдельный одноразовый скрипт переноса исторических данных из Excel в Postgres, не часть рантайма.
+
+### Database migrations
+
+- Версионирование схемы — через **Alembic** (`alembic.ini`, `alembic/`). Рантайм бота работает на `asyncpg`; Alembic использует синхронный драйвер `psycopg`. URL берётся из тех же `DB_*`-переменных, что и бот (`alembic/env.py`) — секреты в конфиге не хранятся.
+- **ORM-моделей нет**, поэтому `alembic revision --autogenerate` **не используется**. Миграции пишутся **вручную**: `alembic revision -m "описание"`, затем заполнить `upgrade()` идемпотентным DDL через `op.execute(...)` (`CREATE TABLE IF NOT EXISTS`, `ADD COLUMN IF NOT EXISTS`, `DO $$ ... IF NOT EXISTS $$`).
+- Создать миграцию (локально, conda `telegram_bot`): `alembic revision -m "..."`. Применить: `alembic upgrade head`.
+- При **Docker-деплое миграции применяются автоматически** одноразовым сервисом `migrations` (тот же образ, `alembic upgrade head`) **до старта бота**; при ошибке миграции бот не обновляется. На сервере вручную миграции не запускают.
+- `alembic revision --autogenerate` **никогда не запускать на production**. Откат схемы при неудачном деплое — отдельно и вручную (деплой не делает авто-downgrade).
+- Историческая консолидация схемы — в baseline-ревизии (`alembic/versions/0001_baseline.py`). Старые сырые `.sql` в `migration/` оставлены как архив (см. `migration/README.md`), новые изменения схемы — только через Alembic.
 
 ## Тесты
 
