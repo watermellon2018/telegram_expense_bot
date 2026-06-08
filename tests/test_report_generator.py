@@ -14,15 +14,16 @@ import datetime
 import os
 
 import matplotlib
+
 matplotlib.use('Agg')
+from unittest.mock import AsyncMock, MagicMock, patch
+
 import matplotlib.pyplot as plt
 import pandas as pd
 import pytest
 from matplotlib.backends.backend_pdf import PdfPages
-from unittest.mock import AsyncMock, MagicMock, patch
 
 from utils import report_generator as rg
-
 
 # ─── Fixtures ────────────────────────────────────────────────────────────────
 

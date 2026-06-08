@@ -9,9 +9,9 @@
 После обнаружения паттерна бот предлагает пользователю создать постоянный расход.
 """
 
-import re
 import datetime
 import hashlib
+import re
 from typing import Optional
 
 from utils import db

@@ -29,7 +29,7 @@ from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 import config
 import metrics
 from utils import db, excel, expense_formatter, project_notifications, projects
-from utils.logger import get_logger, log_event, log_error
+from utils.logger import get_logger, log_error, log_event
 from utils.permissions import Permission, has_permission
 
 logger = get_logger("utils.project_notifier")
@@ -37,8 +37,8 @@ logger = get_logger("utils.project_notifier")
 try:
     from telegram.error import Forbidden, TelegramError
 except Exception:  # pragma: no cover
-    Forbidden = Exception
-    TelegramError = Exception
+    Forbidden = Exception  # type: ignore[assignment,misc]
+    TelegramError = Exception  # type: ignore[assignment,misc]
 
 
 def _error_type(exc: Exception) -> str:
@@ -226,7 +226,7 @@ async def notify_duplicate_reported(
     keyboard = _author_report_keyboard(expense_id, report_id)
 
     # Получатели: автор расхода + владелец проекта (без дублей, без самого reporter)
-    recipients = []
+    recipients: list = []
     for uid in (author_id, owner_id):
         if uid is None:
             continue

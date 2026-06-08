@@ -16,7 +16,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from utils import expense_creation, duplicate_service
+from utils import duplicate_service, expense_creation
 
 
 class FakeConn:

@@ -14,31 +14,29 @@ Pattern suggestion:
   бот проверяет паттерн и предлагает создать постоянный расход.
 """
 
-import asyncio
 import datetime
 from typing import Optional
 
-import config
 from telegram import (
-    Update,
     InlineKeyboardButton,
     InlineKeyboardMarkup,
-    ReplyKeyboardRemove,
+    Update,
 )
 from telegram.ext import (
+    CallbackQueryHandler,
+    CommandHandler,
     ContextTypes,
     ConversationHandler,
-    CommandHandler,
     MessageHandler,
-    CallbackQueryHandler,
     filters,
 )
 
+import config
 from utils import categories as cat_utils
-from utils import recurring as rec_utils
 from utils import pattern_detector as pd_utils
+from utils import recurring as rec_utils
 from utils.helpers import get_main_menu_keyboard, main_menu_button_regex
-from utils.logger import get_logger, log_event, log_error
+from utils.logger import get_logger, log_error, log_event
 
 logger = get_logger("handlers.recurring")
 

@@ -5,8 +5,9 @@ import re
 
 def get_main_menu_keyboard():
     """Return main menu keyboard."""
-    import config
     from telegram import ReplyKeyboardMarkup
+
+    import config
 
     btn = config.MAIN_MENU_BUTTONS
     keyboard = [
@@ -20,8 +21,9 @@ def get_main_menu_keyboard():
 
 def get_analysis_menu_keyboard():
     """Return analysis submenu keyboard."""
-    import config
     from telegram import ReplyKeyboardMarkup
+
+    import config
 
     btn = config.ANALYSIS_MENU_BUTTONS
     keyboard = [
@@ -33,8 +35,9 @@ def get_analysis_menu_keyboard():
 
 def get_income_menu_keyboard():
     """Return income submenu keyboard."""
-    import config
     from telegram import ReplyKeyboardMarkup
+
+    import config
 
     btn = config.INCOME_MENU_BUTTONS
     keyboard = [
@@ -46,8 +49,9 @@ def get_income_menu_keyboard():
 
 def get_settings_menu_keyboard():
     """Return settings submenu keyboard."""
-    import config
     from telegram import ReplyKeyboardMarkup
+
+    import config
 
     btn = config.SETTINGS_MENU_BUTTONS
     keyboard = [
@@ -59,8 +63,9 @@ def get_settings_menu_keyboard():
 
 def get_cashback_menu_keyboard():
     """Return cashback submenu keyboard."""
-    import config
     from telegram import ReplyKeyboardMarkup
+
+    import config
 
     btn = config.CASHBACK_MENU_BUTTONS
     keyboard = [
@@ -73,8 +78,9 @@ def get_cashback_menu_keyboard():
 
 def get_cashback_cards_menu_keyboard():
     """Return cashback cards submenu keyboard."""
-    import config
     from telegram import ReplyKeyboardMarkup
+
+    import config
 
     btn = config.CASHBACK_CARDS_MENU_BUTTONS
     keyboard = [
@@ -87,8 +93,9 @@ def get_cashback_cards_menu_keyboard():
 
 def get_cashback_rules_menu_keyboard():
     """Return cashback rules submenu keyboard."""
-    import config
     from telegram import ReplyKeyboardMarkup
+
+    import config
 
     btn = config.CASHBACK_RULES_MENU_BUTTONS
     keyboard = [
@@ -101,8 +108,9 @@ def get_cashback_rules_menu_keyboard():
 
 def get_cashback_categories_menu_keyboard():
     """Return cashback categories submenu keyboard."""
-    import config
     from telegram import ReplyKeyboardMarkup
+
+    import config
 
     btn = config.CASHBACK_CATEGORIES_MENU_BUTTONS
     keyboard = [

@@ -11,7 +11,6 @@
 import datetime
 from typing import Optional
 
-
 # Месяцы в родительном падеже для дат вида «8 июня 2026»
 _MONTHS_GENITIVE = [
     "января", "февраля", "марта", "апреля", "мая", "июня",
@@ -19,14 +18,14 @@ _MONTHS_GENITIVE = [
 ]
 
 
-def format_date_human(d: datetime.date) -> str:
+def format_date_human(d: Optional[datetime.date]) -> str:
     """«8 июня 2026»."""
     if d is None:
         return "—"
     return f"{d.day} {_MONTHS_GENITIVE[d.month - 1]} {d.year}"
 
 
-def format_datetime_human(dt: datetime.datetime) -> str:
+def format_datetime_human(dt: Optional[datetime.datetime]) -> str:
     """«8 июня 2026, 10:15»."""
     if dt is None:
         return "—"
@@ -47,7 +46,7 @@ def format_amount(amount) -> str:
     return text
 
 
-def format_relative_time(created_at: datetime.datetime,
+def format_relative_time(created_at: Optional[datetime.datetime],
                          now: Optional[datetime.datetime] = None) -> str:
     """Относительное время: «7 минут назад», «2 часа назад», «только что»."""
     if created_at is None:

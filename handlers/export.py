@@ -2,19 +2,18 @@
 Обработчики команд для экспорта данных в Excel
 """
 import asyncio
-import config
-from utils.export import get_month_name
-
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import ContextTypes, CommandHandler, CallbackQueryHandler, MessageHandler, filters
-from utils import excel, projects, db
 import os
 import tempfile
-import shutil
+
 import pandas as pd
-import datetime
-from utils.logger import get_logger, log_event, log_error
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
+from telegram.ext import CallbackQueryHandler, CommandHandler, ContextTypes, MessageHandler, filters
+
+import config
+from utils import db, excel, projects
+from utils.export import get_month_name
 from utils.helpers import main_menu_button_regex
+from utils.logger import get_logger, log_error, log_event
 
 logger = get_logger("handlers.export")
 
@@ -24,7 +23,7 @@ async def get_available_years(user_id: int, project_id: int = None) -> list:
     Получает список доступных годов из базы данных для пользователя
     """
     project_id = excel._normalize_project_id(project_id) if hasattr(excel, '_normalize_project_id') else (project_id if project_id else None)
-    
+
     try:
         rows = await db.fetch(
             """
@@ -68,7 +67,7 @@ def create_year_selection_menu(years: list, callback_prefix: str = "export:year"
         if i + 1 < len(years):
             row.append(InlineKeyboardButton(str(years[i + 1]), callback_data=f"{callback_prefix}:{years[i + 1]}"))
         keyboard.append(row)
-    
+
     # Кнопка "Назад"
     keyboard.append([InlineKeyboardButton("⬅️ Назад", callback_data="export:main")])
     return InlineKeyboardMarkup(keyboard)
@@ -80,7 +79,7 @@ def create_month_selection_menu(year: int) -> InlineKeyboardMarkup:
         "Январь", "Февраль", "Март", "Апрель", "Май", "Июнь",
         "Июль", "Август", "Сентябрь", "Октябрь", "Ноябрь", "Декабрь"
     ]
-    
+
     keyboard = []
     # Группируем по 3 месяца в ряд
     for i in range(0, 12, 3):
@@ -93,7 +92,7 @@ def create_month_selection_menu(year: int) -> InlineKeyboardMarkup:
                     callback_data=f"export:month:{year}:{month_num}"
                 ))
         keyboard.append(row)
-    
+
     # Кнопка "Назад"
     keyboard.append([InlineKeyboardButton("⬅️ Назад", callback_data="export:month:select_year")])
     return InlineKeyboardMarkup(keyboard)
@@ -107,17 +106,17 @@ async def export_stats_command(update: Update, context: ContextTypes.DEFAULT_TYP
     Если вызвана с аргументами - выполняет экспорт напрямую.
     """
     from utils.logger import log_command
-    
+
     user_id = update.effective_user.id
     project_id = context.user_data.get('active_project_id')
-    
+
     log_command(logger, "export", user_id=user_id, project_id=project_id, has_args=bool(context.args))
-    
+
     # Если есть аргументы - обрабатываем как раньше (для обратной совместимости)
     if context.args:
         year = None
         month = None
-        
+
         if len(context.args) >= 1:
             try:
                 year = int(context.args[0])
@@ -127,7 +126,7 @@ async def export_stats_command(update: Update, context: ContextTypes.DEFAULT_TYP
                     "Например: /export 2024 или /export 2024 июнь"
                 )
                 return
-        
+
         if len(context.args) >= 2:
             month_arg = context.args[1].lower()
             try:
@@ -146,7 +145,7 @@ async def export_stats_command(update: Update, context: ContextTypes.DEFAULT_TYP
                         f"Или используйте числа от 1 до 12."
                     )
                     return
-        
+
         # Выполняем экспорт напрямую
         await perform_export(update, user_id, project_id, year, month)
     else:
@@ -255,7 +254,7 @@ async def perform_export(update: Update, user_id: int, project_id: int, year: in
             else:
                 filename = "Общая статистика расходов.xlsx"
                 caption = "📈 Статистика всех расходов\n\nФайл содержит детальную статистику ваших расходов."
-            
+
             # Добавляем информацию о проекте
             if project_id is not None:
                 project = await projects.get_project_by_id(user_id, project_id)
@@ -263,7 +262,7 @@ async def perform_export(update: Update, user_id: int, project_id: int, year: in
                     caption = f"📁 Проект: {project['project_name']}\n\n{caption}"
             else:
                 caption = f"📊 Общие расходы\n\n{caption}"
-            
+
             from utils import helpers
             await message.reply_document(
                 document=file,
@@ -271,17 +270,17 @@ async def perform_export(update: Update, user_id: int, project_id: int, year: in
                 caption=caption,
                 reply_markup=helpers.get_main_menu_keyboard()
             )
-        
+
         # Удаляем временный файл
         os.unlink(tmp_path)
-        
+
         duration = time.time() - start_time
-        log_event(logger, "export_success", user_id=user_id, project_id=project_id, 
+        log_event(logger, "export_success", user_id=user_id, project_id=project_id,
                  year=year, month=month, duration=duration, export_filename=filename)
-        
+
     except Exception as e:
         duration = time.time() - start_time
-        log_error(logger, e, "export_error", user_id=user_id, project_id=project_id, 
+        log_error(logger, e, "export_error", user_id=user_id, project_id=project_id,
                  year=year, month=month, duration=duration)
         await message.reply_text(f"❌ Ошибка при создании статистики: {str(e)}")
         # Очищаем временный файл в случае ошибки
@@ -298,26 +297,26 @@ async def handle_export_callback(update: Update, context: ContextTypes.DEFAULT_T
     """
     query = update.callback_query
     await query.answer()
-    
+
     user_id = update.effective_user.id
     project_id = context.user_data.get('active_project_id')
     callback_data = query.data
-    
+
     # Парсим callback_data: export:action:params
     parts = callback_data.split(':')
     action = parts[1] if len(parts) > 1 else None
-    
+
     if action == "main":
         # Показываем главное меню
         menu = create_main_export_menu()
         await query.edit_message_text("📊 Выберите тип экспорта:", reply_markup=menu)
-    
+
     elif action == "all":
         # Экспорт всех расходов
         await query.edit_message_text("⏳ Генерирую файл со всеми расходами...")
         await perform_export(update, user_id, project_id, year=None, month=None)
         await query.delete_message()
-    
+
     elif action == "year":
         if len(parts) == 3 and parts[2] == "select":
             # Показываем выбор года
@@ -325,7 +324,7 @@ async def handle_export_callback(update: Update, context: ContextTypes.DEFAULT_T
             if not years:
                 await query.edit_message_text("❌ У вас пока нет данных о расходах.")
                 return
-            
+
             menu = create_year_selection_menu(years)
             await query.edit_message_text("📅 Выберите год:", reply_markup=menu)
         elif len(parts) == 3:
@@ -337,7 +336,7 @@ async def handle_export_callback(update: Update, context: ContextTypes.DEFAULT_T
                 await query.delete_message()
             except ValueError:
                 await query.edit_message_text("❌ Ошибка: неверный формат года.")
-    
+
     elif action == "month":
         if len(parts) == 3 and parts[2] == "select_year":
             # Показываем выбор года для месяца
@@ -345,7 +344,7 @@ async def handle_export_callback(update: Update, context: ContextTypes.DEFAULT_T
             if not years:
                 await query.edit_message_text("❌ У вас пока нет данных о расходах.")
                 return
-            
+
             menu = create_year_selection_menu(years, callback_prefix="export:month:year")
             await query.edit_message_text("📅 Выберите год для экспорта по месяцам:", reply_markup=menu)
         elif len(parts) == 4 and parts[2] == "year":

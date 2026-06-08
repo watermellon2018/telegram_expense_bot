@@ -17,9 +17,9 @@ from utils.formatting import (
 )
 from utils.menu import (
     analysis_menu_button_regex,
+    budget_menu_button_regex,
     cashback_cards_menu_button_regex,
     cashback_categories_menu_button_regex,
-    budget_menu_button_regex,
     cashback_menu_button_regex,
     cashback_rules_menu_button_regex,
     category_menu_button_regex,

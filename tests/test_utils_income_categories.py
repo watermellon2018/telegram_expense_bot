@@ -1,7 +1,8 @@
 """Тесты для utils/income_categories.py"""
 
-import pytest
 from unittest.mock import AsyncMock, patch
+
+import pytest
 
 from utils import income_categories
 

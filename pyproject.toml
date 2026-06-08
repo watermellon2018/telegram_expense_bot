@@ -1,0 +1,101 @@
+# Конфигурация инструментов разработки (feature_113).
+# Только настройки линтера/типизации — проект собирается/ставится через
+# requirements.txt (рантайм) и requirements-dev.txt (dev), без сборки пакета.
+#
+# Строгость намеренно МЯГКАЯ (baseline): кодовая база большая и без типов
+# (raw asyncpg, без ORM), поэтому стартуем с минимального набора правил, чтобы
+# проверки были полезны и проходили уже сейчас. Ужесточать — постепенно.
+
+[tool.ruff]
+# Целевая версия — минимальная из CI (3.9/3.10/3.11)
+target-version = "py39"
+line-length = 100
+
+# Не проверяем сгенерированное/внешнее/архивное
+extend-exclude = [
+    "venv",
+    ".venv",
+    ".venv311",
+    "alembic/versions",   # автогенерируемые ревизии Alembic
+    "migration",          # архив сырых SQL/служебных скриптов
+    "data",
+]
+
+# Базовый набор намеренно узкий (lenient baseline на легаси-коде):
+#   E  — ошибки pycodestyle
+#   F  — pyflakes (реальные проблемы: неиспользуемые импорты/переменные, и т.п.)
+#   I  — сортировка импортов
+# Намеренно НЕ включены пока (включим позже отдельной задачей):
+#   W  — здесь почти все срабатывания внутри docstring/SQL-строк (ruff не правит их
+#        безопасно); это шум, а не проблемы кода.
+#   UP — модернизация типов (List→list и т.п.) рискованна на Python 3.9; вернёмся,
+#        когда минимальная версия станет ≥3.10.
+#   B/SIM/C4/… — после стабилизации baseline.
+[tool.ruff.lint]
+select = ["E", "F", "I"]
+ignore = [
+    "E501",  # длину строк не форсируем на легаси-коде (line-length — ориентир)
+    "E402",  # module-import-not-at-top: в main.py поздний импорт намеренный
+    "E722",  # bare-except: единичный защитный except в legacy-коде
+    "F841",  # неиспользуемые локальные переменные в легаси — чистим отдельной задачей
+]
+
+[tool.ruff.lint.per-file-ignores]
+# В тестах допускаем неиспользуемые импорты/локальные имена и длинные строки
+"tests/*" = ["F401", "F841"]
+# __init__.py часто реэкспортирует — не ругаемся на «неиспользуемые» импорты
+"**/__init__.py" = ["F401"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["app", "handlers", "utils", "config", "metrics", "recommendation"]
+
+
+[tool.mypy]
+python_version = "3.9"
+# Gradual typing: mypy проверяет только модули, написанные с аннотациями
+# (feature_110/feature_113). Легаси (handlers/* и старые utils/* на PTB+asyncpg
+# без типов) пока не проверяем — добавим по мере аннотирования. Так mypy полезен
+# и проходит уже сейчас, а не тонет в 1000+ ошибок Optional[Message]/user_data.
+files = [
+    "metrics.py",
+    "scripts/wait_for_db.py",
+    "utils/duplicate_service.py",
+    "utils/duplicate_reports.py",
+    "utils/expense_creation.py",
+    "utils/expense_formatter.py",
+    "utils/project_notifier.py",
+    "utils/project_notifications.py",
+]
+# Проект использует неявные namespace-пакеты (в utils/ нет __init__.py, но есть
+# относительные импорты `from . import db`). Без этих опций mypy падает на
+# «No parent module — cannot perform relative import».
+namespace_packages = true
+explicit_package_bases = true
+mypy_path = "."
+# Мягкий baseline: не требуем аннотаций, не падаем на сторонних либах без типов.
+ignore_missing_imports = true
+follow_imports = "silent"
+warn_unused_ignores = false
+warn_redundant_casts = true
+# Не включаем strict/disallow_untyped_* — иначе сотни ошибок на легаси-коде.
+disallow_untyped_defs = false
+check_untyped_defs = false
+exclude = '(^|/)(venv|\.venv|\.venv311|alembic/versions|migration|data|tests)(/|$)'
+
+# Сторонние библиотеки без type stubs — явно глушим (на случай, если
+# ignore_missing_imports когда-нибудь выключат).
+[[tool.mypy.overrides]]
+module = [
+    "telegram.*",
+    "asyncpg.*",
+    "apscheduler.*",
+    "prometheus_client.*",
+    "pandas.*",
+    "matplotlib.*",
+    "seaborn.*",
+    "pytz.*",
+    "dotenv.*",
+    "alembic.*",
+    "psycopg.*",
+]
+ignore_missing_imports = true

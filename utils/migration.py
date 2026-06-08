@@ -1,11 +1,11 @@
 import asyncio
-import asyncpg
 import os
-import pandas as pd
+from datetime import date, datetime, time
 from pathlib import Path
 from urllib.parse import quote_plus
-from datetime import datetime, date, time
 
+import asyncpg
+import pandas as pd
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -58,13 +58,13 @@ def parse_time(val):
 async def migrate_user(conn, user_folder: Path, skip_existing=False):
     user_id = user_folder.name
     print(f"Migrating user {user_id}")
-    
+
     # 1. Добавляем пользователя
     await conn.execute(
         "INSERT INTO users(user_id) VALUES($1) ON CONFLICT (user_id) DO NOTHING",
         user_id
     )
-    
+
     # 2. Миграция 2025.xlsx (Expenses и Budget)
     user_excel = user_folder / "2025.xlsx"
     if user_excel.exists():
@@ -95,7 +95,7 @@ async def migrate_user(conn, user_folder: Path, skip_existing=False):
                 row["budget"],
                 row["actual"]
             )
-    
+
     # 3. Миграция проектов пользователя
     projects_file = user_folder / "projects.xlsx"
     if projects_file.exists():
@@ -114,7 +114,7 @@ async def migrate_user(conn, user_folder: Path, skip_existing=False):
                 row["created_date"],
                 is_active
             )
-            
+
             # 4. Миграция Excel проекта
             project_folder = user_folder / "projects" / str(project_id)
             if project_folder.exists():
@@ -123,7 +123,7 @@ async def migrate_user(conn, user_folder: Path, skip_existing=False):
                 if not excel_files:
                     continue
                 project_excel = excel_files[0]
-                
+
                 # Expenses
                 df_exp_proj = pd.read_excel(project_excel, sheet_name="Expenses")
                 for r in df_exp_proj.to_dict(orient="records"):
@@ -157,7 +157,7 @@ async def migrate_user(conn, user_folder: Path, skip_existing=False):
 # --- Основная функция ---
 async def main():
     conn = await asyncpg.connect(DATABASE_URL)
-    
+
     # Создаем уникальное ограничение для budget, если его еще нет
     try:
         await conn.execute("""
@@ -177,7 +177,7 @@ async def main():
     except Exception as e:
         print(f"Warning: Could not create budget constraint: {e}")
         print("Continuing migration anyway...")
-    
+
     # Добавляем колонку active_project_id в users, если её еще нет
     try:
         await conn.execute("""
@@ -196,13 +196,13 @@ async def main():
     except Exception as e:
         print(f"Warning: Could not create active_project_id column: {e}")
         print("Continuing migration anyway...")
-    
+
     users_path = Path(USERS_FOLDER)
-    
+
     for user_folder in users_path.iterdir():
         if user_folder.is_dir():
             await migrate_user(conn, user_folder)
-    
+
     await conn.close()
     print("Migration finished!")
 

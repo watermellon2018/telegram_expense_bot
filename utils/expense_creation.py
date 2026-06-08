@@ -23,7 +23,7 @@ from typing import Optional
 
 import metrics
 from utils import duplicate_service, project_notifier
-from utils.logger import get_logger, log_event, log_error
+from utils.logger import get_logger, log_error, log_event
 
 logger = get_logger("utils.expense_creation")
 
@@ -139,7 +139,9 @@ async def process_new_expense(
             created_at=datetime.datetime.now(),
             comment=description,
         )
-        if existing is not None:
+        # bot_data нужен, чтобы сохранить черновик для последующего подтверждения.
+        # В рантайме PTB всегда передаёт context.bot_data; проверка — защитная.
+        if existing is not None and bot_data is not None:
             metrics.track_duplicate_found()
             draft = {
                 "author_id": str(author_id),

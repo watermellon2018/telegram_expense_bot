@@ -25,7 +25,7 @@ from typing import Optional
 
 import config
 from utils import db, excel
-from utils.logger import get_logger, log_event, log_error
+from utils.logger import get_logger, log_error, log_event
 from utils.permissions import Permission, has_permission
 
 logger = get_logger("utils.duplicate_service")
@@ -71,7 +71,7 @@ async def is_shared_project(project_id: Optional[int]) -> bool:
 
 async def find_possible_duplicate(
     *,
-    project_id: int,
+    project_id: Optional[int],
     author_id: int,
     amount,
     category_id: int,
@@ -198,7 +198,7 @@ async def create_expense_idempotent(
     Возвращает dict:
         {'created': bool, 'expense_id': Optional[int], 'duplicate_of': Optional[int]}
     """
-    result = {"created": False, "expense_id": None, "duplicate_of": None}
+    result: dict = {"created": False, "expense_id": None, "duplicate_of": None}
 
     # --- Уровень 1: idempotency key в bot_data ---
     cache = None

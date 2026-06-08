@@ -1,4 +1,24 @@
 services:
+  # Одноразовый сервис применения миграций БД (feature_113).
+  # Использует ТОТ ЖЕ образ, что и бот. Запускается явно в деплое ДО старта бота
+  # (см. .github/workflows/deploy.yml) и локально: `docker compose run --rm migrations`.
+  # profile "tools" — чтобы обычный `docker compose up` его не поднимал;
+  # порядком "миграции → бот" управляет деплой (Postgres внешний, поэтому
+  # depends_on на него недоступен — готовность ждём внутри scripts/run_migrations.sh).
+  migrations:
+    image: ghcr.io/watermellon2018/money_bot:${BOT_TAG}
+    command: ["sh", "scripts/run_migrations.sh"]
+    restart: "no"
+    env_file:
+      - .env
+    environment:
+      # Сколько секунд ждать готовности внешнего PostgreSQL перед миграциями
+      DB_WAIT_TIMEOUT: "90"
+    networks:
+      - postgres_net
+    profiles:
+      - tools
+
   money_bot:
     image: ghcr.io/watermellon2018/money_bot:${BOT_TAG}
     container_name: money_bot
@@ -18,7 +38,7 @@ services:
       retries: 3
       start_period: 40s
     labels:
-      logging: "promtail"  
+      logging: "promtail"
 
 networks:
   postgres_net:

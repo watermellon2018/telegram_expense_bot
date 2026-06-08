@@ -36,35 +36,39 @@ CREATE USER bot_user WITH PASSWORD 'your_password';
 GRANT ALL PRIVILEGES ON DATABASE botdb TO bot_user;
 ```
 
-### 2. Run Migration (if migrating from old system)
+### 2. Apply schema with Alembic
+
+Схема управляется Alembic (использует те же `DB_*` из `.env`).
 
 ```bash
-# Using psql
-psql -U bot_user -d botdb -f migrate_to_categories.sql
+conda activate telegram_bot
 
-# Or using Python
-python -c "
-import asyncio
-import asyncpg
-from pathlib import Path
+# Новая пустая БД — создать всю схему:
+alembic upgrade head
 
-async def run_migration():
-    import os
-    from dotenv import load_dotenv
-    load_dotenv()
-    
-    dsn = f\"postgresql://{os.getenv('DB_USER')}:{os.getenv('DB_PASSWORD')}@{os.getenv('DB_HOST')}:{os.getenv('DB_PORT')}/{os.getenv('DB_NAME')}\"
-    conn = await asyncpg.connect(dsn)
-    
-    with open('migrate_to_categories.sql', 'r', encoding='utf-8') as f:
-        await conn.execute(f.read())
-    
-    await conn.close()
-    print('Migration completed!')
-
-asyncio.run(run_migration())
-"
+# Диагностика
+alembic current        # текущая ревизия БД
+alembic history        # история ревизий
+alembic heads          # должен быть ровно один head
 ```
+
+**Существующая БД, в которой схема уже была создана прежними `migration/*.sql`:**
+пометить её базовой ревизией ОДИН раз (без выполнения DDL), затем обновлять как обычно:
+
+```bash
+alembic stamp 0001_baseline
+alembic upgrade head
+```
+
+Создание новой миграции (ORM нет → `--autogenerate` не используется, DDL пишется вручную):
+
+```bash
+alembic revision -m "краткое описание"
+# затем заполнить upgrade() идемпотентным SQL через op.execute(...)
+alembic upgrade head
+```
+
+> При Docker-деплое миграции применяются автоматически (`alembic upgrade head`) до старта бота — см. `docker-compose.yml` (сервис `migrations`) и `.github/workflows/deploy.yml`.
 
 ## Running the Bot
 

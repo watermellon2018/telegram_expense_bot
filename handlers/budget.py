@@ -10,21 +10,22 @@
 """
 
 import datetime
-from telegram import Update, ReplyKeyboardMarkup, ReplyKeyboardRemove
+
+from telegram import ReplyKeyboardMarkup, Update
 from telegram.ext import (
     ContextTypes,
-    CommandHandler,
-    MessageHandler,
     ConversationHandler,
+    MessageHandler,
     filters,
 )
-from utils import excel
-from utils import budgets as budgets_utils
-from utils.budget_notifier import check_user_budget_now
-from utils.permissions import Permission, has_permission
-from utils.helpers import get_main_menu_keyboard, main_menu_button_regex
-from utils.logger import get_logger, log_event, log_error
+
 import config
+from utils import budgets as budgets_utils
+from utils import excel
+from utils.budget_notifier import check_user_budget_now
+from utils.helpers import get_main_menu_keyboard, main_menu_button_regex
+from utils.logger import get_logger, log_event
+from utils.permissions import Permission, has_permission
 
 logger = get_logger("handlers.budget")
 
@@ -313,7 +314,6 @@ async def set_budget_threshold(update: Update, context: ContextTypes.DEFAULT_TYP
         )
 
     if budget_result and notify_result:
-        from utils.helpers import get_month_name
         await update.message.reply_text(
             f"✅ Бюджет установлен!\n\n"
             f"💰 Бюджет: {_fmt_amount(amount)}\n"

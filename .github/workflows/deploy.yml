@@ -68,6 +68,16 @@ jobs:
             echo "No previous version found"
           fi
 
+      # feature_113: применяем миграции БД ДО старта/обновления бота, тем же образом.
+      # Сервис migrations (profile tools) ждёт готовности PostgreSQL и выполняет
+      # `alembic upgrade head`. Если миграции упали — шаг падает, весь job падает,
+      # бот НЕ обновляется (см. "Rollback on failure" — он откатывает только приложение).
+      - name: Apply database migrations
+        run: |
+          export BOT_TAG=${{ steps.tags.outputs.tag }}
+          docker compose --profile tools pull migrations
+          docker compose --profile tools run --rm migrations
+
       - name: Deploy new version
         id: deploy
         run: |
@@ -78,7 +88,7 @@ jobs:
           export BOT_TAG=${{ steps.tags.outputs.tag }}
           docker compose pull money_bot
           docker compose up -d --no-deps money_bot
-          
+
           echo "deployed=true" >> $GITHUB_OUTPUT
 
       - name: Wait for health check

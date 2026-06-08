@@ -1,11 +1,12 @@
 """
 Регрессионные тесты на формат пользовательских сообщений.
 """
-import pytest
 from unittest.mock import AsyncMock, patch
 
-from handlers.start import start
+import pytest
+
 from handlers.project import project_info_command
+from handlers.start import start
 from utils import helpers
 
 

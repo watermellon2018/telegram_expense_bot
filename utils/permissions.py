@@ -3,11 +3,12 @@ Role-based access control for shared projects.
 Defines permissions for different user roles in projects.
 """
 
-from typing import Optional
-from typing import Set
 from enum import Enum
+from typing import Optional, Set
+
+from utils.logger import get_logger, log_error, log_event
+
 from . import projects
-from utils.logger import get_logger, log_event, log_error
 
 logger = get_logger("utils.permissions")
 
@@ -19,22 +20,22 @@ class Permission(Enum):
     INVITE_MEMBERS = "invite_members"
     REMOVE_MEMBERS = "remove_members"
     CHANGE_ROLES = "change_roles"
-    
+
     # Expense operations
     ADD_EXPENSE = "add_expense"
     EDIT_EXPENSE = "edit_expense"
     DELETE_EXPENSE = "delete_expense"
-    
+
     # Category operations
     ADD_CATEGORY = "add_category"
     EDIT_CATEGORY = "edit_category"
     DELETE_CATEGORY = "delete_category"
-    
+
     # View operations
     VIEW_STATS = "view_stats"
     VIEW_HISTORY = "view_history"
     VIEW_MEMBERS = "view_members"
-    
+
     # Budget operations
     SET_BUDGET = "set_budget"
     VIEW_BUDGET = "view_budget"
@@ -103,31 +104,31 @@ async def has_permission(
     # Personal operations (project_id=None) always allowed for the user
     if project_id is None:
         return True
-    
+
     try:
         # Get user's role in the project
         role = await projects.get_user_role_in_project(user_id, project_id)
-        
+
         log_event(logger, "permission_check_debug",
                  user_id=user_id, project_id=project_id,
                  role=role, permission=permission.value)
-        
+
         if role is None:
-            log_event(logger, "permission_denied_not_member", 
-                     user_id=user_id, project_id=project_id, 
+            log_event(logger, "permission_denied_not_member",
+                     user_id=user_id, project_id=project_id,
                      permission=permission.value)
             return False
-        
+
         # Check if role has the permission
         role_perms = ROLE_PERMISSIONS.get(role, set())
         has_perm = permission in role_perms
-        
+
         log_event(logger, "permission_check_result",
                  user_id=user_id, project_id=project_id,
                  role=role, permission=permission.value,
                  has_permission=has_perm,
                  role_permissions=[p.value for p in role_perms])
-        
+
         if not has_perm:
             log_event(logger, "permission_denied_insufficient_role",
                      user_id=user_id, project_id=project_id,
@@ -136,9 +137,9 @@ async def has_permission(
             log_event(logger, "permission_granted",
                      user_id=user_id, project_id=project_id,
                      role=role, permission=permission.value)
-        
+
         return has_perm
-        
+
     except Exception as e:
         log_error(logger, e, "permission_check_error",
                  user_id=user_id, project_id=project_id,
@@ -187,12 +188,12 @@ async def get_user_permissions(
     if project_id is None:
         # For personal operations, user has all permissions
         return ROLE_PERMISSIONS['owner']
-    
+
     try:
         role = await projects.get_user_role_in_project(user_id, project_id)
         if role is None:
             return set()
-        
+
         return ROLE_PERMISSIONS.get(role, set())
     except Exception as e:
         log_error(logger, e, "get_permissions_error",
@@ -221,11 +222,11 @@ async def can_modify_expense(
     # User can always modify their own expenses
     if str(user_id) == expense_user_id:
         return True
-    
+
     # For personal expenses, only owner can modify
     if project_id is None:
         return False
-    
+
     # For project expenses, check role permissions
     return await has_permission(user_id, project_id, Permission.EDIT_EXPENSE)
 

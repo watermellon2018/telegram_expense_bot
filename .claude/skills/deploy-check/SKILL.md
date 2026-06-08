@@ -15,9 +15,11 @@ description: >-
 ## Контекст деплоя
 Деплой: push в `master` → GitHub Actions `deploy.yml` на **self-hosted** раннере → build + push образа в **GHCR** (`ghcr.io/.../money_bot:<tag>`) → `docker compose pull/up -d` → healthcheck → авто-rollback при провале (`rollback.yml`). Контейнер `money_bot`, метрики `:8010→:8000`.
 
+> **Docker-демон не запускать.** На машине пользователя Docker Desktop не работает. Не пытайся стартовать Docker Desktop/демон и не жди его поднятия. Проверки делай статически (чтение файлов). Команды, требующие демона (`docker build`, `docker compose up/pull/run`, `docker ps`), не выполняй — если такая проверка нужна, пометь её как «проверить на сервере/в CI». `docker compose config` (валидация YAML) демон не требует — допустимо.
+
 ## Проверки
 
-1. **Docker build.** `Dockerfile` собирается без ошибок. `requirements.txt` консистентен (всё, что импортирует код, есть в зависимостях). Базовый образ `python:3.11-slim`.
+1. **Docker build (статически).** `Dockerfile` корректен (база `python:3.11-slim`, `COPY`/`CMD` на месте) и `requirements.txt` консистентен (всё, что импортирует код, есть в зависимостях). Живой `docker build` не запускай (нужен демон) — оцени по содержимому файлов; реальную сборку выполняет CI/сервер.
 
 2. **Конфигурация compose.** `docker-compose.yml`: имя контейнера, `env_file`, volume `telegram_bot_data/users:/app/data/users`, внешняя сеть `postgres_net`, проброс порта метрик, label для promtail. Ничего не сломано относительно того, что ожидает сервер.
 

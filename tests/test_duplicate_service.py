@@ -12,9 +12,9 @@
 
 import datetime
 from decimal import Decimal
+from unittest.mock import AsyncMock, patch
 
 import pytest
-from unittest.mock import AsyncMock, patch
 
 from utils import duplicate_service
 

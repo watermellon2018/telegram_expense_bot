@@ -11,8 +11,10 @@
 
 import datetime
 from typing import List
-from utils.logger import get_logger, log_event, log_error
-from utils import budgets as budgets_utils, excel
+
+from utils import budgets as budgets_utils
+from utils import excel
+from utils.logger import get_logger, log_error, log_event
 from utils.projects import get_project_members
 
 logger = get_logger("utils.budget_notifier")

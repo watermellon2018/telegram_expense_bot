@@ -5,19 +5,19 @@ Run before and after performance optimizations to measure improvement.
 Usage: python scripts/benchmark_perf.py
 """
 
-import time
-import sys
 import os
+import sys
 import tempfile
+import time
 
 # Add project root to path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import matplotlib
+
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import matplotlib.ticker as mticker
-import seaborn as sns
 import pandas as pd
 
 
