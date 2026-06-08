@@ -236,7 +236,7 @@ SLOW_DB_QUERY_THRESHOLD = 0.01  # Секунды - для INSERT/UPDATE на с�
 # Временное окно: насколько недавно должен быть создан существующий расход,
 # чтобы считаться потенциальным дубликатом (в минутах).
 DUPLICATE_EXPENSE_TIME_WINDOW_MINUTES = int(
-    os.getenv("DUPLICATE_EXPENSE_TIME_WINDOW_MINUTES", "60")
+    os.getenv("DUPLICATE_EXPENSE_TIME_WINDOW_MINUTES", "20")
 )
 
 # Допустимое отклонение суммы (в процентах), при котором суммы считаются совпадающими.
