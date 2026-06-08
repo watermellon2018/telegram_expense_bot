@@ -1,11 +1,11 @@
 """
 Модуль для структурированного логирования
 """
+import json
 import logging
 import sys
-import json
 from datetime import datetime
-from typing import Optional, Any, Dict
+from typing import Any, Dict, Optional
 
 
 class StructuredFormatter(logging.Formatter):
@@ -16,14 +16,14 @@ class StructuredFormatter(logging.Formatter):
     def __init__(self, json_format: bool = True):
         super().__init__()
         self.json_format = json_format
-    
+
     def format(self, record: logging.LogRecord) -> str:
         # Базовые поля
         timestamp = datetime.utcnow().isoformat() + 'Z'
         level = record.levelname
         service = record.name
         event = getattr(record, 'event', 'log_message')
-        
+
         # Собираем все дополнительные поля
         log_data: Dict[str, Any] = {
             'timestamp': timestamp,
@@ -31,7 +31,7 @@ class StructuredFormatter(logging.Formatter):
             'service': service,
             'event': event,
         }
-        
+
         # Добавляем дополнительные поля из record
         for key, value in record.__dict__.items():
             if key not in ['name', 'msg', 'args', 'created', 'filename', 'funcName',
@@ -41,7 +41,7 @@ class StructuredFormatter(logging.Formatter):
                           'exc_text', 'stack_info', 'event']:
                 if value is not None:
                     log_data[key] = value
-        
+
         # Форматируем в JSON или читаемый формат
         if self.json_format:
             return json.dumps(log_data, ensure_ascii=False, default=str)
@@ -53,29 +53,29 @@ class StructuredFormatter(logging.Formatter):
                 f"[{service:15}]",
                 f"{event:20}",
             ]
-            
+
             # Добавляем дополнительные поля
             extra_fields = []
-            
+
             # Приоритетные поля (показываем первыми)
             priority_keys = ['request_id', 'user_id', 'status', 'duration_ms', 'error']
             for key in priority_keys:
                 if key in log_data and key not in ['timestamp', 'level', 'service', 'event']:
                     value = log_data[key]
                     extra_fields.append(f"{key}={value}")
-            
+
             # Остальные поля
             for key, value in log_data.items():
                 if key not in ['timestamp', 'level', 'service', 'event'] + priority_keys:
                     extra_fields.append(f"{key}={value}")
-            
+
             if extra_fields:
                 parts.append(" ".join(extra_fields))
-            
+
             # Добавляем основное сообщение если есть
             if record.getMessage():
                 parts.append("-")
-            
+
             return " ".join(parts)
 
 
@@ -91,34 +91,34 @@ def get_logger(service: str, json_format: Optional[bool] = None) -> logging.Logg
         Настроенный логгер
     """
     logger = logging.getLogger(service)
-    
+
     # Если логгер уже настроен, возвращаем его
     if logger.handlers:
         return logger
-    
+
     # Определяем формат из конфига если не указан явно
     if json_format is None:
         import config
         json_format = getattr(config, 'JSON_LOG_FORMAT', False)
-    
+
     # Создаем форматтер
     formatter = StructuredFormatter(json_format=json_format)
-    
+
     # Создаем handler для вывода в консоль
     handler = logging.StreamHandler(sys.stdout)
     handler.setFormatter(formatter)
-    
+
     # Настраиваем логгер
     logger.addHandler(handler)
-    
+
     # Устанавливаем уровень логирования
     import config
     log_level = getattr(config, 'LOG_LEVEL', 'INFO')
     logger.setLevel(getattr(logging, log_level, logging.INFO))
-    
+
     # Отключаем распространение на root logger
     logger.propagate = False
-    
+
     return logger
 
 
@@ -144,14 +144,14 @@ def log_event(
         **kwargs: Дополнительные поля для лога
     """
     extra = {'event': event}
-    
+
     if request_id is not None:
         extra['request_id'] = request_id
     if status is not None:
         extra['status'] = status
     if duration_ms is not None:
         extra['duration_ms'] = round(duration_ms, 2)
-    
+
     extra.update(kwargs)
     logger.log(level, '', extra=extra)
 
@@ -211,12 +211,12 @@ def log_error(
         'error_type': type(error).__name__,
         'status': 'failed',
     }
-    
+
     if request_id is not None:
         extra['request_id'] = request_id
     if duration_ms is not None:
         extra['duration_ms'] = round(duration_ms, 2)
-    
+
     extra.update(kwargs)
     logger.error('', extra=extra, exc_info=True)
 
@@ -241,20 +241,20 @@ def log_database_operation(
         **kwargs: Дополнительные поля (query, rows_returned и т.д.)
     """
     duration_ms = duration * 1000 if duration is not None else None
-    
+
     extra = {
         'event': 'database_operation',
         'action': operation,
         'status': 'success',
     }
-    
+
     if table is not None:
         extra['table'] = table
     if duration_ms is not None:
         extra['duration_ms'] = round(duration_ms, 2)
     if request_id is not None:
         extra['request_id'] = request_id
-    
+
     extra.update(kwargs)
     logger.info('', extra=extra)
 
@@ -279,7 +279,7 @@ def log_performance(
         **kwargs: Дополнительные поля
     """
     duration_ms = duration * 1000
-    
+
     log_event(
         logger,
         f"{operation}_performance",
@@ -296,7 +296,7 @@ def measure_time(func):
     """
     import functools
     import time
-    
+
     @functools.wraps(func)
     async def async_wrapper(*args, **kwargs):
         start_time = time.time()
@@ -304,10 +304,10 @@ def measure_time(func):
             result = await func(*args, **kwargs)
             duration = time.time() - start_time
             return result
-        except Exception as e:
+        except Exception:
             duration = time.time() - start_time
             raise
-    
+
     @functools.wraps(func)
     def sync_wrapper(*args, **kwargs):
         start_time = time.time()
@@ -315,10 +315,10 @@ def measure_time(func):
             result = func(*args, **kwargs)
             duration = time.time() - start_time
             return result
-        except Exception as e:
+        except Exception:
             duration = time.time() - start_time
             raise
-    
+
     import asyncio
     if asyncio.iscoroutinefunction(func):
         return async_wrapper

@@ -1,8 +1,9 @@
 """
 Тесты агрегации расходов по участникам в utils/excel.py
 """
-import pytest
 from unittest.mock import AsyncMock, patch
+
+import pytest
 
 from utils import excel
 

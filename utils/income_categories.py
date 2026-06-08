@@ -4,10 +4,11 @@
 """
 
 import re
-from typing import Optional, List, Dict
+from typing import Dict, List, Optional
+
+from utils.logger import get_logger, log_error, log_event
 
 from . import db
-from utils.logger import get_logger, log_event, log_error
 
 logger = get_logger("utils.income_categories")
 

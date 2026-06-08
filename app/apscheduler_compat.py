@@ -1,7 +1,7 @@
 """Compatibility patch for APScheduler timezone handling."""
 
-import pytz
 import apscheduler.util
+import pytz
 
 
 def _patched_astimezone(obj):

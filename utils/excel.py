@@ -4,15 +4,17 @@
 Публичный API модуля (add_expense, get_month_expenses и т.п.) сохранён, но теперь функции асинхронные.
 """
 
-import os
 import datetime
-import pandas as pd
+import os
 import time
 from typing import Optional
 
+import pandas as pd
+
 import config
+from utils.logger import get_logger, log_error, log_event
+
 from . import db
-from utils.logger import get_logger, log_event, log_error
 
 logger = get_logger("utils.excel")
 
@@ -63,31 +65,30 @@ async def add_expense(user_id, amount, category_id, description: str = "", proje
         description: Описание расхода
         project_id: ID проекта (опционально)
     """
-    import time
-    from utils.logger import get_logger, log_event, log_error
     from utils import categories
+    from utils.logger import get_logger, log_error, log_event
     from utils.permissions import Permission, has_permission
-    
+
     expense_logger = get_logger("utils.excel")
     start_time = time.time()
-    
+
     # Check permission for project expenses
     if project_id is not None:
         has_perm = await has_permission(user_id, project_id, Permission.ADD_EXPENSE)
-        log_event(expense_logger, "add_expense_permission_check", 
+        log_event(expense_logger, "add_expense_permission_check",
                  user_id=user_id, project_id=project_id, has_permission=has_perm)
         if not has_perm:
-            log_error(expense_logger, Exception("Permission denied"), 
-                     "add_expense_permission_denied", user_id=user_id, 
+            log_error(expense_logger, Exception("Permission denied"),
+                     "add_expense_permission_denied", user_id=user_id,
                      project_id=project_id)
             return False
-    
+
     now = datetime.datetime.now()
     month = now.month
     date_val = now.date()
     time_val = now.time().replace(microsecond=0)
     project_id = _normalize_project_id(project_id)
-    
+
     # Проверяем, что category_id - это число
     if isinstance(category_id, str):
         # Если передана строка (старый формат), пытаемся найти категорию по имени
@@ -114,10 +115,10 @@ async def add_expense(user_id, amount, category_id, description: str = "", proje
             if category_found:
                 category_id = category_found['category_id']
             else:
-                log_error(expense_logger, Exception(f"Category not found: {category_id}"), 
+                log_error(expense_logger, Exception(f"Category not found: {category_id}"),
                          "add_expense_category_not_found", user_id=user_id, category_name=category_id)
                 return False
-    
+
     category_id = int(category_id)
 
     log_event(expense_logger, "add_expense_start", user_id=user_id, project_id=project_id,
@@ -129,7 +130,7 @@ async def add_expense(user_id, amount, category_id, description: str = "", proje
             "INSERT INTO users(user_id) VALUES($1) ON CONFLICT (user_id) DO NOTHING",
             str(user_id),
         )
-        
+
         # 2. Проверяем, что категория доступна для пользователя
         category = await categories.get_category_by_id(user_id, category_id)
         if not category and project_id is not None:
@@ -145,12 +146,12 @@ async def add_expense(user_id, amount, category_id, description: str = "", proje
                      "add_expense_category_invalid", user_id=user_id, category_id=category_id,
                      project_id=project_id)
             return False
-        
+
         # Проверяем доступность категории для проекта
         if category['project_id'] is not None and category['project_id'] != project_id:
-            log_error(expense_logger, Exception("Category not available for this project"), 
-                     "add_expense_category_project_mismatch", user_id=user_id, 
-                     category_id=category_id, 
+            log_error(expense_logger, Exception("Category not available for this project"),
+                     "add_expense_category_project_mismatch", user_id=user_id,
+                     category_id=category_id,
                      category_project_id=category['project_id'],
                      expense_project_id=project_id)
             return False
@@ -409,7 +410,7 @@ async def get_month_expenses(user_id, month=None, year=None, project_id=None):
             "by_participant": by_participant,
             "count": len(rows),
         }
-        log_event(logger, "get_month_expenses_success", user_id=user_id, 
+        log_event(logger, "get_month_expenses_success", user_id=user_id,
                  month=month, year=year, project_id=project_id,
                  total=total, count=len(rows), categories_count=len(by_category))
         return result
@@ -424,7 +425,7 @@ async def set_budget(user_id, amount, month=None, year=None, project_id=None):
     Budget functionality disabled.
     Kept for backwards compatibility but does nothing.
     """
-    log_event(logger, "set_budget_disabled", user_id=user_id, 
+    log_event(logger, "set_budget_disabled", user_id=user_id,
              amount=amount, month=month, year=year, project_id=project_id)
     return True
 
@@ -442,19 +443,19 @@ async def get_category_expenses(user_id, category_id, year=None, project_id=None
         project_id: Project ID or None for personal expenses
     """
     from utils import categories
-    
+
     if year is None:
         year = datetime.datetime.now().year
     project_id = _normalize_project_id(project_id)
-    
+
     # Validate permission if project_id is specified
     if project_id is not None:
         from utils.permissions import Permission, has_permission
         if not await has_permission(user_id, project_id, Permission.VIEW_STATS):
-            log_error(logger, Exception("Permission denied"), 
+            log_error(logger, Exception("Permission denied"),
                      "get_category_expenses_permission_denied", user_id=user_id, project_id=project_id)
             return None
-    
+
     # If category_id is a string, find category by name
     if isinstance(category_id, str):
         cats = await categories.get_categories_for_user_project(user_id, project_id)
@@ -472,10 +473,10 @@ async def get_category_expenses(user_id, category_id, year=None, project_id=None
         if category_found:
             category_id = category_found['category_id']
         else:
-            log_error(logger, Exception(f"Category not found: {category_id}"), 
+            log_error(logger, Exception(f"Category not found: {category_id}"),
                      "get_category_expenses_category_not_found", user_id=user_id, category_name=category_id)
             return None
-    
+
     category_id = int(category_id)
 
     try:
@@ -558,10 +559,10 @@ async def get_all_expenses(user_id, year=None, project_id=None):
         if project_id is not None:
             from utils.permissions import Permission, has_permission
             if not await has_permission(user_id, project_id, Permission.VIEW_HISTORY):
-                log_error(logger, Exception("Permission denied"), 
+                log_error(logger, Exception("Permission denied"),
                          "get_all_expenses_permission_denied", user_id=user_id, project_id=project_id)
                 return None
-        
+
         # For projects: get expenses from ALL members
         # For personal: get only user's expenses
         if project_id is not None:
@@ -631,10 +632,10 @@ async def get_day_expenses(user_id, date=None, project_id=None):
         if project_id is not None:
             from utils.permissions import Permission, has_permission
             if not await has_permission(user_id, project_id, Permission.VIEW_STATS):
-                log_error(logger, Exception("Permission denied"), 
+                log_error(logger, Exception("Permission denied"),
                          "get_day_expenses_permission_denied", user_id=user_id, project_id=project_id)
                 return {'status': True, 'total': 0, 'by_category': {}, 'by_participant': {}, 'count': 0}
-        
+
         # For projects: get expenses from ALL members
         # For personal: get only user's expenses
         if project_id is not None:

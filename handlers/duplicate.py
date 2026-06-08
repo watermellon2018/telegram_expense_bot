@@ -15,8 +15,8 @@ Telegram-обработчики сценария «возможный дубли
   - корректно обрабатывается удаление найденного расхода и истёкший черновик.
 """
 
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import ContextTypes, CallbackQueryHandler
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
+from telegram.ext import CallbackQueryHandler, ContextTypes
 
 import metrics
 from utils import excel, expense_creation, expense_formatter

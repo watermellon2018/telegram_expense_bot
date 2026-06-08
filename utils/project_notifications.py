@@ -14,12 +14,12 @@ from typing import Optional
 
 import config
 from utils import db
-from utils.logger import get_logger, log_event, log_error
+from utils.logger import get_logger, log_error, log_event
 
 logger = get_logger("utils.project_notifications")
 
 
-def _default_settings(project_id: int, user_id: str) -> dict:
+def _default_settings(project_id: int, user_id) -> dict:
     """Настройки по умолчанию для участника без явной записи (режим ALL)."""
     return {
         "project_id": project_id,

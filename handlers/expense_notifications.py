@@ -21,12 +21,12 @@ Telegram-обработчики уведомлений о расходах пр�
 
 from decimal import Decimal, InvalidOperation
 
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import (
-    ContextTypes,
     CallbackQueryHandler,
-    ConversationHandler,
     CommandHandler,
+    ContextTypes,
+    ConversationHandler,
     MessageHandler,
     filters,
 )
@@ -43,7 +43,7 @@ from utils import (
     projects,
 )
 from utils.helpers import main_menu_button_regex
-from utils.logger import get_logger, log_event, log_error
+from utils.logger import get_logger, log_error, log_event
 from utils.permissions import Permission, has_permission
 
 logger = get_logger("handlers.expense_notifications")

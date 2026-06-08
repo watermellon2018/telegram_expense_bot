@@ -3,10 +3,11 @@
 Поддерживает пользовательские и системные категории, глобальные и привязанные к проектам.
 """
 
-import datetime
-from typing import Optional, List, Dict
+from typing import Dict, List, Optional
+
+from utils.logger import get_logger, log_error, log_event
+
 from . import db
-from utils.logger import get_logger, log_event, log_error
 
 logger = get_logger("utils.categories")
 
@@ -37,10 +38,10 @@ async def get_categories_for_user_project(user_id: int, project_id: Optional[int
         if project_id is not None:
             from utils.permissions import Permission, has_permission
             if not await has_permission(user_id, project_id, Permission.VIEW_STATS):
-                log_error(logger, Exception("Permission denied"), 
+                log_error(logger, Exception("Permission denied"),
                          "get_categories_permission_denied", user_id=user_id, project_id=project_id)
                 return []
-        
+
         # For projects: get categories from ALL project members
         # For personal: get only user's own global categories
         if project_id is not None:
@@ -79,7 +80,7 @@ async def get_categories_for_user_project(user_id: int, project_id: Optional[int
                 """,
                 str(user_id)
             )
-        
+
         categories = [
             {
                 'category_id': r['category_id'],
@@ -91,11 +92,11 @@ async def get_categories_for_user_project(user_id: int, project_id: Optional[int
             }
             for r in rows
         ]
-        
-        log_event(logger, "get_categories_success", user_id=user_id, 
+
+        log_event(logger, "get_categories_success", user_id=user_id,
                  project_id=project_id, count=len(categories))
         return categories
-        
+
     except Exception as e:
         log_error(logger, e, "get_categories_error", user_id=user_id, project_id=project_id)
         return []
@@ -201,12 +202,12 @@ async def get_category_by_id(user_id: int, category_id: int) -> Optional[Dict]:
             category_id,
             str(user_id)
         )
-        
+
         if not row:
-            log_event(logger, "get_category_by_id_not_found", 
+            log_event(logger, "get_category_by_id_not_found",
                      user_id=user_id, category_id=category_id)
             return None
-        
+
         return {
             'category_id': row['category_id'],
             'name': row['name'],
@@ -290,7 +291,7 @@ async def create_category(
             "INSERT INTO users(user_id) VALUES($1) ON CONFLICT (user_id) DO NOTHING",
             str(user_id)
         )
-        
+
         # Проверяем на дубликат среди активных категорий (case-insensitive)
         existing_active = await db.fetchrow(
             """
@@ -304,13 +305,13 @@ async def create_category(
             project_id,
             name.strip()
         )
-        
+
         if existing_active:
             return {
                 'success': False,
                 'message': f"Категория '{name}' уже существует в этом проекте"
             }
-        
+
         # Проверяем, есть ли неактивная категория с таким же именем
         existing_inactive = await db.fetchrow(
             """
@@ -324,7 +325,7 @@ async def create_category(
             project_id,
             name.strip()
         )
-        
+
         if existing_inactive:
             # Реактивируем существующую категорию
             category_id = existing_inactive['category_id']
@@ -338,10 +339,10 @@ async def create_category(
                 category_id,
                 str(user_id)
             )
-            
+
             log_event(logger, "create_category_reactivated", user_id=user_id,
                      category_id=category_id, category_name=name, project_id=project_id, is_system=is_system)
-            
+
             return {
                 'success': True,
                 'category_id': category_id,
@@ -349,7 +350,7 @@ async def create_category(
                 'project_id': project_id,
                 'message': f"Категория '{name}' восстановлена"
             }
-        
+
         # Создаем новую категорию
         category_id = await db.fetchval(
             """
@@ -362,10 +363,10 @@ async def create_category(
             name.strip(),
             is_system
         )
-        
+
         log_event(logger, "create_category_success", user_id=user_id,
                  category_id=category_id, category_name=name, project_id=project_id, is_system=is_system)
-        
+
         return {
             'success': True,
             'category_id': category_id,
@@ -373,7 +374,7 @@ async def create_category(
             'project_id': project_id,
             'message': f"Категория '{name}' создана"
         }
-        
+
     except Exception as e:
         log_error(logger, e, "create_category_error", user_id=user_id, category_name=name, project_id=project_id)
         return {
@@ -406,7 +407,7 @@ async def delete_category_with_transfer(user_id: int, category_id: int, target_c
                 'success': False,
                 'message': "Категория не найдена"
             }
-        
+
         # Check permission for project categories
         if category['project_id'] is not None:
             from utils.permissions import Permission, has_permission
@@ -415,7 +416,7 @@ async def delete_category_with_transfer(user_id: int, category_id: int, target_c
                     'success': False,
                     'message': "У вас нет прав на удаление категорий в этом проекте"
                 }
-        
+
         # Check target category exists and user has access
         target_category = await get_category_by_id(user_id, target_category_id)
         if not target_category:
@@ -423,9 +424,9 @@ async def delete_category_with_transfer(user_id: int, category_id: int, target_c
                 'success': False,
                 'message': "Целевая категория не найдена"
             }
-        
+
         from utils import db
-        
+
         # Get count of expenses to transfer
         # For project categories: count ALL members' expenses
         # For personal: count only user's expenses
@@ -447,10 +448,10 @@ async def delete_category_with_transfer(user_id: int, category_id: int, target_c
                 category_id,
                 str(user_id)
             )
-        
+
         if transferred_count is None:
             transferred_count = 0
-        
+
         # Transfer expenses
         if transferred_count > 0:
             if category['project_id'] is not None:
@@ -475,7 +476,7 @@ async def delete_category_with_transfer(user_id: int, category_id: int, target_c
                     category_id,
                     str(user_id)
                 )
-        
+
         # Деактивируем категорию
         await db.execute(
             """
@@ -486,17 +487,17 @@ async def delete_category_with_transfer(user_id: int, category_id: int, target_c
             category_id,
             str(user_id)
         )
-        
+
         log_event(logger, "delete_category_with_transfer_success", user_id=user_id,
                  category_id=category_id, target_category_id=target_category_id,
                  transferred_count=transferred_count)
-        
+
         return {
             'success': True,
             'message': f"Категория '{category['name']}' удалена. {transferred_count} расходов перенесено в '{target_category['name']}'.",
             'transferred_count': transferred_count
         }
-        
+
     except Exception as e:
         log_error(logger, e, "delete_category_with_transfer_error", user_id=user_id,
                  category_id=category_id, target_category_id=target_category_id)
@@ -529,7 +530,7 @@ async def deactivate_category(user_id: int, category_id: int) -> Dict:
                 'success': False,
                 'message': "Категория не найдена"
             }
-        
+
         # Check permission for project categories
         if category['project_id'] is not None:
             from utils.permissions import Permission, has_permission
@@ -538,7 +539,7 @@ async def deactivate_category(user_id: int, category_id: int) -> Dict:
                     'success': False,
                     'message': "У вас нет прав на удаление категорий в этом проекте"
                 }
-        
+
         # Check if category is used in expenses
         # For project categories: check ALL members' expenses
         # For personal: check only user's expenses
@@ -560,13 +561,13 @@ async def deactivate_category(user_id: int, category_id: int) -> Dict:
                 category_id,
                 str(user_id)
             )
-        
+
         if usage_count > 0:
             return {
                 'success': False,
                 'message': f"Категория используется в {usage_count} расходах. Удаление невозможно."
             }
-        
+
         # Деактивируем категорию
         await db.execute(
             """
@@ -577,14 +578,14 @@ async def deactivate_category(user_id: int, category_id: int) -> Dict:
             category_id,
             str(user_id)
         )
-        
+
         log_event(logger, "deactivate_category_success", user_id=user_id, category_id=category_id)
-        
+
         return {
             'success': True,
             'message': f"Категория '{category['name']}' деактивирована"
         }
-        
+
     except Exception as e:
         log_error(logger, e, "deactivate_category_error", user_id=user_id, category_id=category_id)
         return {
@@ -602,13 +603,13 @@ async def ensure_system_categories_exist(user_id: int) -> None:
         user_id: ID пользователя
     """
     import config
-    
+
     try:
         await db.execute(
             "INSERT INTO users(user_id) VALUES($1) ON CONFLICT (user_id) DO NOTHING",
             str(user_id)
         )
-        
+
         for category_name in config.DEFAULT_CATEGORIES.keys():
             await create_category(
                 user_id=user_id,
@@ -616,9 +617,9 @@ async def ensure_system_categories_exist(user_id: int) -> None:
                 project_id=None,
                 is_system=True
             )
-        
+
         log_event(logger, "ensure_system_categories_success", user_id=user_id)
-        
+
     except Exception as e:
         log_error(logger, e, "ensure_system_categories_error", user_id=user_id)
 

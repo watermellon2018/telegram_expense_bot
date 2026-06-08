@@ -1,10 +1,11 @@
 """
 Pytest configuration and shared fixtures
 """
-import pytest
 import asyncio
 from unittest.mock import AsyncMock, MagicMock, Mock
-from telegram import Update, User, Message, Chat, CallbackQuery
+
+import pytest
+from telegram import CallbackQuery, Chat, Message, Update, User
 from telegram.ext import ContextTypes
 
 

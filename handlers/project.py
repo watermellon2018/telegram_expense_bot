@@ -2,14 +2,22 @@
 Обработчики команд для работы с проектами
 """
 
-from telegram import Update, ReplyKeyboardMarkup, ReplyKeyboardRemove, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.constants import ParseMode
-from telegram.ext import ContextTypes, CommandHandler, filters, MessageHandler, ConversationHandler, CallbackQueryHandler
-from utils import projects, helpers
-from utils.helpers import project_menu_button_regex
-from utils.logger import get_logger, log_command, log_event, log_error
-import config
 import time
+
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
+from telegram.constants import ParseMode
+from telegram.ext import (
+    CallbackQueryHandler,
+    CommandHandler,
+    ContextTypes,
+    ConversationHandler,
+    MessageHandler,
+    filters,
+)
+
+from utils import helpers, projects
+from utils.helpers import project_menu_button_regex
+from utils.logger import get_logger, log_command, log_error, log_event
 
 logger = get_logger("handlers.project")
 
@@ -24,15 +32,15 @@ async def project_create_command(update: Update, context: ContextTypes.DEFAULT_T
     user_id = update.effective_user.id
     message_text = update.message.text
     start_time = time.time()
-    
+
     log_command(logger, "project_create", user_id=user_id, command_text=message_text)
-    
+
     try:
         # Проверяем, содержит ли команда название проекта
         parts = message_text.split(maxsplit=1)
-        
+
         if len(parts) < 2:
-            log_event(logger, "project_create_no_name", user_id=user_id, 
+            log_event(logger, "project_create_no_name", user_id=user_id,
                      reason="name_not_provided")
             await update.message.reply_text(
                 "❌ Укажите название проекта.\n"
@@ -40,33 +48,33 @@ async def project_create_command(update: Update, context: ContextTypes.DEFAULT_T
                 "Например: /project_create Отпуск"
             )
             return
-        
+
         project_name = parts[1].strip()
-        
+
         if not project_name:
-            log_event(logger, "project_create_empty_name", user_id=user_id, 
+            log_event(logger, "project_create_empty_name", user_id=user_id,
                      reason="empty_name")
             await update.message.reply_text("❌ Название проекта не может быть пустым.")
             return
-        
+
         log_event(logger, "project_create_start", user_id=user_id, project_name=project_name)
-        
+
         # Создаем проект
         result = await projects.create_project(user_id, project_name)
-        
+
         if result['success']:
             project_id = result['project_id']
-            
+
             # Автоматически переключаемся на созданный проект
             await projects.set_active_project(user_id, project_id)
-            
+
             # Сохраняем в контексте пользователя
             context.user_data['active_project_id'] = project_id
-            
+
             duration = time.time() - start_time
-            log_event(logger, "project_create_success", user_id=user_id, 
+            log_event(logger, "project_create_success", user_id=user_id,
                      project_id=project_id, project_name=project_name, duration=duration)
-            
+
             await update.message.reply_text(
                 f"✅ {result['message']}\n"
                 f"📁 Проект '{project_name}' активирован\n\n"
@@ -74,10 +82,10 @@ async def project_create_command(update: Update, context: ContextTypes.DEFAULT_T
             )
         else:
             duration = time.time() - start_time
-            log_event(logger, "project_create_failed", user_id=user_id, 
+            log_event(logger, "project_create_failed", user_id=user_id,
                      project_name=project_name, reason=result.get('message'), duration=duration)
             await update.message.reply_text(f"❌ {result['message']}")
-            
+
     except Exception as e:
         duration = time.time() - start_time
         log_error(logger, e, "project_create_error", user_id=user_id, duration=duration)
@@ -90,13 +98,13 @@ async def project_list_command(update: Update, context: ContextTypes.DEFAULT_TYP
     """
     user_id = update.effective_user.id
     start_time = time.time()
-    
+
     log_command(logger, "project_list", user_id=user_id)
-    
+
     try:
         # Получаем список проектов
         all_projects = await projects.get_all_projects(user_id)
-        
+
         if not all_projects:
             log_event(logger, "project_list_empty", user_id=user_id)
             await update.message.reply_text(
@@ -105,52 +113,52 @@ async def project_list_command(update: Update, context: ContextTypes.DEFAULT_TYP
                 "/project_create <название>"
             )
             return
-    
+
         # Получаем активный проект
         active_project = await projects.get_active_project(user_id)
         active_project_id = active_project['project_id'] if active_project else None
-        
+
         # Формируем список
         message = "📋 Ваши проекты:\n\n"
-        
+
         for project in all_projects:
             project_id = project['project_id']
             project_name = project['project_name']
             created_date = project['created_date']
             role = project.get('role', 'owner')
             is_owner = project.get('is_owner', False)
-            
+
             # Получаем статистику по проекту
             stats = await projects.get_project_stats(user_id, project_id)
-            
+
             # Получаем emoji роли
             from utils.permissions import get_role_description
             role_emoji = get_role_description(role)
-            
+
             # Отмечаем активный проект
             if project_id == active_project_id:
                 message += f"📁 *{project_name}* (активен)\n"
             else:
                 message += f"📁 {project_name}\n"
-            
+
             message += f"   {role_emoji}\n"
             message += f"   ID: {project_id}\n"
             message += f"   Создан: {created_date}\n"
             message += f"   Расходов: {stats['count']}\n"
             message += f"   Сумма: {stats['total']:.2f}\n\n"
-        
+
         # Показываем текущий режим
         if active_project_id is None:
             message += "📊 Текущий режим: Общие расходы"
         else:
             message += f"📁 Текущий режим: Проект '{active_project['project_name']}'"
-        
+
         await update.message.reply_text(message, parse_mode=ParseMode.MARKDOWN)
-        
+
         duration = time.time() - start_time
-        log_event(logger, "project_list_success", user_id=user_id, 
+        log_event(logger, "project_list_success", user_id=user_id,
                  projects_count=len(all_projects), active_project_id=active_project_id, duration=duration)
-        
+
     except Exception as e:
         duration = time.time() - start_time
         log_error(logger, e, "project_list_error", user_id=user_id, duration=duration)
@@ -164,42 +172,42 @@ async def project_select_command(update: Update, context: ContextTypes.DEFAULT_T
     """
     user_id = update.effective_user.id
     message_text = update.message.text
-    
+
     # Проверяем, содержит ли команда название или ID проекта
     parts = message_text.split(maxsplit=1)
-    
+
     if len(parts) < 2:
         # Показываем список проектов для выбора
         await show_project_selection_menu(update, context)
         return
-    
+
     project_identifier = parts[1].strip()
-    
+
     # Пытаемся найти проект по ID или названию
     project = None
-    
+
     # Проверяем, является ли идентификатор числом (ID)
     if project_identifier.isdigit():
         project = await projects.get_project_by_id(user_id, int(project_identifier))
-    
+
     # Если не нашли по ID, ищем по названию
     if project is None:
         project = await projects.get_project_by_name(user_id, project_identifier)
-    
+
     if project is None:
         await update.message.reply_text(
             f"❌ Проект '{project_identifier}' не найден.\n\n"
             f"Посмотрите список проектов: /project_list"
         )
         return
-    
+
     # Переключаемся на проект
     result = await projects.set_active_project(user_id, project['project_id'])
-    
+
     if result['success']:
         # Сохраняем в контексте пользователя
         context.user_data['active_project_id'] = project['project_id']
-        
+
         await update.message.reply_text(
             f"✅ {result['message']}\n\n"
             f"Теперь все расходы будут записываться в проект '{project['project_name']}'."
@@ -213,16 +221,16 @@ async def project_main_command(update: Update, context: ContextTypes.DEFAULT_TYP
     Обрабатывает команду /project_main для переключения на общие расходы
     """
     from utils.helpers import get_main_menu_keyboard
-    
+
     user_id = update.effective_user.id
-    
+
     # Переключаемся на общие расходы
     result = await projects.set_active_project(user_id, None)
-    
+
     if result['success']:
         # Сбрасываем в контексте пользователя
         context.user_data['active_project_id'] = None
-        
+
         await update.message.reply_text(
             f"✅ {result['message']}\n\n"
             f"Теперь все расходы будут записываться в общие расходы.",
@@ -408,13 +416,13 @@ async def button_project_create_confirm(update: Update, context: ContextTypes.DE
     """
     user_id = update.effective_user.id
     project_name = update.message.text.strip()
-    
+
     result = await projects.create_project(user_id, project_name)
-    
+
     if result['success']:
         await projects.set_active_project(user_id, result['project_id'])
         context.user_data['active_project_id'] = result['project_id']
-        
+
         from utils.helpers import get_main_menu_keyboard
         await update.message.reply_text(
             f"✅ {result['message']}\n"
@@ -428,7 +436,7 @@ async def button_project_create_confirm(update: Update, context: ContextTypes.DE
             f"❌ {result['message']}",
             reply_markup=get_main_menu_keyboard()
         )
-    
+
     return ConversationHandler.END
 
 
@@ -445,10 +453,10 @@ async def show_project_selection_menu(update: Update, context: ContextTypes.DEFA
     Показывает меню выбора проекта с inline keyboard
     """
     user_id = update.effective_user.id
-    
+
     # Получаем список всех доступных проектов
     all_projects = await projects.get_all_projects(user_id)
-    
+
     if not all_projects:
         await update.message.reply_text(
             "📋 У вас пока нет проектов.\n\n"
@@ -456,14 +464,14 @@ async def show_project_selection_menu(update: Update, context: ContextTypes.DEFA
             "/project_create <название>"
         )
         return
-    
+
     # Получаем активный проект
     active_project = await projects.get_active_project(user_id)
     active_project_id = active_project['project_id'] if active_project else None
-    
+
     # Формируем inline keyboard с проектами
     keyboard = []
-    
+
     # Группируем проекты по 2 в ряд
     for i in range(0, len(all_projects), 2):
         row = []
@@ -472,36 +480,36 @@ async def show_project_selection_menu(update: Update, context: ContextTypes.DEFA
                 project = all_projects[i + j]
                 project_id = project['project_id']
                 project_name = project['project_name']
-                
+
                 # Отмечаем активный проект
                 prefix = "✅ " if project_id == active_project_id else ""
                 button_text = f"{prefix}{project_name}"
-                
+
                 # Ограничиваем длину текста кнопки (Telegram лимит ~64 символа)
                 if len(button_text) > 60:
                     button_text = button_text[:57] + "..."
-                
+
                 row.append(InlineKeyboardButton(
                     button_text,
                     callback_data=f"select_proj_{project_id}"
                 ))
         keyboard.append(row)
-    
+
     # Добавляем кнопку для переключения на общие расходы
     if active_project_id is not None:
         keyboard.append([InlineKeyboardButton(
             "📊 Общие расходы",
             callback_data="select_proj_none"
         )])
-    
+
     reply_markup = InlineKeyboardMarkup(keyboard)
-    
+
     message = "🔄 Выберите проект:\n\n"
     if active_project_id is not None:
         message += f"Текущий активный проект: {active_project['project_name']}\n\n"
     else:
         message += "Текущий режим: Общие расходы\n\n"
-    
+
     await update.message.reply_text(message, reply_markup=reply_markup)
 
 
@@ -511,10 +519,10 @@ async def handle_project_selection_callback(update: Update, context: ContextType
     """
     query = update.callback_query
     await query.answer()
-    
+
     user_id = update.effective_user.id
     callback_data = query.data
-    
+
     # Извлекаем project_id из callback_data
     if callback_data == "select_proj_none":
         project_id = None
@@ -524,7 +532,7 @@ async def handle_project_selection_callback(update: Update, context: ContextType
         except (ValueError, IndexError):
             await query.edit_message_text("❌ Ошибка выбора проекта.")
             return
-    
+
     # Переключаемся на проект
     if project_id is None:
         result = await projects.set_active_project(user_id, None)
@@ -544,7 +552,7 @@ async def handle_project_selection_callback(update: Update, context: ContextType
                 "❌ Проект не найден или у вас нет доступа к нему."
             )
             return
-        
+
         result = await projects.set_active_project(user_id, project_id)
         if result['success']:
             context.user_data['active_project_id'] = project_id
@@ -560,7 +568,6 @@ async def project_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     """
     Общий отменитель для всех conversations
     """
-    from utils import helpers
     return await helpers.cancel_conversation(update, context, "Операция отменена.", clear_data=True)
 
 async def project_info_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -568,11 +575,12 @@ async def project_info_command(update: Update, context: ContextTypes.DEFAULT_TYP
     Обрабатывает команду /project_info для информации об активном проекте
     """
     from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+
     from utils.permissions import get_role_description
-    
+
     user_id = update.effective_user.id
     active_project = await projects.get_active_project(user_id)
-    
+
     if active_project is None:
         await update.message.reply_text(
             "📊 Текущий режим: Общие расходы\n\n"
@@ -584,14 +592,14 @@ async def project_info_command(update: Update, context: ContextTypes.DEFAULT_TYP
 
     # Получаем статистику по проекту
     stats = await projects.get_project_stats(user_id, active_project['project_id'])
-    
+
     # Получаем количество участников
     members = await projects.get_project_members(active_project['project_id'])
-    
+
     # Получаем роль и emoji
     role = active_project.get('role', 'owner')
     role_emoji = get_role_description(role)
-    
+
     message = f"📁 Текущий проект: {active_project['project_name']}\n\n"
     message += f"{role_emoji}\n"
     message += f"ID: {active_project['project_id']}\n"
@@ -599,11 +607,11 @@ async def project_info_command(update: Update, context: ContextTypes.DEFAULT_TYP
     message += f"Расходов: {stats['count']}\n"
     message += f"Общая сумма: {stats['total']:.2f}\n"
     message += f"Участников: {len(members)}\n\n"
-    
+
     # Add quick actions button
     keyboard = [[InlineKeyboardButton("⚙️ Управление проектом", callback_data=f"proj_settings_{active_project['project_id']}")]]
     reply_markup = InlineKeyboardMarkup(keyboard)
-    
+
     await update.message.reply_text(message, reply_markup=reply_markup)
 
 def register_project_handlers(application):
@@ -654,7 +662,7 @@ def register_project_handlers(application):
 
     # Обработчик выбора проекта через кнопку (показывает меню)
     application.add_handler(MessageHandler(filters.Regex(project_menu_button_regex("select")), button_project_select_start))
-    
+
     # Callback handler для выбора проекта из списка
     application.add_handler(CallbackQueryHandler(handle_project_selection_callback, pattern=r'^select_proj_(none|\d+)$'))
 
@@ -662,7 +670,7 @@ def register_project_handlers(application):
     application.add_handler(MessageHandler(filters.Regex(project_menu_button_regex("list")), project_list_command))
     application.add_handler(MessageHandler(filters.Regex(project_menu_button_regex("all_expenses")), project_main_command))
     application.add_handler(MessageHandler(filters.Regex(project_menu_button_regex("info")), project_info_command))
-    
+
     # Settings button - imported from project_management
     from handlers.project_management import project_settings_menu
     application.add_handler(MessageHandler(filters.Regex(project_menu_button_regex("settings")), project_settings_menu))

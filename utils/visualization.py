@@ -6,19 +6,21 @@ import asyncio
 import functools
 import math
 import os
-import pandas as pd
-import matplotlib.pyplot as plt
+
 import matplotlib
+import matplotlib.pyplot as plt
 import matplotlib.ticker as mticker
-import matplotlib.patheffects as pe
+import pandas as pd
 
 matplotlib.use('Agg')  # Использование не-интерактивного бэкенда
-import seaborn as sns
 import datetime
 import logging
+
+import seaborn as sns
+
+import config
 from utils import excel
 from utils import incomes as income_utils
-import config
 
 logger = logging.getLogger(__name__)
 
@@ -440,8 +442,8 @@ async def create_category_trend_chart(user_id, category, year=None, save_path=No
 def _render_budget_comparison_chart(budget_by_month: dict, spending_by_month: dict,
                                      year: int, save_path: str) -> str:
     """Синхронный рендеринг диаграммы «Бюджет vs. расходы по месяцам»."""
-    from matplotlib.patches import Patch
     from matplotlib.lines import Line2D
+    from matplotlib.patches import Patch
 
     months_labels = [MONTH_NAMES_SHORT_RU[i] for i in range(1, 13)]
     spendings = [spending_by_month.get(i, 0.0) for i in range(1, 13)]

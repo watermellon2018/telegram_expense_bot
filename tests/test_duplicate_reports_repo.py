@@ -10,7 +10,6 @@ import pytest
 import config
 from utils import duplicate_reports, project_notifications
 
-
 # --- duplicate_reports ---
 
 @pytest.mark.asyncio

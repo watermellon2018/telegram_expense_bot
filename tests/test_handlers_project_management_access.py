@@ -1,8 +1,9 @@
 """
 Тесты прав доступа и ролевого поведения в handlers/project_management.py
 """
-import pytest
 from unittest.mock import AsyncMock, patch
+
+import pytest
 
 from handlers import project_management as pm
 

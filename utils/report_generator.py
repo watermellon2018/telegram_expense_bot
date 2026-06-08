@@ -5,26 +5,27 @@
 """
 
 import asyncio
-import functools
-import os
 import datetime
+import functools
 import logging
+import os
 from typing import Optional
 
+import matplotlib
 import numpy as np
 import pandas as pd
-import matplotlib
+
 matplotlib.use('Agg')
+import matplotlib.gridspec as gridspec
+import matplotlib.patches as mpatches
 import matplotlib.pyplot as plt
 import matplotlib.ticker as mticker
-import matplotlib.patches as mpatches
-import matplotlib.gridspec as gridspec
-from matplotlib.backends.backend_pdf import PdfPages
 import seaborn as sns
+from matplotlib.backends.backend_pdf import PdfPages
 
+import config
 from utils import excel
 from utils import incomes as income_utils
-import config
 
 logger = logging.getLogger(__name__)
 
@@ -192,7 +193,7 @@ def _page_overview(pdf: PdfPages, df: pd.DataFrame, today: datetime.date):
     # ── Line-график ──────────────────────────────────────────────────────────
     ax_line = fig.add_subplot(4, 1, 2)
     ax_line.set_position([0.09, 0.63, 0.92, 0.17])
-    
+
     max_v = max(monthly_totals) if monthly_totals else 1
     ax_line.fill_between(range(12), monthly_totals, alpha=0.10, color="#4E79A7")
     ax_line.plot(range(12), monthly_totals, marker='o', color="#4E79A7",
@@ -258,8 +259,8 @@ def _page_overview(pdf: PdfPages, df: pd.DataFrame, today: datetime.date):
             cell.set_facecolor('white')
         # Make columns a little more compact
         cell.set_fontsize(18)
-    
-    
+
+
     base_height = 0.12  # базовая высота строки
     for r in range(1, len(table_data) + 1):
         text = table_data[r-1][3]  # последний столбец
@@ -1094,7 +1095,7 @@ def _page_boxplots(pdf: PdfPages, df: pd.DataFrame, today: datetime.date):
         for patch, color in zip(bp['boxes'], PALETTE):
             patch.set_facecolor(color)
             patch.set_alpha(0.6)
-        ax1.margins(x=0.05) # left margin 
+        ax1.margins(x=0.05) # left margin
 
         ax1.set_xticks(range(1, 13))
         ax1.set_xticklabels(month_labels, fontsize=12)

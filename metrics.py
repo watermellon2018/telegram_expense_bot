@@ -7,7 +7,7 @@ from prometheus_client import Counter, Gauge
 try:
     from telegram.error import TelegramError
 except Exception:  # pragma: no cover
-    TelegramError = Exception  # fallback for runtime environments without telegram import
+    TelegramError = Exception  # type: ignore[assignment,misc]  # fallback w/o telegram
 
 
 ERRORS_TOTAL = Counter(

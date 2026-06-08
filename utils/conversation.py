@@ -1,6 +1,6 @@
 """Shared conversation flow helpers."""
 
-from telegram import Update, ReplyKeyboardRemove
+from telegram import ReplyKeyboardRemove, Update
 from telegram.ext import ContextTypes, ConversationHandler
 
 from utils.menu import get_main_menu_keyboard

@@ -1,13 +1,12 @@
 """Утилиты для работы с доходами."""
 
 import datetime
-from typing import Optional, Dict
+from typing import Dict, Optional
 
 import pandas as pd
 
-from utils import db
+from utils import db, income_categories
 from utils.logger import get_logger, log_error, log_event
-from utils import income_categories
 
 logger = get_logger("utils.incomes")
 

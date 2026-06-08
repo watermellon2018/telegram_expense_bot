@@ -1,12 +1,13 @@
 """
 Тесты обработки ошибок внешних зависимостей в хендлерах.
 """
-import pytest
 from unittest.mock import AsyncMock, patch
 
+import pytest
+
+from handlers.report import report_command
 from handlers.start import start
 from handlers.stats import month_command, stats_command
-from handlers.report import report_command
 
 
 @pytest.mark.asyncio

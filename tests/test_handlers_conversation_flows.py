@@ -1,12 +1,13 @@
 """
 Тесты conversation-flow для project/expense хендлеров.
 """
-import pytest
 from unittest.mock import AsyncMock, patch
+
+import pytest
 from telegram.ext import ConversationHandler
 
-from handlers import project as project_handler
 from handlers import expense as expense_handler
+from handlers import project as project_handler
 
 
 @pytest.mark.asyncio

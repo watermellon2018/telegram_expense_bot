@@ -1,8 +1,9 @@
 """
 Тесты project-режима handlers/stats.py для графиков по участникам.
 """
-import pytest
 from unittest.mock import AsyncMock, mock_open, patch
+
+import pytest
 
 from handlers.stats import month_command, stats_command
 

@@ -12,7 +12,7 @@ import json
 from typing import Dict, List, Optional, Tuple
 
 from utils import db
-from utils.logger import get_logger, log_event, log_error
+from utils.logger import get_logger, log_error, log_event
 
 logger = get_logger("utils.cashback")
 
