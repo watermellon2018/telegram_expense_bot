@@ -8,6 +8,7 @@ import os
 import datetime
 import pandas as pd
 import time
+from typing import Optional
 
 import config
 from . import db
@@ -169,7 +170,7 @@ async def add_expense(user_id, amount, category_id, description: str = "", proje
             description or None,
             month,
         )
-        
+
         duration = time.time() - start_time
         log_event(expense_logger, "add_expense_success", user_id=user_id, project_id=project_id,
                  amount=amount, category_id=category_id, duration=duration)
@@ -178,6 +179,147 @@ async def add_expense(user_id, amount, category_id, description: str = "", proje
         duration = time.time() - start_time
         log_error(expense_logger, e, "add_expense_error", user_id=user_id, project_id=project_id,
                  amount=amount, category_id=category_id, duration=duration)
+        return False
+
+
+# --- feature_110: создание расхода с возвратом id (для сервисного слоя) ---
+
+# Базовое смещение для PostgreSQL advisory lock по проекту.
+# Используется, чтобы сериализовать создание расходов в рамках одного проекта
+# и закрыть гонку «два участника создают один и тот же расход одновременно».
+_PROJECT_EXPENSE_LOCK_NAMESPACE = 110_000_000
+
+
+async def create_expense(
+    user_id,
+    amount,
+    category_id: int,
+    description: str = "",
+    project_id=None,
+    *,
+    conn=None,
+) -> Optional[int]:
+    """
+    Создаёт расход и возвращает его id (в отличие от add_expense, который
+    возвращает bool). Категория и права считаются уже проверенными вызывающим
+    кодом (сервисным слоем). Подходит для использования внутри транзакции:
+    передайте открытое соединение conn.
+
+    Args:
+        user_id: ID пользователя (автор расхода)
+        amount: сумма
+        category_id: ID категории (int)
+        description: комментарий (опционально)
+        project_id: ID проекта или None для личного расхода
+        conn: открытое asyncpg-соединение/транзакция (опционально). Если не задано —
+              используется общий пул через db.fetchval.
+
+    Returns:
+        id созданного расхода, либо None при ошибке.
+    """
+    now = datetime.datetime.now()
+    project_id = _normalize_project_id(project_id)
+    date_val = now.date()
+    time_val = now.time().replace(microsecond=0)
+
+    sql = """
+        INSERT INTO expenses
+            (user_id, project_id, date, time, amount, category_id, description, month,
+             source_type, created_by_system, created_at)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'manual', FALSE, now())
+        RETURNING id
+    """
+    params = (
+        str(user_id), project_id, date_val, time_val,
+        float(amount), int(category_id), description or None, now.month,
+    )
+
+    try:
+        if conn is not None:
+            expense_id = await conn.fetchval(sql, *params)
+        else:
+            expense_id = await db.fetchval(sql, *params)
+
+        log_event(logger, "create_expense_success", user_id=user_id,
+                  project_id=project_id, amount=amount, category_id=category_id,
+                  expense_id=expense_id)
+        return expense_id
+    except Exception as e:
+        log_error(logger, e, "create_expense_error", user_id=user_id,
+                  project_id=project_id, amount=amount, category_id=category_id)
+        return None
+
+
+async def acquire_project_expense_lock(conn, project_id: int) -> None:
+    """
+    Берёт транзакционный advisory lock по проекту внутри транзакции conn.
+
+    Lock автоматически освобождается при завершении транзакции. Сериализует
+    одновременное создание расходов в одном проекте, чтобы проверка дубликата
+    и вставка происходили атомарно относительно других участников.
+    """
+    await conn.execute(
+        "SELECT pg_advisory_xact_lock($1)",
+        _PROJECT_EXPENSE_LOCK_NAMESPACE + int(project_id),
+    )
+
+
+async def get_expense_by_id(expense_id: int, include_deleted: bool = False) -> Optional[dict]:
+    """
+    Возвращает расход по id вместе с именем категории.
+
+    По умолчанию мягко удалённые расходы (deleted_at IS NOT NULL) не возвращаются —
+    это нужно для корректной обработки ситуации «расход удалён до нажатия кнопки».
+    """
+    try:
+        if include_deleted:
+            row = await db.fetchrow(
+                """
+                SELECT e.id, e.user_id, e.project_id, e.date, e.time, e.amount,
+                       e.category_id, e.description, e.month, e.created_at, e.deleted_at,
+                       c.name AS category_name
+                FROM expenses e
+                JOIN categories c ON e.category_id = c.category_id
+                WHERE e.id = $1
+                """,
+                expense_id,
+            )
+        else:
+            row = await db.fetchrow(
+                """
+                SELECT e.id, e.user_id, e.project_id, e.date, e.time, e.amount,
+                       e.category_id, e.description, e.month, e.created_at, e.deleted_at,
+                       c.name AS category_name
+                FROM expenses e
+                JOIN categories c ON e.category_id = c.category_id
+                WHERE e.id = $1 AND e.deleted_at IS NULL
+                """,
+                expense_id,
+            )
+        return dict(row) if row else None
+    except Exception as e:
+        log_error(logger, e, "get_expense_by_id_error", expense_id=expense_id)
+        return None
+
+
+async def soft_delete_expense(expense_id: int) -> bool:
+    """
+    Мягко удаляет расход (deleted_at = now()).
+
+    Применяется только к ещё не удалённым расходам (idempotent: повторный вызов
+    вернёт False). Сами данные сохраняются в БД.
+    """
+    try:
+        result = await db.execute(
+            "UPDATE expenses SET deleted_at = now() WHERE id = $1 AND deleted_at IS NULL",
+            expense_id,
+        )
+        deleted = result != "UPDATE 0"
+        if deleted:
+            log_event(logger, "expense_soft_deleted", expense_id=expense_id)
+        return deleted
+    except Exception as e:
+        log_error(logger, e, "soft_delete_expense_error", expense_id=expense_id)
         return False
 
 

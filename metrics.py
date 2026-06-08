@@ -53,6 +53,66 @@ FLOW_CANCELLED_TOTAL = Counter(
 )
 
 
+# ── feature_110: метрики защиты от дубликатов и уведомлений проекта ────────────
+# Без высококардинальных labels (не включаем суммы, комментарии, telegram id).
+
+DUPLICATE_EXPENSE_FOUND_TOTAL = Counter(
+    "duplicate_expense_found_total",
+    "Number of potential duplicate expenses detected before saving",
+)
+
+DUPLICATE_EXPENSE_CONFIRMED_TOTAL = Counter(
+    "duplicate_expense_confirmed_total",
+    "Number of expenses added after a duplicate warning was shown",
+)
+
+DUPLICATE_EXPENSE_CANCELLED_TOTAL = Counter(
+    "duplicate_expense_cancelled_total",
+    "Number of expense creations cancelled after a duplicate warning",
+)
+
+PROJECT_EXPENSE_NOTIFICATION_SENT_TOTAL = Counter(
+    "project_expense_notification_sent_total",
+    "Number of project expense notifications successfully sent",
+)
+
+PROJECT_EXPENSE_NOTIFICATION_FAILED_TOTAL = Counter(
+    "project_expense_notification_failed_total",
+    "Number of project expense notifications that failed to send",
+)
+
+EXPENSE_REPORTED_AS_DUPLICATE_TOTAL = Counter(
+    "expense_reported_as_duplicate_total",
+    "Number of expenses reported as possible duplicates by participants",
+)
+
+
+def track_duplicate_found() -> None:
+    DUPLICATE_EXPENSE_FOUND_TOTAL.inc()
+
+
+def track_duplicate_confirmed() -> None:
+    DUPLICATE_EXPENSE_CONFIRMED_TOTAL.inc()
+
+
+def track_duplicate_cancelled() -> None:
+    DUPLICATE_EXPENSE_CANCELLED_TOTAL.inc()
+
+
+def track_project_notification_sent(count: int = 1) -> None:
+    if count > 0:
+        PROJECT_EXPENSE_NOTIFICATION_SENT_TOTAL.inc(count)
+
+
+def track_project_notification_failed(count: int = 1) -> None:
+    if count > 0:
+        PROJECT_EXPENSE_NOTIFICATION_FAILED_TOTAL.inc(count)
+
+
+def track_expense_reported_as_duplicate() -> None:
+    EXPENSE_REPORTED_AS_DUPLICATE_TOTAL.inc()
+
+
 def track_handler_start(handler_name: str) -> None:
     """Marks handler request start by incrementing in-flight gauge."""
     ACTIVE_REQUESTS.labels(handler=handler_name).inc()

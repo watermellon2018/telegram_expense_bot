@@ -56,12 +56,15 @@ async def project_settings_menu(update: Update, context: ContextTypes.DEFAULT_TY
     
     # All members can view members
     keyboard.append([InlineKeyboardButton("👥 Участники проекта", callback_data=f"proj_members_{active_project_id}")])
-    
+
+    # All members manage their own expense notification settings (feature_110)
+    keyboard.append([InlineKeyboardButton("🔔 Уведомления о расходах", callback_data=f"proj_notify_{active_project_id}")])
+
     # Owner-specific options
     if is_owner:
         keyboard.append([InlineKeyboardButton("✉️ Пригласить участника", callback_data=f"proj_invite_{active_project_id}")])
         keyboard.append([InlineKeyboardButton("⚙️ Управление ролями", callback_data=f"proj_roles_{active_project_id}")])
-    
+
     # Non-owners can leave project
     if not is_owner:
         keyboard.append([InlineKeyboardButton("🚪 Покинуть проект", callback_data=f"proj_leave_{active_project_id}")])
@@ -538,12 +541,15 @@ async def back_to_settings(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     
     # All members can view members
     keyboard.append([InlineKeyboardButton("👥 Участники проекта", callback_data=f"proj_members_{project_id}")])
-    
+
+    # All members manage their own expense notification settings (feature_110)
+    keyboard.append([InlineKeyboardButton("🔔 Уведомления о расходах", callback_data=f"proj_notify_{project_id}")])
+
     # Owner-specific options
     if is_owner:
         keyboard.append([InlineKeyboardButton("✉️ Пригласить участника", callback_data=f"proj_invite_{project_id}")])
         keyboard.append([InlineKeyboardButton("⚙️ Управление ролями", callback_data=f"proj_roles_{project_id}")])
-    
+
     # Non-owners can leave project
     if not is_owner:
         keyboard.append([InlineKeyboardButton("🚪 Покинуть проект", callback_data=f"proj_leave_{project_id}")])

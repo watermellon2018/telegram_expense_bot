@@ -4,7 +4,9 @@ from handlers.analysis import register_analysis_handlers
 from handlers.budget import register_budget_handlers
 from handlers.cashback import register_cashback_handlers
 from handlers.category import register_category_handlers
+from handlers.duplicate import register_duplicate_handlers
 from handlers.expense import register_expense_handlers
+from handlers.expense_notifications import register_expense_notification_handlers
 from handlers.export import register_export_handlers
 from handlers.income import register_income_handlers
 from handlers.income_category import register_income_category_handlers
@@ -39,4 +41,7 @@ def register_all_handlers(application):
     register_budget_handlers(application)
     register_cashback_handlers(application)
     register_recurring_handlers(application)
+    # feature_110: callback-обработчики дубликатов/уведомлений до generic expense text handler
+    register_duplicate_handlers(application)
+    register_expense_notification_handlers(application)
     register_expense_handlers(application)

@@ -6,7 +6,7 @@ import asyncio
 
 from telegram import Update, ReplyKeyboardMarkup, ReplyKeyboardRemove, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes, CommandHandler, filters, MessageHandler, ConversationHandler, CallbackQueryHandler
-from utils import excel, helpers, projects, categories
+from utils import helpers, projects, categories, expense_formatter
 from utils.helpers import main_menu_button_regex
 from utils.budget_notifier import check_user_budget_now
 from utils.logger import get_logger, log_command, log_event, log_error
@@ -73,18 +73,39 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
                  category_name=category_found['name'],
                  has_description=bool(expense_data['description']), project_id=project_id)
         
-        # Добавляем расход
-        success = await excel.add_expense(
-            user_id,
-            expense_data['amount'],
-            category_found['category_id'],
-            expense_data['description'],
-            project_id
+        # feature_110: для совместных проектов проверяем возможный дубликат.
+        from utils import expense_creation
+        from handlers.duplicate import build_duplicate_warning_keyboard
+
+        outcome = await expense_creation.process_new_expense(
+            context.bot,
+            author_id=user_id,
+            amount=expense_data['amount'],
+            category_id=category_found['category_id'],
+            category_name=category_found['name'],
+            description=expense_data['description'],
+            project_id=project_id,
+            bot_data=context.bot_data,
         )
 
-        if not success:
+        if outcome['status'] == 'duplicate':
+            existing = outcome['existing']
+            author_name = None
+            try:
+                from utils.project_notifier import _resolve_user_name
+                author_name = await _resolve_user_name(context.bot, existing.get('author_id'))
+            except Exception:
+                author_name = None
+            warning_text = expense_formatter.format_duplicate_warning(existing, author_name)
+            keyboard = build_duplicate_warning_keyboard(outcome['draft_id'], existing['id'])
+            await update.message.reply_text(warning_text, reply_markup=keyboard)
+            log_event(logger, "expense_duplicate_warning_shown", user_id=user_id,
+                     project_id=project_id, existing_expense_id=existing['id'], source="text")
+            return
+
+        if outcome['status'] != 'created':
             duration_ms = (time.time() - start_time) * 1000
-            log_error(logger, Exception("Failed to add expense from text"), 
+            log_error(logger, Exception("Failed to add expense from text"),
                      "expense_add_failed_from_text", request_id=request_id,
                      duration_ms=duration_ms, user_id=user_id,
                      amount=expense_data['amount'], category_id=category_found['category_id'],
@@ -188,16 +209,35 @@ async def add_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
                 )
                 return ConversationHandler.END
             
-            # Добавляем расход
-            success = await excel.add_expense(
-                user_id,
-                expense_data['amount'],
-                category_found['category_id'],
-                expense_data['description'],
-                project_id
+            # feature_110: для совместных проектов проверяем возможный дубликат.
+            from utils import expense_creation
+            from handlers.duplicate import build_duplicate_warning_keyboard
+
+            outcome = await expense_creation.process_new_expense(
+                context.bot,
+                author_id=user_id,
+                amount=expense_data['amount'],
+                category_id=category_found['category_id'],
+                category_name=category_found['name'],
+                description=expense_data['description'],
+                project_id=project_id,
+                bot_data=context.bot_data,
             )
-            
-            if not success:
+
+            if outcome['status'] == 'duplicate':
+                existing = outcome['existing']
+                author_name = None
+                try:
+                    from utils.project_notifier import _resolve_user_name
+                    author_name = await _resolve_user_name(context.bot, existing.get('author_id'))
+                except Exception:
+                    author_name = None
+                warning_text = expense_formatter.format_duplicate_warning(existing, author_name)
+                keyboard = build_duplicate_warning_keyboard(outcome['draft_id'], existing['id'])
+                await update.message.reply_text(warning_text, reply_markup=keyboard)
+                return ConversationHandler.END
+
+            if outcome['status'] != 'created':
                 await update.message.reply_text("❌ Ошибка при добавлении расхода.")
                 return ConversationHandler.END
 
@@ -212,7 +252,7 @@ async def add_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
 
             if expense_data['description']:
                 confirmation += f"\n📝 Описание: {expense_data['description']}"
-            
+
             # Добавляем информацию о проекте
             if project_id is not None:
                 project = await projects.get_project_by_id(user_id, project_id)
@@ -462,17 +502,57 @@ async def handle_description(update: Update, context: ContextTypes.DEFAULT_TYPE)
         else:
             description = text
 
-        # Добавляем расход
-        success = await excel.add_expense(user_id, amount, category_id, description, project_id)
-        
-        if success:
-            log_event(logger, "expense_added", user_id=user_id, project_id=project_id,
-                     amount=amount, category_id=category_id, category_name=category_name,
-                     has_description=bool(description))
-        else:
+        # feature_110: для совместных проектов сначала проверяем возможный дубликат.
+        # process_new_expense сам решает, нужна ли проверка (личный расход / один
+        # участник / нет прав → создаёт сразу), и идемпотентно создаёт расход.
+        from utils import expense_creation
+        from handlers.duplicate import build_duplicate_warning_keyboard
+
+        outcome = await expense_creation.process_new_expense(
+            context.bot,
+            author_id=user_id,
+            amount=amount,
+            category_id=category_id,
+            category_name=category_name,
+            description=description,
+            project_id=project_id,
+            bot_data=context.bot_data,
+        )
+
+        # Очищаем данные диалога в любом исходе
+        for key in ['amount', 'category_id', 'category_name']:
+            context.user_data.pop(key, None)
+
+        if outcome['status'] == 'duplicate':
+            # Найден потенциальный дубль — расход НЕ создан, показываем предупреждение
+            existing = outcome['existing']
+            author_name = None
+            try:
+                from utils.project_notifier import _resolve_user_name
+                author_name = await _resolve_user_name(context.bot, existing.get('author_id'))
+            except Exception:
+                author_name = None
+
+            warning_text = expense_formatter.format_duplicate_warning(existing, author_name)
+            keyboard = build_duplicate_warning_keyboard(outcome['draft_id'], existing['id'])
+            await update.message.reply_text(warning_text, reply_markup=keyboard)
+            log_event(logger, "expense_duplicate_warning_shown", user_id=user_id,
+                     project_id=project_id, existing_expense_id=existing['id'])
+            return ConversationHandler.END
+
+        if outcome['status'] != 'created':
             log_error(logger, Exception("Failed to add expense"), "expense_add_failed",
-                     user_id=user_id, project_id=project_id, amount=amount, 
+                     user_id=user_id, project_id=project_id, amount=amount,
                      category_id=category_id, category_name=category_name)
+            await update.message.reply_text(
+                "❌ Ошибка при добавлении расхода. Попробуйте снова.",
+                reply_markup=helpers.get_main_menu_keyboard(),
+            )
+            return ConversationHandler.END
+
+        log_event(logger, "expense_added", user_id=user_id, project_id=project_id,
+                 amount=amount, category_id=category_id, category_name=category_name,
+                 has_description=bool(description))
 
         # Отправляем подтверждение
         emoji = config.DEFAULT_CATEGORIES.get(category_name, '📦')
@@ -485,7 +565,7 @@ async def handle_description(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
         if description:
             confirmation += f"\n📝 Описание: {description}"
-        
+
         # Добавляем информацию о проекте
         if project_id is not None:
             project = await projects.get_project_by_id(user_id, project_id)
@@ -496,28 +576,23 @@ async def handle_description(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
         await update.message.reply_text(confirmation, reply_markup=helpers.get_main_menu_keyboard())
 
-        if success:
-            await check_user_budget_now(context.bot, user_id, project_id)
-            track_flow_completed("add_expense")
+        await check_user_budget_now(context.bot, user_id, project_id)
+        track_flow_completed("add_expense")
 
-            # Проверяем паттерн постоянного расхода — неблокирующая фоновая задача.
-            # Запускаем только если есть описание (без него паттерн не определить).
-            if description:
-                from handlers.recurring import suggest_recurring_if_pattern
-                asyncio.create_task(
-                    suggest_recurring_if_pattern(
-                        context.bot,
-                        str(user_id),
-                        project_id,
-                        category_id,
-                        description,
-                        context.bot_data,
-                    )
+        # Проверяем паттерн постоянного расхода — неблокирующая фоновая задача.
+        # Запускаем только если есть описание (без него паттерн не определить).
+        if description:
+            from handlers.recurring import suggest_recurring_if_pattern
+            asyncio.create_task(
+                suggest_recurring_if_pattern(
+                    context.bot,
+                    str(user_id),
+                    project_id,
+                    category_id,
+                    description,
+                    context.bot_data,
                 )
-
-        # Очищаем данные пользователя
-        for key in ['amount', 'category_id', 'category_name']:
-            context.user_data.pop(key, None)
+            )
 
         return ConversationHandler.END
     except Exception as e:

@@ -129,7 +129,7 @@ async def test_handle_category_callback_invalid(mock_update, mock_context):
 
 @pytest.mark.asyncio
 async def test_handle_description_with_text(mock_update, mock_context):
-    """Тест обработки описания с текстом"""
+    """Тест обработки описания с текстом (личный расход, создаётся сразу)."""
     mock_update.message.text = "покупка в магазине"
     mock_context.user_data.update({
         'amount': 100.0,
@@ -138,12 +138,17 @@ async def test_handle_description_with_text(mock_update, mock_context):
     })
     mock_context.bot_data = {}
 
-    with patch('handlers.expense.excel.add_expense', new=AsyncMock(return_value=True)):
+    # feature_110: handle_description теперь идёт через expense_creation.process_new_expense.
+    # Для личного расхода (project_id=None) проверка дубля не выполняется — статус created.
+    with patch('utils.expense_creation.process_new_expense',
+               new=AsyncMock(return_value={'status': 'created', 'expense_id': 1})), \
+         patch('handlers.expense.check_user_budget_now', new=AsyncMock()), \
+         patch('handlers.expense.projects.get_project_by_id', new=AsyncMock(return_value=None)):
         result = await handle_description(mock_update, mock_context)
-        
+
         # Проверяем, что отправлено подтверждение
         mock_update.message.reply_text.assert_called()
-        
+
         # Проверяем, что conversation завершен
         assert result == ConversationHandler.END
 
