@@ -3,10 +3,12 @@ End-to-end recommendation pipeline orchestration.
 """
 
 from typing import List, Optional, Sequence
+from dataclasses import replace
 
 from recommendation.analytics import AnalyticsService, PreparedAnalyticsService
 from recommendation.formatter import DefaultRecommendationFormatter, RecommendationFormatter
 from recommendation.models import (
+    AnalyticsSnapshot,
     FinalRecommendation,
     RecommendationFeedback,
     RecommendationHistoryEntry,
@@ -23,6 +25,7 @@ from recommendation.repositories.in_memory import (
 from recommendation.repositories.interfaces import FeedbackRepository, HistoryRepository, SettingsRepository
 from recommendation.rule_engine import DefaultRuleEngine, RuleEngine
 from recommendation.rules.base import RecommendationRule
+from recommendation.rules import build_mvp_rules
 
 
 class RecommendationPipeline:
@@ -60,9 +63,20 @@ class RecommendationPipeline:
 
         snapshot = await self._analytics_service.build_snapshot(request)
         adjusted_snapshot = await self._outlier_handler.adjust(snapshot)
+        adjusted_snapshot = self._apply_settings_to_snapshot(adjusted_snapshot, settings)
 
         candidates = await self._rule_engine.evaluate(adjusted_snapshot, settings)
-        ranked = self._ranking_service.rank(candidates, settings)
+        recent_history = await self._history_repository.get_recent(
+            user_id=request.user_id,
+            project_id=request.project_id,
+            limit=100,
+        )
+        ranked = self._ranking_service.rank(
+            candidates=candidates,
+            settings=settings,
+            snapshot=adjusted_snapshot,
+            recent_history=recent_history,
+        )
         final_recommendations = self._formatter.format(ranked, adjusted_snapshot)
 
         if final_recommendations:
@@ -120,6 +134,16 @@ class RecommendationPipeline:
         return entries
 
     @staticmethod
+    def _apply_settings_to_snapshot(
+        snapshot: AnalyticsSnapshot,
+        settings: RecommendationSettings,
+    ) -> AnalyticsSnapshot:
+        metrics = dict(snapshot.metrics)
+        if settings.monthly_budget_total is not None:
+            metrics.setdefault("monthly_budget_total", float(settings.monthly_budget_total))
+        return replace(snapshot, metrics=metrics)
+
+    @staticmethod
     def _resolve_period_key(request: RecommendationRequest) -> str:
         custom_period_key = request.metadata.get("period_key")
         if custom_period_key:
@@ -135,7 +159,7 @@ class RecommendationPipeline:
 
 
 def build_default_recommendation_pipeline(
-    rules: Sequence[RecommendationRule],
+    rules: Optional[Sequence[RecommendationRule]] = None,
 ) -> RecommendationPipeline:
     """
     Build default recommendation pipeline skeleton.
@@ -143,10 +167,11 @@ def build_default_recommendation_pipeline(
     Repository implementations are intentionally in-memory for now.
     They can be replaced by PostgreSQL implementations without touching rules.
     """
+    resolved_rules = tuple(rules) if rules is not None else build_mvp_rules()
     return RecommendationPipeline(
         analytics_service=PreparedAnalyticsService(),
         outlier_handler=BaselineOutlierHandler(),
-        rule_engine=DefaultRuleEngine(rules),
+        rule_engine=DefaultRuleEngine(resolved_rules),
         ranking_service=ScoreRankingService(),
         formatter=DefaultRecommendationFormatter(),
         settings_repository=InMemorySettingsRepository(),

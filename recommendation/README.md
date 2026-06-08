@@ -11,6 +11,7 @@
 - `formatter.py` - преобразование в финальный presentation DTO
 - `repositories/*` - интерфейсы и реализации репозиториев settings/history/feedback
   (in-memory + PostgreSQL для user settings и recommendation history)
+- `repositories/monthly_summaries.py` - PostgreSQL репозиторий monthly_user_summary и monthly_category_summary
 - `settings_service.py` - сервис create/read/update пользовательских настроек
 - `feedback_service.py` - сервис записи и чтения feedback events
 - `pipeline.py` - оркестратор всех слоев

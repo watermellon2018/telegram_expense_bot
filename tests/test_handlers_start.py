@@ -51,6 +51,7 @@ async def test_help_command(mock_update, mock_context):
     assert "/add" in call_args
     assert "/month" in call_args
     assert "/stats" in call_args
+    assert "/recommendations" in call_args
 
 
 @pytest.mark.asyncio

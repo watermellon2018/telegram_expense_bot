@@ -1,6 +1,7 @@
 """Обработчики раздела теоретического кэшбэка."""
 
 import datetime
+from typing import List, Tuple
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, Update
 from telegram.ext import (
@@ -52,12 +53,12 @@ CB_CANCEL = "cancel"
 ) = range(12)
 
 
-def _current_month_year() -> tuple[int, int]:
+def _current_month_year() -> Tuple[int, int]:
     now = datetime.datetime.now()
     return now.month, now.year
 
 
-def _parse_month_year(args: list[str]) -> tuple[int, int]:
+def _parse_month_year(args: List[str]) -> Tuple[int, int]:
     month, year = _current_month_year()
     if len(args) >= 1:
         month = int(args[0])

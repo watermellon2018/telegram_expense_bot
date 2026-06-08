@@ -14,10 +14,13 @@ from recommendation.analytics import AnalyticsService, PreparedAnalyticsService
 from recommendation.feedback_service import RecommendationFeedbackService
 from recommendation.formatter import DefaultRecommendationFormatter, RecommendationFormatter
 from recommendation.models import (
+    AnalyticsTransaction,
     AnalyticsSnapshot,
     BaselineAdjustment,
     CandidateRecommendation,
     FinalRecommendation,
+    MonthlyCategorySummary,
+    MonthlyUserSummary,
     RecommendationFeedback,
     RecommendationHistoryEntry,
     RecommendationRecord,
@@ -32,6 +35,7 @@ from recommendation.pipeline import RecommendationPipeline, build_default_recomm
 from recommendation.ranking import RankingService, ScoreRankingService
 from recommendation.settings_service import RecommendationSettingsService
 from recommendation.rule_engine import DefaultRuleEngine, RuleEngine
+from recommendation.rules import build_mvp_rules
 from recommendation.types import (
     RECOMMENDATION_FEEDBACK_ACTION_TYPES,
     RECOMMENDATION_FEEDBACK_ACTION_TYPE_VALUES,
@@ -54,9 +58,12 @@ __all__ = [
     "RecommendationFormatter",
     "DefaultRecommendationFormatter",
     "AnalyticsSnapshot",
+    "AnalyticsTransaction",
     "BaselineAdjustment",
     "CandidateRecommendation",
     "FinalRecommendation",
+    "MonthlyUserSummary",
+    "MonthlyCategorySummary",
     "RecommendationFeedback",
     "RecommendationFeedbackService",
     "RecommendationHistoryEntry",
@@ -74,6 +81,7 @@ __all__ = [
     "ScoreRankingService",
     "RuleEngine",
     "DefaultRuleEngine",
+    "build_mvp_rules",
     "RecommendationHistoryStatus",
     "RecommendationFeedbackActionType",
     "RECOMMENDATION_FEEDBACK_ACTION_TYPES",

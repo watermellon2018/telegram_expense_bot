@@ -6,6 +6,7 @@ from recommendation.repositories.in_memory import (
     InMemorySettingsRepository,
 )
 from recommendation.repositories.interfaces import FeedbackRepository, HistoryRepository, SettingsRepository
+from recommendation.repositories.monthly_summaries import PostgresMonthlySummaryRepository
 from recommendation.repositories.postgres import (
     PostgresFeedbackRepository,
     PostgresHistoryRepository,
@@ -21,5 +22,6 @@ __all__ = [
     "InMemorySettingsRepository",
     "PostgresFeedbackRepository",
     "PostgresHistoryRepository",
+    "PostgresMonthlySummaryRepository",
     "PostgresSettingsRepository",
 ]

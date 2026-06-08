@@ -100,6 +100,78 @@ class RecommendationSettings:
 
 
 @dataclass(frozen=True)
+class MonthlyUserSummary:
+    """Monthly aggregated user-level metrics (full + baseline-adjusted)."""
+
+    id: Optional[int]
+    user_id: str
+    month_key: str
+    total_expense_full: float
+    total_income_full: float
+    net_balance_full: float
+    tx_count: int
+    avg_check: float
+    median_check: float
+    recurring_amount_full: float
+    recurring_share_full: float
+    small_expense_amount_full: float
+    small_expense_share_full: float
+    total_expense_baseline_adjusted: float
+    recurring_amount_baseline_adjusted: float
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+
+    def __post_init__(self):
+        object.__setattr__(self, "total_expense_full", float(self.total_expense_full))
+        object.__setattr__(self, "total_income_full", float(self.total_income_full))
+        object.__setattr__(self, "net_balance_full", float(self.net_balance_full))
+        object.__setattr__(self, "tx_count", int(self.tx_count))
+        object.__setattr__(self, "avg_check", float(self.avg_check))
+        object.__setattr__(self, "median_check", float(self.median_check))
+        object.__setattr__(self, "recurring_amount_full", float(self.recurring_amount_full))
+        object.__setattr__(self, "recurring_share_full", float(self.recurring_share_full))
+        object.__setattr__(self, "small_expense_amount_full", float(self.small_expense_amount_full))
+        object.__setattr__(self, "small_expense_share_full", float(self.small_expense_share_full))
+        object.__setattr__(
+            self,
+            "total_expense_baseline_adjusted",
+            float(self.total_expense_baseline_adjusted),
+        )
+        object.__setattr__(
+            self,
+            "recurring_amount_baseline_adjusted",
+            float(self.recurring_amount_baseline_adjusted),
+        )
+
+
+@dataclass(frozen=True)
+class MonthlyCategorySummary:
+    """Monthly aggregated category-level metrics (full + baseline-adjusted)."""
+
+    id: Optional[int]
+    user_id: str
+    month_key: str
+    category_id: int
+    total_amount_full: float
+    total_amount_baseline_adjusted: float
+    tx_count: int
+    share_in_month: float
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+
+    def __post_init__(self):
+        object.__setattr__(self, "category_id", int(self.category_id))
+        object.__setattr__(self, "total_amount_full", float(self.total_amount_full))
+        object.__setattr__(
+            self,
+            "total_amount_baseline_adjusted",
+            float(self.total_amount_baseline_adjusted),
+        )
+        object.__setattr__(self, "tx_count", int(self.tx_count))
+        object.__setattr__(self, "share_in_month", float(self.share_in_month))
+
+
+@dataclass(frozen=True)
 class UserRecommendationSettingsUpdate:
     """Patch payload for user recommendation settings."""
 
@@ -211,6 +283,37 @@ class BaselineAdjustment:
     original_value: float
     adjusted_value: float
     reason: str
+
+
+@dataclass(frozen=True)
+class AnalyticsTransaction:
+    """Transaction-level analytics record used for outlier handling."""
+
+    transaction_id: Optional[str]
+    user_id: Optional[str]
+    category_id: Optional[int]
+    amount: float
+    is_recurring: bool = False
+    occurred_at: Optional[datetime] = None
+    is_large_one_time_purchase: bool = False
+    outlier_score: float = 0.0
+    outlier_flag_source: Optional[str] = None
+    metadata: Mapping[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self):
+        if self.transaction_id is not None:
+            object.__setattr__(self, "transaction_id", str(self.transaction_id))
+        if self.user_id is not None:
+            object.__setattr__(self, "user_id", str(self.user_id))
+        if self.category_id is not None:
+            object.__setattr__(self, "category_id", int(self.category_id))
+        object.__setattr__(self, "amount", float(self.amount))
+        object.__setattr__(self, "is_recurring", bool(self.is_recurring))
+        object.__setattr__(self, "is_large_one_time_purchase", bool(self.is_large_one_time_purchase))
+        object.__setattr__(self, "outlier_score", float(self.outlier_score))
+        if self.outlier_flag_source is not None:
+            object.__setattr__(self, "outlier_flag_source", str(self.outlier_flag_source))
+        object.__setattr__(self, "metadata", dict(self.metadata))
 
 
 @dataclass(frozen=True)

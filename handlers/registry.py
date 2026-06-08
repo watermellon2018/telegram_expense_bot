@@ -12,6 +12,7 @@ from handlers.income_menu import register_income_menu_handlers
 from handlers.invitations import register_invitation_handlers
 from handlers.project import register_project_handlers
 from handlers.project_management import register_project_management_handlers
+from handlers.recommendations import register_recommendation_handlers
 from handlers.recurring import register_recurring_handlers
 from handlers.recurring_income import register_recurring_income_handlers
 from handlers.report import register_report_handlers
@@ -28,6 +29,7 @@ def register_all_handlers(application):
 
     # Menu handlers must be above generic expense text handler.
     register_analysis_handlers(application)
+    register_recommendation_handlers(application)
     register_export_handlers(application)
     register_report_handlers(application)
     register_stats_handlers(application)
