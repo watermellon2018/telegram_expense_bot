@@ -99,18 +99,20 @@ CREATE TABLE IF NOT EXISTS public.categories (
     created_at  TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
--- Итоговое состояние уникального индекса категорий (feature_53/cleanup.sql):
--- глобальные категории (project_id IS NULL) уникальны по (project_id, lower(name)).
-CREATE UNIQUE INDEX IF NOT EXISTS categories_project_name_idx
-    ON public.categories (project_id, LOWER(name))
-    WHERE is_active = TRUE;
+-- Уникальный индекс категорий: модель ПЕРСОНАЛЬНАЯ — глобальные категории
+-- (project_id IS NULL) свои у каждого пользователя, поэтому уникальность по
+-- (user_id, COALESCE(project_id,-1), lower(name)). Это соответствует коду
+-- (utils/categories.create_category проверяет дубль по user_id) и реальному
+-- состоянию production. NB: ранее тут был индекс без user_id (модель «общие
+-- категории» из несостоявшегося feature_53) — он не отражал ни код, ни прод.
+CREATE UNIQUE INDEX IF NOT EXISTS categories_user_project_name_lower_idx
+    ON public.categories (user_id, COALESCE(project_id, -1), LOWER(name));
 
 CREATE INDEX IF NOT EXISTS idx_categories_user_id
     ON public.categories (user_id);
 
 CREATE INDEX IF NOT EXISTS idx_categories_project_id
-    ON public.categories (project_id)
-    WHERE project_id IS NOT NULL;
+    ON public.categories (project_id);
 
 -- =========================================================
 -- expenses
