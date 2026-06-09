@@ -129,7 +129,7 @@ def _build_category_keyboard(cats: list) -> InlineKeyboardMarkup:
     keyboard = []
     row = []
     for idx, cat in enumerate(cats):
-        emoji = config.DEFAULT_CATEGORIES.get(cat['name'], '📦')
+        emoji = cat_utils.get_category_emoji(cat['name'])
         row.append(InlineKeyboardButton(
             f"{emoji} {cat['name']}",
             callback_data=f"cat_rec_{cat['category_id']}",
@@ -291,7 +291,7 @@ async def rec_handle_category(update: Update, context: ContextTypes.DEFAULT_TYPE
     context.user_data['rec_category_id'] = category_id
     context.user_data['rec_category_name'] = cat['name']
 
-    emoji = config.DEFAULT_CATEGORIES.get(cat['name'], '📦')
+    emoji = cat_utils.get_category_emoji(cat['name'])
     amount = context.user_data.get('rec_amount')
 
     await query.edit_message_text(

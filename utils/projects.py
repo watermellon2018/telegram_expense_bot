@@ -35,15 +35,37 @@ async def cmd_create_project(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
 
 
-async def create_project(user_id: int, project_name: str) -> dict:
+async def create_project(
+    user_id: int,
+    project_name: str,
+    template_key: Optional[str] = None,
+) -> dict:
     """
     Create a new project. The creator becomes the owner.
     Owner is added to project_members for consistency (optional but recommended).
+
+    Args:
+        user_id: ID владельца
+        project_name: название проекта
+        template_key: ключ шаблона из config.PROJECT_TEMPLATES (None = «обычный» проект).
+            Для тематического шаблона проекту копируются его категории и включается
+            изоляция (categories_isolated=TRUE): в проекте видны только эти категории,
+            глобальные не подмешиваются. Для None проект не изолируется (как раньше).
     """
+    import config
+
     await db.execute(
         "INSERT INTO users(user_id) VALUES($1) ON CONFLICT (user_id) DO NOTHING",
         str(user_id),
     )
+
+    # Валидируем шаблон до создания: мусорный ключ — ошибка, проект не создаём
+    template = None
+    if template_key is not None:
+        template = config.PROJECT_TEMPLATES.get(template_key)
+        if template is None:
+            return {'success': False, 'message': "Неизвестный шаблон проекта"}
+    isolated = template_key is not None
 
     # Проверяем дубликат среди доступных пользователю активных проектов
     existing = await db.fetchrow(
@@ -58,34 +80,61 @@ async def create_project(user_id: int, project_name: str) -> dict:
     if existing:
         return {'success': False, 'message': f"Проект '{project_name}' уже существует"}
 
-    # Insert project and let database generate project_id from sequence
-    row = await db.fetchrow(
-        """INSERT INTO projects(user_id, project_name, created_date)
-           VALUES($1, $2, $3)
-           RETURNING project_id""",
-        str(user_id), project_name, datetime.date.today()
-    )
-    project_id = row['project_id']
+    # Создание проекта, владельца и копирование категорий шаблона — атомарно.
+    # ВАЖНО: db.transaction() лишь выдаёт соединение из пула; саму транзакцию
+    # открывает вложенный conn.transaction(). Все запросы — через conn.*, иначе
+    # они возьмут другое соединение и не попадут в транзакцию.
+    async with db.transaction() as conn:
+        async with conn.transaction():
+            row = await conn.fetchrow(
+                """INSERT INTO projects(user_id, project_name, created_date, categories_isolated)
+                   VALUES($1, $2, $3, $4)
+                   RETURNING project_id""",
+                str(user_id), project_name, datetime.date.today(), isolated
+            )
+            project_id = row['project_id']
 
-    # Optionally add owner to project_members for consistency
-    # This makes queries simpler since you can always check project_members
-    await db.execute(
-        """INSERT INTO project_members(project_id, user_id, role, joined_at)
-           VALUES($1, $2, 'owner', NOW())
-           ON CONFLICT (project_id, user_id) DO NOTHING""",
-        project_id, str(user_id)
-    )
+            # Владелец добавляется в project_members для единообразия запросов
+            await conn.execute(
+                """INSERT INTO project_members(project_id, user_id, role, joined_at)
+                   VALUES($1, $2, 'owner', NOW())
+                   ON CONFLICT (project_id, user_id) DO NOTHING""",
+                project_id, str(user_id)
+            )
 
-    # Create directory (if still needed for compatibility)
-    from utils.excel import create_user_dir
-    user_dir = create_user_dir(user_id)
-    project_dir = os.path.join(user_dir, "projects", str(project_id))
-    os.makedirs(project_dir, exist_ok=True)
+            # Копируем категории шаблона (если выбран). Имена внутри шаблона
+            # уникальны, project_id новый → конфликта с уникальным индексом нет,
+            # поэтому без ON CONFLICT: любой неожиданный конфликт честно откатит
+            # всю транзакцию, а не создаст проект с неполным набором категорий.
+            if template:
+                for cat_name in template["categories"].keys():
+                    await conn.execute(
+                        """INSERT INTO categories(user_id, project_id, name,
+                                                  is_system, is_active, created_at)
+                           VALUES($1, $2, $3, FALSE, TRUE, CURRENT_TIMESTAMP)""",
+                        str(user_id), project_id, cat_name
+                    )
+
+    # Директорию создаём ПОСЛЕ коммита: ошибка ФС не должна откатывать уже
+    # созданный проект (директория без записи в БД безвредна).
+    try:
+        from utils.excel import create_user_dir
+        user_dir = create_user_dir(user_id)
+        project_dir = os.path.join(user_dir, "projects", str(project_id))
+        os.makedirs(project_dir, exist_ok=True)
+    except OSError as e:
+        log_error(logger, e, "create_project_dir_error",
+                  user_id=user_id, project_id=project_id)
+
+    log_event(logger, "project_created", user_id=user_id, project_id=project_id,
+              template_key=template_key, categories_isolated=isolated)
 
     return {
         'success': True,
         'project_id': project_id,
         'project_name': project_name,
+        'categories_isolated': isolated,
+        'template_key': template_key,
         'message': f"Проект '{project_name}' создан"
     }
 

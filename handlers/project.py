@@ -22,7 +22,13 @@ from utils.logger import get_logger, log_command, log_error, log_event
 logger = get_logger("handlers.project")
 
 # Состояния для ConversationHandler
-CONFIRMING_DELETE, ENTERING_PROJECT_NAME, ENTERING_PROJECT_TO_DELETE, CHOOSING_PROJECT_TO_DELETE = range(4)
+(
+    CONFIRMING_DELETE,
+    ENTERING_PROJECT_NAME,
+    ENTERING_PROJECT_TO_DELETE,
+    CHOOSING_PROJECT_TO_DELETE,
+    CHOOSING_TEMPLATE,
+) = range(5)
 
 
 async def project_create_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -410,33 +416,96 @@ async def button_project_create_start(update: Update, context: ContextTypes.DEFA
     return ENTERING_PROJECT_NAME
 
 
-async def button_project_create_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+async def button_project_create_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """
-    Подтверждает создание проекта (после ввода)
+    Получает название проекта и предлагает выбрать шаблон категорий.
+
+    Дубликат имени проверяем здесь, чтобы не вести пользователя через выбор
+    шаблона впустую.
     """
+    import config
+
     user_id = update.effective_user.id
     project_name = update.message.text.strip()
 
-    result = await projects.create_project(user_id, project_name)
+    if not project_name:
+        await update.message.reply_text("❌ Название проекта не может быть пустым. Введите название:")
+        return ENTERING_PROJECT_NAME
 
-    if result['success']:
-        await projects.set_active_project(user_id, result['project_id'])
-        context.user_data['active_project_id'] = result['project_id']
-
+    # Ранняя проверка дубликата (финальная всё равно есть в create_project)
+    existing = await projects.get_project_by_name(user_id, project_name)
+    if existing:
         from utils.helpers import get_main_menu_keyboard
         await update.message.reply_text(
-            f"✅ {result['message']}\n"
-            f"📁 Проект '{project_name}' активирован\n\n"
-            f"Теперь все расходы будут записываться в этот проект.",
+            f"❌ Проект '{project_name}' уже существует.",
             reply_markup=get_main_menu_keyboard()
+        )
+        return ConversationHandler.END
+
+    context.user_data['new_project_name'] = project_name
+
+    # Кнопки: «Обычный» + по одной на каждый тематический шаблон
+    keyboard = [[InlineKeyboardButton("📋 Обычный (общие категории)", callback_data="tpl_none")]]
+    for key, template in config.PROJECT_TEMPLATES.items():
+        keyboard.append([InlineKeyboardButton(template["title"], callback_data=f"tpl_{key}")])
+    reply_markup = InlineKeyboardMarkup(keyboard)
+
+    await update.message.reply_text(
+        f"🆕 Проект «{project_name}».\n\n"
+        "Выберите шаблон категорий:\n"
+        "• «Обычный» — будут видны ваши общие категории.\n"
+        "• Тематический — проект получит только свой набор категорий.",
+        reply_markup=reply_markup
+    )
+    return CHOOSING_TEMPLATE
+
+
+async def button_project_create_template(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """
+    Создаёт проект по выбранному шаблону (callback tpl_<key> | tpl_none).
+    """
+    query = update.callback_query
+    await query.answer()
+
+    user_id = update.effective_user.id
+    project_name = context.user_data.get('new_project_name')
+
+    if not project_name:
+        await query.edit_message_text("❌ Сессия создания проекта истекла. Начните заново.")
+        return ConversationHandler.END
+
+    # tpl_none → обычный проект (template_key=None); иначе ключ шаблона
+    raw = query.data[len("tpl_"):] if query.data.startswith("tpl_") else "none"
+    template_key = None if raw == "none" else raw
+
+    result = await projects.create_project(user_id, project_name, template_key)
+
+    context.user_data.pop('new_project_name', None)
+
+    if not result['success']:
+        await query.edit_message_text(f"❌ {result['message']}")
+        return ConversationHandler.END
+
+    await projects.set_active_project(user_id, result['project_id'])
+    context.user_data['active_project_id'] = result['project_id']
+
+    if result.get('categories_isolated'):
+        import config
+        template = config.PROJECT_TEMPLATES.get(template_key, {})
+        cats = ", ".join(template.get("categories", {}).keys())
+        body = (
+            f"📁 Проект «{project_name}» активирован ({template.get('title', '')}).\n\n"
+            f"Категории проекта: {cats}.\n"
+            "Общие категории в этом проекте не показываются.\n\n"
+            "Теперь все расходы будут записываться в этот проект."
         )
     else:
-        from utils.helpers import get_main_menu_keyboard
-        await update.message.reply_text(
-            f"❌ {result['message']}",
-            reply_markup=get_main_menu_keyboard()
+        body = (
+            f"📁 Проект «{project_name}» активирован.\n\n"
+            "Теперь все расходы будут записываться в этот проект."
         )
 
+    await query.edit_message_text(f"✅ {result['message']}\n{body}")
     return ConversationHandler.END
 
 
@@ -648,11 +717,12 @@ def register_project_handlers(application):
     )
     application.add_handler(delete_conv_handler)
 
-    # Conversation для создания (кнопка)
+    # Conversation для создания (кнопка): ввод имени → выбор шаблона → создание
     create_conv_handler = ConversationHandler(
         entry_points=[MessageHandler(filters.Regex(project_menu_button_regex("create")), button_project_create_start)],
         states={
-            ENTERING_PROJECT_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, button_project_create_confirm)],
+            ENTERING_PROJECT_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, button_project_create_name)],
+            CHOOSING_TEMPLATE: [CallbackQueryHandler(button_project_create_template, pattern=r'^tpl_')],
         },
         fallbacks=[CommandHandler("cancel", project_cancel)],
         name="create_project_conversation",

@@ -16,7 +16,6 @@ from telegram.ext import (
     filters,
 )
 
-import config
 from metrics import (
     classify_error_type,
     track_command,
@@ -188,7 +187,7 @@ async def category_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             # Формируем список категорий
             categories_list_emoji = []
             for cat in cats:
-                emoji = config.DEFAULT_CATEGORIES.get(cat['name'], '📦')
+                emoji = categories.get_category_emoji(cat['name'])
                 categories_list_emoji.append(f"{emoji}  {cat['name'].title()}")
 
             message = 'Доступные категории:\n'

@@ -12,6 +12,33 @@ from . import db
 logger = get_logger("utils.categories")
 
 
+def get_category_emoji(name: str) -> str:
+    """
+    Возвращает эмодзи для категории по её имени.
+
+    Единый источник эмодзи для меню и списков: сначала смотрит дефолтные категории
+    (config.DEFAULT_CATEGORIES), затем категории всех шаблонов проектов
+    (config.PROJECT_TEMPLATES), иначе — нейтральная иконка.
+
+    Нужен, потому что категории тематических шаблонов («перелёт», «стройматериалы»…)
+    отсутствуют в DEFAULT_CATEGORIES и иначе показывались бы как 📦.
+
+    Args:
+        name: Имя категории (в нижнем регистре, как хранится в БД)
+
+    Returns:
+        Строка-эмодзи
+    """
+    import config
+
+    if name in config.DEFAULT_CATEGORIES:
+        return config.DEFAULT_CATEGORIES[name]
+    for template in config.PROJECT_TEMPLATES.values():
+        if name in template["categories"]:
+            return template["categories"][name]
+    return "📦"
+
+
 async def get_categories_for_user_project(user_id: int, project_id: Optional[int] = None) -> List[Dict]:
     """
     Gets categories for user and project.
@@ -45,6 +72,9 @@ async def get_categories_for_user_project(user_id: int, project_id: Optional[int
         # For projects: get categories from ALL project members
         # For personal: get only user's own global categories
         if project_id is not None:
+            # JOIN projects, чтобы прочитать флаг изоляции тем же запросом.
+            # Изолированный проект (categories_isolated=TRUE) → глобальные категории
+            # владельца (project_id IS NULL) НЕ подмешиваются, видны только его собственные.
             rows = await db.fetch(
                 """
                 WITH deduplicated AS (
@@ -52,12 +82,15 @@ async def get_categories_for_user_project(user_id: int, project_id: Optional[int
                            c.category_id, c.name, c.is_system, c.is_active,
                            c.project_id, c.created_at, c.user_id
                     FROM categories c
+                    JOIN projects p ON p.project_id = $1
                     WHERE c.is_active = TRUE
                       AND (
                         c.project_id = $1
-                        OR (c.project_id IS NULL AND c.user_id = (
-                            SELECT user_id FROM projects WHERE project_id = $1
-                        ))
+                        OR (
+                            NOT p.categories_isolated
+                            AND c.project_id IS NULL
+                            AND c.user_id = p.user_id
+                        )
                       )
                     ORDER BY LOWER(c.name),
                              CASE WHEN c.project_id = $1 THEN 0 ELSE 1 END,
@@ -118,19 +151,26 @@ async def get_category_by_name(user_id: int, name: str, project_id: Optional[int
     """
     try:
         if project_id is not None:
+            # JOIN projects для чтения флага изоляции. В изолированном проекте имя
+            # глобальной категории НЕ резолвится (ветка project_id IS NULL отключена) —
+            # текстовый ввод расхода её не найдёт, что и требуется при изоляции.
             row = await db.fetchrow(
                 """
-                SELECT category_id, name, is_system, is_active, project_id, created_at, user_id
-                FROM categories
-                WHERE LOWER(name) = LOWER($1)
-                  AND is_active = TRUE
+                SELECT c.category_id, c.name, c.is_system, c.is_active,
+                       c.project_id, c.created_at, c.user_id
+                FROM categories c
+                JOIN projects p ON p.project_id = $2
+                WHERE LOWER(c.name) = LOWER($1)
+                  AND c.is_active = TRUE
                   AND (
-                    project_id = $2
-                    OR (project_id IS NULL AND user_id = (
-                        SELECT user_id FROM projects WHERE project_id = $2
-                    ))
+                    c.project_id = $2
+                    OR (
+                        NOT p.categories_isolated
+                        AND c.project_id IS NULL
+                        AND c.user_id = p.user_id
+                    )
                   )
-                ORDER BY CASE WHEN project_id = $2 THEN 0 ELSE 1 END
+                ORDER BY CASE WHEN c.project_id = $2 THEN 0 ELSE 1 END
                 LIMIT 1
                 """,
                 name,

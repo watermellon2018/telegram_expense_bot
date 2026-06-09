@@ -18,7 +18,6 @@ from telegram.ext import (
     filters,
 )
 
-import config
 from metrics import (
     classify_error_type,
     track_command,
@@ -126,7 +125,7 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             return
 
         # Отправляем подтверждение
-        category_emoji = config.DEFAULT_CATEGORIES.get(category_found['name'], '📦')
+        category_emoji = categories.get_category_emoji(category_found['name'])
 
         confirmation = (
             f"✅ Расход добавлен:\n"
@@ -254,7 +253,7 @@ async def add_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
                 return ConversationHandler.END
 
             # Отправляем подтверждение
-            category_emoji = config.DEFAULT_CATEGORIES.get(category_found['name'], '📦')
+            category_emoji = categories.get_category_emoji(category_found['name'])
 
             confirmation = (
                 f"✅ Расход добавлен:\n"
@@ -337,8 +336,8 @@ async def handle_amount(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
         row = []
 
         for i, cat in enumerate(cats):
-            # Получаем эмодзи из конфига для системных категорий, иначе используем 📦
-            emoji = config.DEFAULT_CATEGORIES.get(cat['name'], '📦')
+            # Единый источник эмодзи (дефолтные + категории шаблонов проектов)
+            emoji = categories.get_category_emoji(cat['name'])
             button_text = f"{emoji} {cat['name']}"
 
             row.append(InlineKeyboardButton(
@@ -430,7 +429,7 @@ async def handle_category_callback(update: Update, context: ContextTypes.DEFAULT
              amount=amount, project_id=project_id)
 
     # Обновляем сообщение и спрашиваем описание
-    emoji = config.DEFAULT_CATEGORIES.get(category['name'], '📦')
+    emoji = categories.get_category_emoji(category['name'])
     await query.edit_message_text(
         f"Сумма: {amount:.2f}\n"
         f"{emoji} Категория: {category['name']}\n\n"
@@ -567,7 +566,7 @@ async def handle_description(update: Update, context: ContextTypes.DEFAULT_TYPE)
                  has_description=bool(description))
 
         # Отправляем подтверждение
-        emoji = config.DEFAULT_CATEGORIES.get(category_name, '📦')
+        emoji = categories.get_category_emoji(category_name)
 
         confirmation = (
             f"✅ Расход добавлен:\n"
@@ -687,7 +686,7 @@ async def direct_amount_handler(update: Update, context: ContextTypes.DEFAULT_TY
         row = []
 
         for i, cat in enumerate(cats):
-            emoji = config.DEFAULT_CATEGORIES.get(cat['name'], '📦')
+            emoji = categories.get_category_emoji(cat['name'])
             button_text = f"{emoji} {cat['name']}"
 
             row.append(InlineKeyboardButton(

@@ -57,10 +57,10 @@ def format_month_expenses(expenses, month=None, year=None):
         reverse=True,
     )
 
-    from config import DEFAULT_CATEGORIES
+    from utils.categories import get_category_emoji
 
     for category, amount in sorted_categories:
-        emoji = DEFAULT_CATEGORIES.get(category, "📦")
+        emoji = get_category_emoji(category)
         report += f"{emoji} {category.title()}: {amount:.2f}\n"
 
     return report
@@ -74,9 +74,9 @@ def format_category_expenses(category_data, category, year=None):
     if not category_data or category_data["total"] == 0:
         return f"В {year} году расходов по категории '{category}' не было."
 
-    from config import DEFAULT_CATEGORIES
+    from utils.categories import get_category_emoji
 
-    emoji = DEFAULT_CATEGORIES.get(category.lower(), "📦")
+    emoji = get_category_emoji(category.lower())
     report = f"📊 Статистика расходов по категории {emoji} {category} за {year} год:\n\n"
     report += f"💰 Общая сумма: {category_data['total']:.2f}\n"
     report += f"🧾 Количество транзакций: {category_data['count']}\n\n"
@@ -121,10 +121,10 @@ def format_day_expenses(expenses, date=None):
         reverse=True,
     )
 
-    from config import DEFAULT_CATEGORIES
+    from utils.categories import get_category_emoji
 
     for category, amount in sorted_categories:
-        emoji = DEFAULT_CATEGORIES.get(category, "📦")
+        emoji = get_category_emoji(category)
         percentage = (amount / expenses["total"]) * 100
         report += f"{emoji} {category.title()}: {amount:.2f} ({percentage:.1f}%)\n"
 

@@ -59,7 +59,7 @@ async def delete_category_command(update: Update, context: ContextTypes.DEFAULT_
     row = []
 
     for i, cat in enumerate(user_categories):
-        emoji = config.DEFAULT_CATEGORIES.get(cat['name'], '📦')
+        emoji = categories.get_category_emoji(cat['name'])
         button_text = f"{emoji} {cat['name']}"
 
         row.append(InlineKeyboardButton(
@@ -140,7 +140,7 @@ async def handle_category_delete_callback(update: Update, context: ContextTypes.
     # Сохраняем количество использований в контексте
     context.user_data['delete_category_usage_count'] = usage_count or 0
 
-    emoji = config.DEFAULT_CATEGORIES.get(category['name'], '📦')
+    emoji = categories.get_category_emoji(category['name'])
 
     if usage_count > 0:
         # Если есть расходы, показываем специальное подтверждение с предупреждением о переносе
@@ -218,7 +218,7 @@ async def confirm_category_delete(update: Update, context: ContextTypes.DEFAULT_
     context.user_data.pop('delete_category_usage_count', None)
 
     if result['success']:
-        emoji = config.DEFAULT_CATEGORIES.get(category_name, '📦')
+        emoji = categories.get_category_emoji(category_name)
         log_event(logger, "category_deleted", user_id=user_id,
                  category_id=category_id, category_name=category_name)
 
@@ -318,7 +318,7 @@ async def confirm_category_delete_with_transfer(update: Update, context: Context
     context.user_data.pop('delete_category_usage_count', None)
 
     if result['success']:
-        emoji = config.DEFAULT_CATEGORIES.get(category_name, '📦')
+        emoji = categories.get_category_emoji(category_name)
         log_event(logger, "category_deleted_with_transfer", user_id=user_id,
                  category_id=category_id, category_name=category_name,
                  transferred_count=result.get('transferred_count', 0))
@@ -443,7 +443,7 @@ async def handle_category_name_input(update: Update, context: ContextTypes.DEFAU
     )
 
     if result['success']:
-        emoji = config.DEFAULT_CATEGORIES.get(category_name, '📦')
+        emoji = categories.get_category_emoji(category_name)
         log_event(logger, "category_added_from_menu", user_id=user_id,
                  category_id=result['category_id'], category_name=category_name, project_id=project_id)
 
@@ -513,14 +513,14 @@ async def category_list_button(update: Update, context: ContextTypes.DEFAULT_TYP
     if system_cats:
         message += "🔵 Системные категории:\n"
         for cat in system_cats:
-            emoji = config.DEFAULT_CATEGORIES.get(cat['name'], '📦')
+            emoji = categories.get_category_emoji(cat['name'])
             message += f"{emoji} {cat['name']}\n"
         message += "\n"
 
     if user_cats:
         message += "🟢 Ваши категории:\n"
         for cat in user_cats:
-            emoji = config.DEFAULT_CATEGORIES.get(cat['name'], '📦')
+            emoji = categories.get_category_emoji(cat['name'])
             message += f"{emoji} {cat['name']}\n"
 
     # Возвращаемся в меню категорий
