@@ -3,11 +3,11 @@ CRUD-операции для работы с бюджетами.
 Поддерживает как личные бюджеты (project_id=None), так и бюджеты проектов.
 """
 
-import datetime
-from typing import List, Dict
-from typing import Optional
+from typing import Dict, List, Optional
+
+from utils.logger import get_logger, log_error, log_event
+
 from . import db
-from utils.logger import get_logger, log_event, log_error
 
 logger = get_logger("utils.budgets")
 

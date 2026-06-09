@@ -3,7 +3,12 @@
 from telegram import Update
 from telegram.ext import ContextTypes, MessageHandler, filters
 
-from utils.helpers import get_income_menu_keyboard, main_menu_button_regex, income_menu_button_regex, get_main_menu_keyboard
+from utils.helpers import (
+    get_income_menu_keyboard,
+    get_main_menu_keyboard,
+    income_menu_button_regex,
+    main_menu_button_regex,
+)
 from utils.logger import get_logger, log_event
 
 logger = get_logger("handlers.income_menu")

@@ -14,31 +14,29 @@ Pattern suggestion:
   бот проверяет паттерн и предлагает создать постоянный расход.
 """
 
-import asyncio
 import datetime
 from typing import Optional
 
-import config
 from telegram import (
-    Update,
     InlineKeyboardButton,
     InlineKeyboardMarkup,
-    ReplyKeyboardRemove,
+    Update,
 )
 from telegram.ext import (
+    CallbackQueryHandler,
+    CommandHandler,
     ContextTypes,
     ConversationHandler,
-    CommandHandler,
     MessageHandler,
-    CallbackQueryHandler,
     filters,
 )
 
+import config
 from utils import categories as cat_utils
-from utils import recurring as rec_utils
 from utils import pattern_detector as pd_utils
+from utils import recurring as rec_utils
 from utils.helpers import get_main_menu_keyboard, main_menu_button_regex
-from utils.logger import get_logger, log_event, log_error
+from utils.logger import get_logger, log_error, log_event
 
 logger = get_logger("handlers.recurring")
 
@@ -131,7 +129,7 @@ def _build_category_keyboard(cats: list) -> InlineKeyboardMarkup:
     keyboard = []
     row = []
     for idx, cat in enumerate(cats):
-        emoji = config.DEFAULT_CATEGORIES.get(cat['name'], '📦')
+        emoji = cat_utils.get_category_emoji(cat['name'])
         row.append(InlineKeyboardButton(
             f"{emoji} {cat['name']}",
             callback_data=f"cat_rec_{cat['category_id']}",
@@ -293,7 +291,7 @@ async def rec_handle_category(update: Update, context: ContextTypes.DEFAULT_TYPE
     context.user_data['rec_category_id'] = category_id
     context.user_data['rec_category_name'] = cat['name']
 
-    emoji = config.DEFAULT_CATEGORIES.get(cat['name'], '📦')
+    emoji = cat_utils.get_category_emoji(cat['name'])
     amount = context.user_data.get('rec_amount')
 
     await query.edit_message_text(

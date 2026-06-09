@@ -50,6 +50,9 @@ Thumbs.db
 avatar.png
 todo.md
 .claude/*
+# но версионируем общие для команды skills и subagents
+!.claude/skills/
+!.claude/agents/
 
 # tests
 htmlcov/

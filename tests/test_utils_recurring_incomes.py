@@ -1,8 +1,9 @@
 """Тесты для utils/recurring_incomes.py"""
 
 import datetime
-import pytest
 from unittest.mock import AsyncMock, patch
+
+import pytest
 
 from utils import recurring_incomes
 
@@ -23,7 +24,9 @@ async def test_create_rule_creates_initial_income_for_today():
             weekday=None,
             day_of_month=None,
             is_last_day_of_month=False,
-            start_date=datetime.date.today(),
+            # create_rule сравнивает start_date с utcnow().date(); используем UTC,
+            # чтобы тест не зависел от смещения локальной даты относительно UTC.
+            start_date=datetime.datetime.utcnow().date(),
         )
 
     assert rule_id == 55

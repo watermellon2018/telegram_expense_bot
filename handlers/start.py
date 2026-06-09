@@ -2,19 +2,20 @@
 Обработчики команды /start и справки
 """
 
-from telegram import Update, ReplyKeyboardMarkup
-from telegram.ext import ContextTypes, CommandHandler, filters, MessageHandler
-from utils import excel, projects, helpers
-from utils.logger import get_logger, log_command, log_event, log_error
+from telegram import ReplyKeyboardMarkup, Update
+from telegram.ext import CommandHandler, ContextTypes, MessageHandler, filters
+
 import config
-from utils import helpers as btn_helpers
 from metrics import (
+    classify_error_type,
     track_command,
+    track_handler_error,
     track_handler_start,
     track_handler_success,
-    track_handler_error,
-    classify_error_type,
 )
+from utils import excel, helpers, projects
+from utils import helpers as btn_helpers
+from utils.logger import get_logger, log_command, log_error, log_event
 
 logger = get_logger("handlers.start")
 
@@ -28,33 +29,33 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     error_type = None
     user_id = update.effective_user.id
     first_name = update.effective_user.first_name
-        
+
     try:
         # Check if there's an invitation token in the command
         if context.args and len(context.args) > 0:
             arg = context.args[0]
-            
+
             # Check if this is an invitation token (starts with inv_)
             if arg.startswith('inv_'):
                 # Handle invitation in a separate function
                 from handlers.invitations import handle_start_with_invitation
                 await handle_start_with_invitation(update, context)
                 return
-        
+
         # Normal /start command
         # Создаем директорию для пользователя
         excel.create_user_dir(user_id)
         log_event(logger, "user_dir_created", user_id=user_id)
-        
+
         reply_markup = helpers.get_main_menu_keyboard()
-        
+
         # Инициализируем активный проект из БД
         try:
             active_project = await projects.get_active_project(user_id)
             if active_project:
                 context.user_data['active_project_id'] = active_project['project_id']
-                log_event(logger, "active_project_loaded", user_id=user_id, 
-                         project_id=active_project['project_id'], 
+                log_event(logger, "active_project_loaded", user_id=user_id,
+                         project_id=active_project['project_id'],
                          project_name=active_project.get('project_name'))
             else:
                 context.user_data['active_project_id'] = None
@@ -69,6 +70,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             f"Я бот для учета и анализа расходов. С моей помощью вы можете:\n"
             f"• Записывать свои расходы по категориям\n"
             f"• Записывать доходы в отдельном разделе\n"
+            f"• Оценивать теоретический кэшбэк по категориям\n"
             f"• Получать статистику за месяц\n"
             f"• Анализировать расходы с помощью графиков\n\n"
             f"Чтобы добавить расход, используйте команду:\n"
@@ -79,10 +81,10 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             f"Например: 100 продукты хлеб и молоко\n\n"
             f"Для получения справки используйте команду /help"
         )
-        
+
         await update.message.reply_text(message, reply_markup=reply_markup)
         log_event(logger, "start_success", user_id=user_id, status="success")
-        
+
     except Exception as e:
         error_type = classify_error_type(e)
         log_error(logger, e, "start_error", user_id=user_id)
@@ -101,9 +103,9 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     track_handler_start("help")
     error_type = None
     user_id = update.effective_user.id
-    
+
     log_command(logger, "help", user_id=user_id)
-    
+
     try:
         # Формируем справочное сообщение
         message = (
@@ -122,6 +124,21 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             "💰 Учет расходов:\n"
             "• /add <сумма> <категория> [описание] - добавить расход\n"
             "• Раздел «💵 Доходы» - добавить доход, управлять категориями и постоянными доходами\n"
+            "• Раздел «💵 Доходы» → «🔁 Постоянные» - настроить автодобавление регулярных доходов\n"
+            "• Раздел «🔁 Постоянные» - настроить автодобавление регулярных расходов\n"
+            "• Раздел «💳 Кэшбэк» - карты, категории, кэшбек-правила и раздел «Экономия»\n"
+            "• /cashback - открыть раздел теоретического кэшбэка\n"
+            "• /cashback_cards - список карт\n"
+            "• /cashback_card_add <название> - добавить карту\n"
+            "• /cashback_card_activate <card_id> - активировать карту\n"
+            "• /cashback_card_deactivate <card_id> - деактивировать карту\n"
+            "• /cashback_card_delete <card_id> - удалить карту (hard delete)\n"
+            "• /cashback_rules [месяц] [год] - правила кэшбэка за период\n"
+            "• /cashback_rule_add <card_id> <category_id> <percent> [month] [year] - добавить кэшбек\n"
+            "• /cashback_rule_edit <rule_id> <percent> - изменить кэшбек\n"
+            "• /cashback_rule_remove <rule_id> - удалить кэшбек\n"
+            "• /cashback_category_add <название> - добавить cashback-категорию\n"
+            "• /cashback_stats [месяц] [год] - теоретический кэшбэк за период\n"
             "• /month - статистика за текущий месяц\n"
             "• /day - статистика за текущий день\n"
             "• /stats - общая статистика расходов\n"
@@ -129,20 +146,21 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             "• /category <название> - расходы по категории\n"
             "• /delete_category - удалить пользовательскую категорию\n"
             "• /export - экспорт детальной статистики в Excel\n"
+            "• /report - генерация PDF-отчета с графиками\n"
             "• /help - показать эту справку\n\n"
             "📊 Доступные категории расходов:\n"
         )
-        
+
         # Добавляем список категорий
         for category, emoji in config.DEFAULT_CATEGORIES.items():
             message += f"• {emoji} {category}\n"
-        
+
         message += (
             "\n💡 Вы также можете добавлять расходы, просто отправив сообщение в формате:\n"
             "<сумма> <категория> [описание]\n\n"
             "Например: 100 продукты хлеб и молоко"
         )
-        
+
         await update.message.reply_text(message)
         log_event(logger, "help_success", user_id=user_id, status="success")
     except Exception as e:
@@ -162,9 +180,9 @@ async def projects_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     track_handler_start("projects_menu")
     error_type = None
     user_id = update.effective_user.id
-    
+
     log_event(logger, "projects_menu_opened", user_id=user_id)
-    
+
     try:
         btn = config.PROJECT_MENU_BUTTONS
         keyboard = [
@@ -174,7 +192,7 @@ async def projects_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             [btn["delete"], btn["main_menu"]],
         ]
         reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
-        
+
         await update.message.reply_text(
             "📁 Меню управления проектами:\n\n"
             "Выберите действие:",
@@ -240,7 +258,7 @@ def register_start_handlers(application):
     """
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("help", help_command))
-    
+
     # Обработчики для кнопок меню (тексты из config.MAIN_MENU_BUTTONS)
     application.add_handler(MessageHandler(filters.Regex(btn_helpers.main_menu_button_regex("projects")), projects_menu))
     application.add_handler(MessageHandler(filters.Regex(btn_helpers.main_menu_button_regex("settings")), settings_menu))

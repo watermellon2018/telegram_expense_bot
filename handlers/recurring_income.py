@@ -3,14 +3,20 @@
 import datetime
 from typing import Tuple
 
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import ContextTypes, ConversationHandler, MessageHandler, CallbackQueryHandler, CommandHandler, filters
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
+from telegram.ext import (
+    CallbackQueryHandler,
+    CommandHandler,
+    ContextTypes,
+    ConversationHandler,
+    MessageHandler,
+    filters,
+)
 
 import config
-from utils import income_categories
-from utils import recurring_incomes
+from utils import income_categories, recurring_incomes
 from utils import recurring as recurring_utils
-from utils.helpers import income_menu_button_regex, get_main_menu_keyboard
+from utils.helpers import get_main_menu_keyboard, income_menu_button_regex
 
 (
     REC_ENTERING_AMOUNT,

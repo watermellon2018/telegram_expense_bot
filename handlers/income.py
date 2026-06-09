@@ -1,24 +1,29 @@
 """Обработчики для добавления доходов."""
 
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import ContextTypes, CommandHandler, ConversationHandler, MessageHandler, CallbackQueryHandler, filters
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
+from telegram.ext import (
+    CallbackQueryHandler,
+    CommandHandler,
+    ContextTypes,
+    ConversationHandler,
+    MessageHandler,
+    filters,
+)
 
 import config
-from utils import helpers, projects
-from utils import income_categories
-from utils import incomes
-from utils.helpers import income_menu_button_regex
-from utils.logger import get_logger, log_event
 from metrics import (
+    classify_error_type,
     track_command,
+    track_flow_cancelled,
+    track_flow_completed,
+    track_flow_started,
+    track_handler_error,
     track_handler_start,
     track_handler_success,
-    track_handler_error,
-    track_flow_started,
-    track_flow_completed,
-    track_flow_cancelled,
-    classify_error_type,
 )
+from utils import helpers, income_categories, incomes, projects
+from utils.helpers import income_menu_button_regex
+from utils.logger import get_logger, log_event
 
 logger = get_logger("handlers.income")
 

@@ -3,14 +3,13 @@
 """
 
 import os
-import logging
 
 from telegram import Update
 from telegram.ext import ContextTypes, MessageHandler, filters
 
-from utils.helpers import main_menu_button_regex, get_main_menu_keyboard
-from utils.logger import get_logger, log_event, log_error
-from utils import report_generator
+from utils import cashback, report_generator
+from utils.helpers import get_main_menu_keyboard, main_menu_button_regex
+from utils.logger import get_logger, log_error, log_event
 
 logger = get_logger("handlers.report")
 
@@ -48,6 +47,18 @@ async def report_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                 caption="📊 Ваш финансовый отчёт готов.",
                 reply_markup=get_main_menu_keyboard(),
             )
+
+        cashback_summary = await cashback.calculate_potential_cashback_for_last_12_months(
+            user_id=user_id,
+            project_id=project_id,
+        )
+        await update.message.reply_text(
+            cashback.format_cashback_summary(
+                cashback_summary,
+                title="💳 Теоретический кэшбэк за скользящие 12 месяцев",
+            ),
+            reply_markup=get_main_menu_keyboard(),
+        )
 
         log_event(logger, "report_sent", user_id=user_id, project_id=project_id)
 

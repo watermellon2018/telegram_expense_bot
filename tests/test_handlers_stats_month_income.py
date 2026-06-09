@@ -1,7 +1,8 @@
 """Тесты /month с учетом доходов."""
 
-import pytest
 from unittest.mock import AsyncMock, patch
+
+import pytest
 
 from handlers.stats import month_command
 

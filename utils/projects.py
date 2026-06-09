@@ -3,31 +3,31 @@
 Теперь все данные хранятся в Postgres вместо Excel.
 """
 
-import os
 import datetime
-import pandas as pd
+import os
 import secrets
-import config
-from typing import Optional, Dict
-from . import db
-from utils.logger import get_logger, log_event, log_error
+from typing import Dict, Optional
 
 from telegram import Update
 from telegram.ext import ContextTypes
+
+from utils.logger import get_logger, log_error, log_event
+
+from . import db
 
 logger = get_logger("utils.projects")
 
 async def cmd_create_project(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
-    
+
     if not context.args:
         await update.message.reply_text("Использование: /newproject Название проекта")
         return
-    
+
     project_name = " ".join(context.args)
-    
+
     result = await create_project(user_id, project_name)
-    
+
     if result['success']:
         await update.message.reply_text(f"Проект создан!\nID: {result['project_id']}\nНазвание: {result['project_name']}")
     else:
@@ -35,16 +35,38 @@ async def cmd_create_project(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
 
 
-async def create_project(user_id: int, project_name: str) -> dict:
+async def create_project(
+    user_id: int,
+    project_name: str,
+    template_key: Optional[str] = None,
+) -> dict:
     """
     Create a new project. The creator becomes the owner.
     Owner is added to project_members for consistency (optional but recommended).
+
+    Args:
+        user_id: ID владельца
+        project_name: название проекта
+        template_key: ключ шаблона из config.PROJECT_TEMPLATES (None = «обычный» проект).
+            Для тематического шаблона проекту копируются его категории и включается
+            изоляция (categories_isolated=TRUE): в проекте видны только эти категории,
+            глобальные не подмешиваются. Для None проект не изолируется (как раньше).
     """
+    import config
+
     await db.execute(
         "INSERT INTO users(user_id) VALUES($1) ON CONFLICT (user_id) DO NOTHING",
         str(user_id),
     )
-    
+
+    # Валидируем шаблон до создания: мусорный ключ — ошибка, проект не создаём
+    template = None
+    if template_key is not None:
+        template = config.PROJECT_TEMPLATES.get(template_key)
+        if template is None:
+            return {'success': False, 'message': "Неизвестный шаблон проекта"}
+    isolated = template_key is not None
+
     # Проверяем дубликат среди доступных пользователю активных проектов
     existing = await db.fetchrow(
         """
@@ -58,34 +80,61 @@ async def create_project(user_id: int, project_name: str) -> dict:
     if existing:
         return {'success': False, 'message': f"Проект '{project_name}' уже существует"}
 
-    # Insert project and let database generate project_id from sequence
-    row = await db.fetchrow(
-        """INSERT INTO projects(user_id, project_name, created_date)
-           VALUES($1, $2, $3)
-           RETURNING project_id""",
-        str(user_id), project_name, datetime.date.today()
-    )
-    project_id = row['project_id']
-    
-    # Optionally add owner to project_members for consistency
-    # This makes queries simpler since you can always check project_members
-    await db.execute(
-        """INSERT INTO project_members(project_id, user_id, role, joined_at)
-           VALUES($1, $2, 'owner', NOW())
-           ON CONFLICT (project_id, user_id) DO NOTHING""",
-        project_id, str(user_id)
-    )
-    
-    # Create directory (if still needed for compatibility)
-    from utils.excel import create_user_dir
-    user_dir = create_user_dir(user_id)
-    project_dir = os.path.join(user_dir, "projects", str(project_id))
-    os.makedirs(project_dir, exist_ok=True)
-    
+    # Создание проекта, владельца и копирование категорий шаблона — атомарно.
+    # ВАЖНО: db.transaction() лишь выдаёт соединение из пула; саму транзакцию
+    # открывает вложенный conn.transaction(). Все запросы — через conn.*, иначе
+    # они возьмут другое соединение и не попадут в транзакцию.
+    async with db.transaction() as conn:
+        async with conn.transaction():
+            row = await conn.fetchrow(
+                """INSERT INTO projects(user_id, project_name, created_date, categories_isolated)
+                   VALUES($1, $2, $3, $4)
+                   RETURNING project_id""",
+                str(user_id), project_name, datetime.date.today(), isolated
+            )
+            project_id = row['project_id']
+
+            # Владелец добавляется в project_members для единообразия запросов
+            await conn.execute(
+                """INSERT INTO project_members(project_id, user_id, role, joined_at)
+                   VALUES($1, $2, 'owner', NOW())
+                   ON CONFLICT (project_id, user_id) DO NOTHING""",
+                project_id, str(user_id)
+            )
+
+            # Копируем категории шаблона (если выбран). Имена внутри шаблона
+            # уникальны, project_id новый → конфликта с уникальным индексом нет,
+            # поэтому без ON CONFLICT: любой неожиданный конфликт честно откатит
+            # всю транзакцию, а не создаст проект с неполным набором категорий.
+            if template:
+                for cat_name in template["categories"].keys():
+                    await conn.execute(
+                        """INSERT INTO categories(user_id, project_id, name,
+                                                  is_system, is_active, created_at)
+                           VALUES($1, $2, $3, FALSE, TRUE, CURRENT_TIMESTAMP)""",
+                        str(user_id), project_id, cat_name
+                    )
+
+    # Директорию создаём ПОСЛЕ коммита: ошибка ФС не должна откатывать уже
+    # созданный проект (директория без записи в БД безвредна).
+    try:
+        from utils.excel import create_user_dir
+        user_dir = create_user_dir(user_id)
+        project_dir = os.path.join(user_dir, "projects", str(project_id))
+        os.makedirs(project_dir, exist_ok=True)
+    except OSError as e:
+        log_error(logger, e, "create_project_dir_error",
+                  user_id=user_id, project_id=project_id)
+
+    log_event(logger, "project_created", user_id=user_id, project_id=project_id,
+              template_key=template_key, categories_isolated=isolated)
+
     return {
         'success': True,
         'project_id': project_id,
         'project_name': project_name,
+        'categories_isolated': isolated,
+        'template_key': template_key,
         'message': f"Проект '{project_name}' создан"
     }
 
@@ -126,7 +175,7 @@ async def get_all_projects(user_id: int) -> list:
         """,
         str(user_id)
     )
-    
+
     return [
         {
             'project_id': r['project_id'],
@@ -219,7 +268,7 @@ async def get_user_role_in_project(user_id: int, project_id: int) -> Optional[st
     Get user's role in project. Returns 'owner', 'editor', 'viewer', or None if not a member
     """
     from utils.logger import log_event
-    
+
     row = await db.fetchrow(
         """
         SELECT 
@@ -245,7 +294,7 @@ async def get_user_role_in_project(user_id: int, project_id: int) -> Optional[st
              member_id=row['member_id'] if row else None,
              member_role=row['member_role'] if row else None,
              computed_role=row['role'] if row else None)
-    
+
     return row['role'] if row else None
 
 
@@ -282,24 +331,24 @@ async def set_active_project(user_id: int, project_id: Optional[int]) -> dict:
         "INSERT INTO users(user_id) VALUES($1) ON CONFLICT (user_id) DO NOTHING",
         str(user_id),
     )
-    
+
     if project_id is None:
         await db.execute(
             "UPDATE users SET active_project_id = NULL WHERE user_id = $1",
             str(user_id)
         )
         return {'success': True, 'project_id': None, 'message': "Переключено на общие расходы"}
-    
+
     # Check if user has access to the project (owner or member)
     project = await get_project_by_id(user_id, project_id)
     if not project:
         return {'success': False, 'message': "Проект не найден или у вас нет доступа"}
-    
+
     await db.execute(
         "UPDATE users SET active_project_id = $2 WHERE user_id = $1",
         str(user_id), project_id
     )
-    
+
     return {
         'success': True,
         'project_id': project_id,
@@ -316,7 +365,7 @@ async def get_active_project(user_id: int) -> Optional[dict]:
     )
     if not row or row['active_project_id'] is None:
         return None
-    
+
     return await get_project_by_id(user_id, row['active_project_id'])
 
 async def get_project_stats(user_id: int, project_id: int) -> dict:
@@ -325,8 +374,8 @@ async def get_project_stats(user_id: int, project_id: int) -> dict:
     """
     # Verify user has access to project
     if not await is_project_member(user_id, project_id):
-        return {'count': 0, 'total': 0.0}
-    
+        return {'count': 0, 'total': 0.0, 'by_category': {}, 'by_participant': {}}
+
     row = await db.fetchrow(
         """
         SELECT COUNT(*) as count, COALESCE(SUM(amount), 0) as total
@@ -335,9 +384,43 @@ async def get_project_stats(user_id: int, project_id: int) -> dict:
         """,
         project_id
     )
+    category_rows = await db.fetch(
+        """
+        SELECT c.name as category, COALESCE(SUM(e.amount), 0) as total
+        FROM expenses e
+        JOIN categories c ON e.category_id = c.category_id
+        WHERE e.project_id = $1
+        GROUP BY c.name
+        ORDER BY total DESC
+        """,
+        project_id
+    )
+
+    participant_rows = await db.fetch(
+        """
+        SELECT e.user_id, COALESCE(SUM(e.amount), 0) as total
+        FROM expenses e
+        WHERE e.project_id = $1
+        GROUP BY e.user_id
+        ORDER BY total DESC
+        """,
+        project_id
+    )
+
+    by_category = {
+        r['category']: float(r['total'])
+        for r in category_rows
+    }
+    by_participant = {
+        (f"ID: {r['user_id']}" if r['user_id'] is not None else "Неизвестный участник"): float(r['total'])
+        for r in participant_rows
+    }
+
     return {
         'count': row['count'],
-        'total': float(row['total'])
+        'total': float(row['total']),
+        'by_category': by_category,
+        'by_participant': by_participant,
     }
 
 async def delete_project(user_id: int, project_id: int) -> dict:
@@ -466,20 +549,20 @@ async def create_invitation(
         project = await get_project_by_id(user_id, project_id)
         if not project:
             return {'success': False, 'message': "Проект не найден или у вас нет доступа"}
-        
+
         if not project['is_owner']:
             return {'success': False, 'message': "Только владелец может приглашать участников"}
-        
+
         # Validate role
         if role not in ['editor', 'viewer']:
             return {'success': False, 'message': "Неверная роль. Используйте 'editor' или 'viewer'"}
-        
+
         # Generate unique token
         token = secrets.token_urlsafe(32)
-        
+
         # Calculate expiration time
         expires_at = datetime.datetime.now() + datetime.timedelta(hours=expires_in_hours)
-        
+
         # Store invitation in database
         await db.execute(
             """
@@ -492,10 +575,10 @@ async def create_invitation(
             role,
             expires_at
         )
-        
+
         log_event(logger, "invitation_created", user_id=user_id,
                  project_id=project_id, role=role, token_preview=token[:8])
-        
+
         return {
             'success': True,
             'token': token,
@@ -505,7 +588,7 @@ async def create_invitation(
             'expires_at': expires_at.isoformat(),
             'message': f"Приглашение создано для роли '{role}'"
         }
-        
+
     except Exception as e:
         log_error(logger, e, "create_invitation_error",
                  user_id=user_id, project_id=project_id, role=role)
@@ -549,12 +632,12 @@ async def accept_invitation(user_id: int, token: str) -> Dict:
             """,
             token
         )
-        
+
         if not invitation:
             log_event(logger, "invitation_not_found", user_id=user_id,
                      token_preview=token[:8] if token else "empty")
             return {'success': False, 'message': "Приглашение не найдено"}
-        
+
         # Check if invitation has expired
         if invitation['expires_at'] < datetime.datetime.now():
             # Clean up expired invitation
@@ -566,7 +649,7 @@ async def accept_invitation(user_id: int, token: str) -> Dict:
                      project_id=invitation['project_id'],
                      token_preview=token[:8])
             return {'success': False, 'message': "Приглашение истекло"}
-        
+
         # Check if user is already a member or owner
         existing_role = await get_user_role_in_project(user_id, invitation['project_id'])
         if existing_role:
@@ -576,7 +659,7 @@ async def accept_invitation(user_id: int, token: str) -> Dict:
                 'success': False,
                 'message': f"Вы уже участник проекта '{invitation['project_name']}' с ролью '{existing_role}'"
             }
-        
+
         # Все операции принятия приглашения выполняем атомарно в одной транзакции:
         # добавление в project_members, обновление активного проекта и удаление токена.
         # Если любой шаг упадёт — откатываются все изменения, токен остаётся валидным.
@@ -610,12 +693,12 @@ async def accept_invitation(user_id: int, token: str) -> Dict:
                 "DELETE FROM project_invites WHERE token = $1",
                 token
             )
-        
+
         log_event(logger, "invitation_accepted", user_id=user_id,
                  project_id=invitation['project_id'],
                  role=invitation['role'],
                  inviter_id=invitation['inviter_id'])
-        
+
         return {
             'success': True,
             'project_id': invitation['project_id'],
@@ -623,7 +706,7 @@ async def accept_invitation(user_id: int, token: str) -> Dict:
             'role': invitation['role'],
             'message': f"Вы добавлены в проект '{invitation['project_name']}' с ролью '{invitation['role']}'"
         }
-        
+
     except Exception as e:
         log_error(logger, e, "accept_invitation_error",
                  user_id=user_id, token_preview=token[:8] if token else "empty")
@@ -653,42 +736,42 @@ async def remove_member(
         project = await get_project_by_id(owner_id, project_id)
         if not project:
             return {'success': False, 'message': "Проект не найден или у вас нет доступа"}
-        
+
         if not project['is_owner']:
             return {'success': False, 'message': "Только владелец может удалять участников"}
-        
+
         # Check if trying to remove the owner
         if str(member_id) == project['owner_id']:
             return {'success': False, 'message': "Нельзя удалить владельца проекта"}
-        
+
         # Check if member exists
         member_role = await get_user_role_in_project(member_id, project_id)
         if not member_role or member_role == 'owner':
             return {'success': False, 'message': "Участник не найден в этом проекте"}
-        
+
         # Remove from project_members
         await db.execute(
             "DELETE FROM project_members WHERE project_id = $1 AND user_id = $2",
             project_id,
             str(member_id)
         )
-        
+
         # Reset active_project_id if this was their active project
         await db.execute(
             "UPDATE users SET active_project_id = NULL WHERE user_id = $1 AND active_project_id = $2",
             str(member_id),
             project_id
         )
-        
+
         log_event(logger, "member_removed", owner_id=owner_id,
                  project_id=project_id, member_id=member_id,
                  removed_role=member_role)
-        
+
         return {
             'success': True,
-            'message': f"Участник удален из проекта"
+            'message': "Участник удален из проекта"
         }
-        
+
     except Exception as e:
         log_error(logger, e, "remove_member_error",
                  owner_id=owner_id, project_id=project_id, member_id=member_id)
@@ -720,26 +803,26 @@ async def change_member_role(
         project = await get_project_by_id(owner_id, project_id)
         if not project:
             return {'success': False, 'message': "Проект не найден или у вас нет доступа"}
-        
+
         if not project['is_owner']:
             return {'success': False, 'message': "Только владелец может изменять роли"}
-        
+
         # Validate new role
         if new_role not in ['editor', 'viewer']:
             return {'success': False, 'message': "Неверная роль. Используйте 'editor' или 'viewer'"}
-        
+
         # Check if trying to change owner's role
         if str(member_id) == project['owner_id']:
             return {'success': False, 'message': "Нельзя изменить роль владельца"}
-        
+
         # Check if member exists
         current_role = await get_user_role_in_project(member_id, project_id)
         if not current_role or current_role == 'owner':
             return {'success': False, 'message': "Участник не найден в этом проекте"}
-        
+
         if current_role == new_role:
             return {'success': False, 'message': f"Участник уже имеет роль '{new_role}'"}
-        
+
         # Update role
         await db.execute(
             "UPDATE project_members SET role = $1 WHERE project_id = $2 AND user_id = $3",
@@ -747,16 +830,16 @@ async def change_member_role(
             project_id,
             str(member_id)
         )
-        
+
         log_event(logger, "member_role_changed", owner_id=owner_id,
                  project_id=project_id, member_id=member_id,
                  old_role=current_role, new_role=new_role)
-        
+
         return {
             'success': True,
             'message': f"Роль участника изменена с '{current_role}' на '{new_role}'"
         }
-        
+
     except Exception as e:
         log_error(logger, e, "change_role_error",
                  owner_id=owner_id, project_id=project_id,
@@ -781,36 +864,36 @@ async def leave_project(user_id: int, project_id: int) -> Dict:
         project = await get_project_by_id(user_id, project_id)
         if not project:
             return {'success': False, 'message': "Проект не найден или у вас нет доступа"}
-        
+
         # Owner cannot leave
         if project['is_owner']:
             return {
                 'success': False,
                 'message': "Владелец не может покинуть проект. Сначала передайте владение или удалите проект."
             }
-        
+
         # Remove from project_members
         await db.execute(
             "DELETE FROM project_members WHERE project_id = $1 AND user_id = $2",
             project_id,
             str(user_id)
         )
-        
+
         # Reset active_project_id if this was their active project
         await db.execute(
             "UPDATE users SET active_project_id = NULL WHERE user_id = $1 AND active_project_id = $2",
             str(user_id),
             project_id
         )
-        
+
         log_event(logger, "user_left_project", user_id=user_id,
                  project_id=project_id, project_name=project['project_name'])
-        
+
         return {
             'success': True,
             'message': f"Вы покинули проект '{project['project_name']}'"
         }
-        
+
     except Exception as e:
         log_error(logger, e, "leave_project_error",
                  user_id=user_id, project_id=project_id)
@@ -831,13 +914,13 @@ async def cleanup_expired_invitations() -> int:
         )
         # Extract number from result like "DELETE 5"
         deleted_count = int(result.split()[-1]) if result and result.startswith("DELETE") else 0
-        
+
         if deleted_count > 0:
             log_event(logger, "expired_invitations_cleaned",
                      count=deleted_count)
-        
+
         return deleted_count
-        
+
     except Exception as e:
         log_error(logger, e, "cleanup_invitations_error")
         return 0

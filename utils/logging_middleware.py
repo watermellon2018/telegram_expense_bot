@@ -2,8 +2,10 @@
 Middleware для логирования всех входящих обновлений
 """
 import uuid
+
 from telegram import Update
 from telegram.ext import ContextTypes, TypeHandler
+
 from utils.logger import get_logger, log_event
 
 logger = get_logger("telegram.updates")
@@ -18,12 +20,12 @@ async def log_update(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     """
     # Генерируем уникальный request_id для этого update
     request_id = str(uuid.uuid4())
-    
+
     # Сохраняем в context для доступа из всех обработчиков
     context.user_data['request_id'] = request_id
-    
+
     user_id = update.effective_user.id if update.effective_user else None
-    
+
     # Логируем сообщения
     if update.message:
         log_event(
@@ -33,7 +35,7 @@ async def log_update(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
             status="received",
             user_id=user_id
         )
-    
+
     # Логируем callback queries
     elif update.callback_query:
         log_event(
@@ -43,7 +45,7 @@ async def log_update(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
             status="received",
             user_id=user_id
         )
-    
+
     # Логируем другие типы обновлений
     else:
         log_event(
