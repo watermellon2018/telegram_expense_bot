@@ -4,6 +4,7 @@ from handlers.analysis import register_analysis_handlers
 from handlers.budget import register_budget_handlers
 from handlers.cashback import register_cashback_handlers
 from handlers.category import register_category_handlers
+from handlers.currency import register_currency_handlers
 from handlers.duplicate import register_duplicate_handlers
 from handlers.expense import register_expense_handlers
 from handlers.expense_notifications import register_expense_notification_handlers
@@ -27,6 +28,7 @@ def register_all_handlers(application):
     register_invitation_handlers(application)
     register_project_management_handlers(application)
     register_start_handlers(application)
+    register_currency_handlers(application)
 
     # Menu handlers must be above generic expense text handler.
     register_analysis_handlers(application)

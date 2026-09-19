@@ -16,7 +16,21 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+pytestmark = pytest.mark.usefixtures("mock_currency_context")
+
 from utils import duplicate_service, expense_creation
+
+
+@pytest.fixture(autouse=True)
+def expense_permissions(monkeypatch):
+    monkeypatch.setattr('utils.projects.get_user_role_in_project', AsyncMock(return_value='editor'))
+
+
+def snapshot(amount):
+    from decimal import Decimal
+    return {'amount': Decimal(str(amount)), 'currency': 'RUB', 'reporting_currency': 'RUB',
+            'reporting_amount': Decimal(str(amount)), 'fx_rate': Decimal(1),
+            'fx_date': datetime.date.today(), 'fx_source': 'identity'}
 
 
 class FakeConn:
@@ -30,6 +44,10 @@ class FakeConn:
         return "INSERT 0 1"
 
     async def fetchval(self, sql, *args):
+        if "SELECT pm.role" in sql:
+            return "editor"
+        if "SELECT EXISTS" in sql:
+            return True
         # эмулируем RETURNING id
         return self.new_id
 
@@ -104,6 +122,7 @@ async def test_confirm_pending_expense_creates_once_then_already():
         "author_id": "111", "amount": 1000, "category_id": 5,
         "category_name": "кафе", "description": "обед", "project_id": 1,
     }
+    draft["money"] = snapshot(draft["amount"])
     draft_id = expense_creation._store_draft(bot_data, 111, draft)
 
     with _patch_transaction(conn), \
@@ -146,12 +165,19 @@ async def test_concurrent_confirmations_create_single_expense():
         "author_id": "111", "amount": 500, "category_id": 3,
         "category_name": "такси", "description": "", "project_id": 1,
     }
+    draft["money"] = snapshot(draft["amount"])
     draft_id = expense_creation._store_draft(bot_data, 111, draft)
 
     fetchval_calls = {"n": 0}
 
     async def counting_fetchval(sql, *args):
+        if "SELECT pm.role" in sql:
+            return "editor"
+        if "SELECT EXISTS" in sql:
+            return True
+        assert "INSERT INTO expenses" in sql
         fetchval_calls["n"] += 1
+        await asyncio.sleep(0)
         return 900
 
     conn.fetchval = counting_fetchval

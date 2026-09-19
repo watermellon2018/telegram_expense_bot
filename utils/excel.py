@@ -14,7 +14,7 @@ import pandas as pd
 import config
 from utils.logger import get_logger, log_error, log_event
 
-from . import db
+from . import currencies, db
 
 logger = get_logger("utils.excel")
 
@@ -51,7 +51,7 @@ def _format_participant_label(participant_user_id) -> str:
     return f"ID: {participant_user_id}"
 
 
-async def add_expense(user_id, amount, category_id, description: str = "", project_id=None):
+async def add_expense(user_id, amount, category_id, description: str = "", project_id=None, *, currency=None):
     """
     Добавляет новый расход в БД.
     Если project_id указан, добавляет расход в проект.
@@ -156,21 +156,11 @@ async def add_expense(user_id, amount, category_id, description: str = "", proje
                      expense_project_id=project_id)
             return False
 
-        # 3. Вставляем сам расход
-        await db.execute(
-            """
-            INSERT INTO expenses(user_id, project_id, date, time, amount, category_id, description, month)
-            VALUES($1, $2, $3, $4, $5, $6, $7, $8)
-            """,
-            str(user_id),
-            project_id,
-            date_val,
-            time_val,
-            float(amount),
-            category_id,
-            description or None,
-            month,
+        expense_id = await create_expense(
+            user_id, amount, category_id, description, project_id, currency=currency,
         )
+        if expense_id is None:
+            return False
 
         duration = time.time() - start_time
         log_event(expense_logger, "add_expense_success", user_id=user_id, project_id=project_id,
@@ -199,6 +189,8 @@ async def create_expense(
     project_id=None,
     *,
     conn=None,
+    currency: Optional[str] = None,
+    money: Optional[dict] = None,
 ) -> Optional[int]:
     """
     Создаёт расход и возвращает его id (в отличие от add_expense, который
@@ -226,16 +218,60 @@ async def create_expense(
     sql = """
         INSERT INTO expenses
             (user_id, project_id, date, time, amount, category_id, description, month,
-             source_type, created_by_system, created_at)
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'manual', FALSE, now())
+             source_type, created_by_system, created_at,
+             currency, reporting_amount, reporting_currency, fx_rate, fx_date, fx_source)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'manual', FALSE, now(),
+                $9, $10, $11, $12, $13, $14)
         RETURNING id
     """
-    params = (
-        str(user_id), project_id, date_val, time_val,
-        float(amount), int(category_id), description or None, now.month,
-    )
 
     try:
+        from utils.permissions import Permission, has_permission
+
+        if not await has_permission(int(user_id), project_id, Permission.ADD_EXPENSE):
+            return None
+        if money is None:
+            money = await currencies.prepare_money(int(user_id), project_id, amount, currency, date_val)
+        date_val = money.get("operation_date", date_val)
+        if conn is None:
+            async with db.transaction() as connection:
+                async with connection.transaction():
+                    return await create_expense(
+                        user_id, amount, category_id, description, project_id,
+                        conn=connection, money=money,
+                    )
+        await currencies.validate_money_context(conn, int(user_id), project_id, money)
+        # Recheck role/category on the same connection as the write.
+        if project_id is not None:
+            role = await conn.fetchval(
+                """SELECT pm.role FROM project_members pm
+                   JOIN projects p USING (project_id)
+                   WHERE pm.user_id=$1 AND pm.project_id=$2 AND p.deleted_at IS NULL
+                   FOR SHARE OF pm""", str(user_id), project_id,
+            )
+            if role not in ("owner", "editor"):
+                return None
+        valid_category = await conn.fetchval(
+            """SELECT EXISTS (
+                 SELECT 1 FROM categories c
+                 WHERE c.category_id=$1 AND c.is_active=TRUE AND (
+                   ($3::integer IS NULL AND c.project_id IS NULL AND c.user_id=$2)
+                   OR ($3::integer IS NOT NULL AND (
+                     c.project_id=$3 OR (c.project_id IS NULL AND EXISTS (
+                       SELECT 1 FROM projects p WHERE p.project_id=$3
+                       AND NOT p.categories_isolated AND p.user_id=c.user_id
+                     ))
+                   ))
+                 ))""", int(category_id), str(user_id), project_id,
+        )
+        if not valid_category:
+            return None
+        params = (
+            str(user_id), project_id, date_val, time_val,
+            money["amount"], int(category_id), description or None, date_val.month,
+            money["currency"], money["reporting_amount"], money["reporting_currency"],
+            money["fx_rate"], money["fx_date"], money["fx_source"],
+        )
         if conn is not None:
             expense_id = await conn.fetchval(sql, *params)
         else:
@@ -278,7 +314,8 @@ async def get_expense_by_id(expense_id: int, include_deleted: bool = False) -> O
                 """
                 SELECT e.id, e.user_id, e.project_id, e.date, e.time, e.amount,
                        e.category_id, e.description, e.month, e.created_at, e.deleted_at,
-                       c.name AS category_name
+                       e.currency, e.reporting_amount, e.reporting_currency,
+                       e.fx_rate, e.fx_date, e.fx_source, c.name AS category_name
                 FROM expenses e
                 JOIN categories c ON e.category_id = c.category_id
                 WHERE e.id = $1
@@ -290,7 +327,8 @@ async def get_expense_by_id(expense_id: int, include_deleted: bool = False) -> O
                 """
                 SELECT e.id, e.user_id, e.project_id, e.date, e.time, e.amount,
                        e.category_id, e.description, e.month, e.created_at, e.deleted_at,
-                       c.name AS category_name
+                       e.currency, e.reporting_amount, e.reporting_currency,
+                       e.fx_rate, e.fx_date, e.fx_source, c.name AS category_name
                 FROM expenses e
                 JOIN categories c ON e.category_id = c.category_id
                 WHERE e.id = $1 AND e.deleted_at IS NULL
@@ -359,7 +397,7 @@ async def get_month_expenses(user_id, month=None, year=None, project_id=None):
             rows = await db.fetch(
                 """
                 SELECT e.amount, c.name as category, e.user_id
-                FROM expenses e
+                FROM reporting_expenses e
                 JOIN categories c ON e.category_id = c.category_id
                 WHERE e.project_id = $1
                   AND e.month = $2
@@ -373,7 +411,7 @@ async def get_month_expenses(user_id, month=None, year=None, project_id=None):
             rows = await db.fetch(
                 """
                 SELECT e.amount, c.name as category
-                FROM expenses e
+                FROM reporting_expenses e
                 JOIN categories c ON e.category_id = c.category_id
                 WHERE e.user_id = $1
                   AND e.month = $2
@@ -409,6 +447,7 @@ async def get_month_expenses(user_id, month=None, year=None, project_id=None):
             "by_category": by_category,
             "by_participant": by_participant,
             "count": len(rows),
+            "currency": await currencies.get_reporting_currency(user_id, project_id),
         }
         log_event(logger, "get_month_expenses_success", user_id=user_id,
                  month=month, year=year, project_id=project_id,
@@ -486,7 +525,7 @@ async def get_category_expenses(user_id, category_id, year=None, project_id=None
             rows = await db.fetch(
                 """
                 SELECT amount, month
-                FROM expenses
+                FROM reporting_expenses
                 WHERE category_id = $1
                   AND EXTRACT(YEAR FROM date) = $2
                   AND project_id = $3
@@ -499,7 +538,7 @@ async def get_category_expenses(user_id, category_id, year=None, project_id=None
             rows = await db.fetch(
                 """
                 SELECT amount, month
-                FROM expenses
+                FROM reporting_expenses
                 WHERE user_id = $1
                   AND category_id = $2
                   AND EXTRACT(YEAR FROM date) = $3
@@ -528,6 +567,7 @@ async def get_category_expenses(user_id, category_id, year=None, project_id=None
             "total": total,
             "by_month": by_month,
             "count": len(rows),
+            "currency": await currencies.get_reporting_currency(user_id, project_id),
         }
         log_event(logger, "get_category_expenses_success", user_id=user_id,
                  category_id=category_id, year=year, project_id=project_id,
@@ -569,8 +609,9 @@ async def get_all_expenses(user_id, year=None, project_id=None):
             rows = await db.fetch(
                 """
                 SELECT e.date, e.time, e.amount, c.name as category, e.description, 
-                       e.month, e.project_id, e.user_id
-                FROM expenses e
+                       e.month, e.project_id, e.user_id, e.original_amount, e.currency,
+                       e.reporting_currency, e.reporting_amount, e.fx_rate, e.fx_date, e.fx_source
+                FROM reporting_expenses e
                 JOIN categories c ON e.category_id = c.category_id
                 WHERE e.project_id = $1
                   AND EXTRACT(YEAR FROM e.date) = $2
@@ -583,8 +624,9 @@ async def get_all_expenses(user_id, year=None, project_id=None):
             rows = await db.fetch(
                 """
                 SELECT e.date, e.time, e.amount, c.name as category, e.description, 
-                       e.month, e.project_id, e.user_id
-                FROM expenses e
+                       e.month, e.project_id, e.user_id, e.original_amount, e.currency,
+                       e.reporting_currency, e.reporting_amount, e.fx_rate, e.fx_date, e.fx_source
+                FROM reporting_expenses e
                 JOIN categories c ON e.category_id = c.category_id
                 WHERE e.user_id = $1
                   AND EXTRACT(YEAR FROM e.date) = $2
@@ -642,7 +684,7 @@ async def get_day_expenses(user_id, date=None, project_id=None):
             rows = await db.fetch(
                 """
                 SELECT e.amount, c.name as category, e.user_id
-                FROM expenses e
+                FROM reporting_expenses e
                 JOIN categories c ON e.category_id = c.category_id
                 WHERE e.project_id = $1
                   AND e.date = $2
@@ -654,7 +696,7 @@ async def get_day_expenses(user_id, date=None, project_id=None):
             rows = await db.fetch(
                 """
                 SELECT e.amount, c.name as category
-                FROM expenses e
+                FROM reporting_expenses e
                 JOIN categories c ON e.category_id = c.category_id
                 WHERE e.user_id = $1
                   AND e.date = $2
@@ -690,6 +732,7 @@ async def get_day_expenses(user_id, date=None, project_id=None):
             "by_category": by_category,
             "by_participant": by_participant,
             "count": len(rows),
+            "currency": await currencies.get_reporting_currency(user_id, project_id),
         }
         log_event(logger, "get_day_expenses_success", user_id=user_id,
                  date=str(target_date), project_id=project_id,

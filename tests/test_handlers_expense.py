@@ -4,11 +4,14 @@
 from unittest.mock import AsyncMock, patch
 
 import pytest
+
+pytestmark = pytest.mark.usefixtures("mock_currency_context")
 from telegram.ext import ConversationHandler
 
 import config
 from handlers.expense import (
     CHOOSING_CATEGORY,
+    CHOOSING_CURRENCY,
     ENTERING_AMOUNT,
     add_command,
     cancel,
@@ -26,10 +29,10 @@ async def test_add_command(mock_update, mock_context):
     # Проверяем, что запрашивается сумма
     mock_update.message.reply_text.assert_called_once()
     call_args = mock_update.message.reply_text.call_args[0][0]
-    assert "сумму" in call_args.lower()
+    assert "валюту" in call_args.lower()
 
     # Проверяем, что возвращается правильное состояние
-    assert result == ENTERING_AMOUNT
+    assert result == CHOOSING_CURRENCY
 
 
 @pytest.mark.asyncio
@@ -96,7 +99,7 @@ async def test_handle_category_callback_valid(mock_update, mock_context):
         'is_active': True
     }
 
-    with patch('handlers.expense.categories.get_category_by_id', new=AsyncMock(return_value=mock_category)):
+    with patch('handlers.expense.categories.get_categories_for_user_project', new=AsyncMock(return_value=[mock_category])):
         result = await handle_category_callback(mock_update, mock_context)
 
         # Проверяем, что category_id сохранен
@@ -120,36 +123,54 @@ async def test_handle_category_callback_invalid(mock_update, mock_context):
 
     mock_context.user_data['amount'] = 100.0
 
-    with patch('handlers.expense.categories.get_category_by_id', new=AsyncMock(return_value=None)):
+    with patch('handlers.expense.categories.get_categories_for_user_project', new=AsyncMock(return_value=[])):
         result = await handle_category_callback(mock_update, mock_context)
 
         # Проверяем, что выведено сообщение об ошибке
         mock_update.callback_query.edit_message_text.assert_called_once()
         call_args = mock_update.callback_query.edit_message_text.call_args[0][0]
-        assert "не найдена" in call_args.lower() or "ошибка" in call_args.lower()
+        assert "недоступна" in call_args.lower() or "ошибка" in call_args.lower()
 
 
 @pytest.mark.asyncio
 async def test_handle_description_with_text(mock_update, mock_context):
     """Тест обработки описания с текстом (личный расход, создаётся сразу)."""
+    import asyncio
+    from decimal import Decimal
+
     mock_update.message.text = "покупка в магазине"
     mock_context.user_data.update({
-        'amount': 100.0,
+        'amount': Decimal('100'),
         'category_id': 1,
-        'category_name': 'продукты'
+        'category_name': 'продукты',
+        'expense_project_id': None,
+        'expense_currency': 'RUB',
     })
     mock_context.bot_data = {}
+    money = {'amount': Decimal('100'), 'currency': 'RUB',
+             'reporting_amount': Decimal('100'), 'reporting_currency': 'RUB', 'fx_source': 'identity'}
 
     # feature_110: handle_description теперь идёт через expense_creation.process_new_expense.
     # Для личного расхода (project_id=None) проверка дубля не выполняется — статус created.
     with patch('utils.expense_creation.process_new_expense',
-               new=AsyncMock(return_value={'status': 'created', 'expense_id': 1})), \
+               new=AsyncMock(return_value={'status': 'created', 'expense_id': 1, 'money': money})) as create, \
          patch('handlers.expense.check_user_budget_now', new=AsyncMock()), \
-         patch('handlers.expense.projects.get_project_by_id', new=AsyncMock(return_value=None)):
+         patch('handlers.expense.projects.get_project_by_id', new=AsyncMock(return_value=None)), \
+         patch('handlers.recurring.suggest_recurring_if_pattern', new=AsyncMock()) as suggest:
         result = await handle_description(mock_update, mock_context)
+        await asyncio.sleep(0)
+
+        create.assert_awaited_once_with(
+            mock_context.bot, author_id=mock_update.effective_user.id, amount=Decimal('100'),
+            category_id=1, category_name='продукты', description='покупка в магазине',
+            project_id=None, bot_data=mock_context.bot_data, currency='RUB',
+        )
+        suggest.assert_awaited_once()
+        assert suggest.await_args.kwargs['currency'] == 'RUB'
 
         # Проверяем, что отправлено подтверждение
         mock_update.message.reply_text.assert_called()
+        assert '100.00 RUB' in mock_update.message.reply_text.call_args.args[0]
 
         # Проверяем, что conversation завершен
         assert result == ConversationHandler.END

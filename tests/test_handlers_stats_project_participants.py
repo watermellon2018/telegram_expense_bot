@@ -5,6 +5,8 @@ from unittest.mock import AsyncMock, mock_open, patch
 
 import pytest
 
+pytestmark = pytest.mark.usefixtures("mock_currency_context")
+
 from handlers.stats import month_command, stats_command
 
 
@@ -22,7 +24,7 @@ async def test_month_command_sends_participant_chart_in_project_mode(mock_update
          patch("handlers.stats.incomes.get_month_incomes", new=AsyncMock(return_value={"total": 0.0, "count": 0, "by_category": {}})), \
          patch("utils.budgets.get_or_inherit_budget", new=AsyncMock(return_value=None)), \
          patch("handlers.stats.helpers.format_month_expenses", return_value="report"), \
-         patch("handlers.stats.helpers.add_project_context_to_report", new=AsyncMock(side_effect=lambda r, *_: r)), \
+         patch("handlers.stats.helpers.add_project_context_to_report", new=AsyncMock(side_effect=lambda r, *_, **__: r)), \
          patch("handlers.stats.visualization.create_monthly_pie_chart", new=AsyncMock(return_value=None)), \
          patch("handlers.stats.visualization.create_monthly_participant_distribution_chart", new=AsyncMock(return_value="participants.png")), \
          patch("handlers.stats.os.path.exists", return_value=True), \
@@ -47,7 +49,7 @@ async def test_month_command_skips_participant_chart_when_no_data(mock_update, m
          patch("handlers.stats.incomes.get_month_incomes", new=AsyncMock(return_value={"total": 0.0, "count": 0, "by_category": {}})), \
          patch("utils.budgets.get_or_inherit_budget", new=AsyncMock(return_value=None)), \
          patch("handlers.stats.helpers.format_month_expenses", return_value="report"), \
-         patch("handlers.stats.helpers.add_project_context_to_report", new=AsyncMock(side_effect=lambda r, *_: r)), \
+         patch("handlers.stats.helpers.add_project_context_to_report", new=AsyncMock(side_effect=lambda r, *_, **__: r)), \
          patch("handlers.stats.visualization.create_monthly_pie_chart", new=AsyncMock(return_value=None)), \
          patch("handlers.stats.visualization.create_monthly_participant_distribution_chart", new=AsyncMock(return_value=None)):
         await month_command(mock_update, mock_context)
@@ -60,7 +62,8 @@ async def test_stats_command_passes_project_id_to_category_chart(mock_update, mo
     """В project-режиме /stats должен строить category chart с project_id."""
     mock_context.user_data["active_project_id"] = 42
 
-    with patch("handlers.stats.visualization.create_category_distribution_chart", new=AsyncMock(return_value=None)) as category_chart_mock, \
+    with patch("utils.projects.get_project_by_id", new=AsyncMock(return_value={"project_name": "Япония"})), \
+         patch("handlers.stats.visualization.create_category_distribution_chart", new=AsyncMock(return_value=None)) as category_chart_mock, \
          patch("handlers.stats.visualization.create_budget_comparison_chart", new=AsyncMock(return_value=None)), \
          patch("handlers.stats.visualization.create_income_distribution_chart", new=AsyncMock(return_value=None)), \
          patch("handlers.stats.visualization.create_income_vs_expense_chart", new=AsyncMock(return_value=None)), \

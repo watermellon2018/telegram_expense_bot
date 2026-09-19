@@ -47,75 +47,38 @@ async def test_create_name_step_rejects_duplicate(mock_update, mock_context):
 
 
 @pytest.mark.asyncio
-async def test_create_template_none_creates_plain_project(mock_update_with_callback, mock_context):
-    """tpl_none → create_project с template_key=None, проект активируется."""
-    mock_update_with_callback.callback_query.data = "tpl_none"
-    mock_context.user_data["new_project_name"] = "Поездка"
-
-    create_mock = AsyncMock(return_value={
-        "success": True, "project_id": 50, "project_name": "Поездка",
-        "categories_isolated": False, "template_key": None, "message": "Проект 'Поездка' создан",
-    })
-    with patch("handlers.project.projects.create_project", new=create_mock), \
-         patch("handlers.project.projects.set_active_project", new=AsyncMock()):
-        state = await project_handler.button_project_create_template(mock_update_with_callback, mock_context)
-
-    assert state == ConversationHandler.END
-    create_mock.assert_awaited_once()
-    # template_key передан как None (третий позиционный аргумент)
-    assert create_mock.call_args.args[2] is None
-    assert mock_context.user_data["active_project_id"] == 50
-
-
-@pytest.mark.asyncio
-async def test_create_template_vacation_creates_isolated_project(mock_update_with_callback, mock_context):
-    """tpl_vacation → create_project с template_key='vacation', в ответе упомянута изоляция."""
-    mock_update_with_callback.callback_query.data = "tpl_vacation"
-    mock_context.user_data["new_project_name"] = "Отпуск"
-
-    create_mock = AsyncMock(return_value={
-        "success": True, "project_id": 60, "project_name": "Отпуск",
-        "categories_isolated": True, "template_key": "vacation", "message": "Проект 'Отпуск' создан",
-    })
-    with patch("handlers.project.projects.create_project", new=create_mock), \
-         patch("handlers.project.projects.set_active_project", new=AsyncMock()):
-        state = await project_handler.button_project_create_template(mock_update_with_callback, mock_context)
-
-    assert state == ConversationHandler.END
-    assert create_mock.call_args.args[2] == "vacation"
-    body = mock_update_with_callback.callback_query.edit_message_text.call_args.args[0]
-    assert "перелёт" in body  # перечислены категории шаблона
-    assert "общие категории" in body.lower()  # упомянуто, что глобальные не показываются
+@pytest.mark.parametrize('template', [None, 'vacation'])
+async def test_project_creation_collects_currency_before_writing(mock_update_with_callback, mock_context, template):
+    u = mock_update_with_callback
+    u.callback_query.data = 'tpl_' + (template or 'none')
+    mock_context.user_data['new_project_name'] = 'Поездка'
+    create = AsyncMock(return_value={'success': True, 'project_id': 50})
+    with patch('handlers.project.projects.create_project', create), patch('handlers.project.projects.set_active_project', AsyncMock(return_value={'success': True})):
+        assert await project_handler.button_project_create_template(u, mock_context) == project_handler.CHOOSING_REPORT_CURRENCY
+        create.assert_not_called()
+        u.callback_query.data = 'proj_report_USD'
+        assert await project_handler.project_report_currency(u, mock_context) == project_handler.CHOOSING_INPUT_CURRENCY
+        u.callback_query.data = 'proj_input_JPY'
+        assert await project_handler.project_input_currency(u, mock_context) == project_handler.ENTERING_FALLBACK_RATE
+        create.assert_not_called()
+        assert await project_handler.finish_project_creation(u, mock_context, rate='0.006') == ConversationHandler.END
+    create.assert_awaited_once_with(u.effective_user.id, 'Поездка', template, reporting_currency='USD', input_currency='JPY', fallback_rate='0.006')
+    assert mock_context.user_data['active_project_id'] == 50
 
 
 @pytest.mark.asyncio
-async def test_create_template_expired_session(mock_update_with_callback, mock_context):
-    """Если имя потерялось из user_data — сообщение об истёкшей сессии, проект не создаётся."""
-    mock_update_with_callback.callback_query.data = "tpl_vacation"
-    # new_project_name отсутствует
-
-    create_mock = AsyncMock()
-    with patch("handlers.project.projects.create_project", new=create_mock):
-        state = await project_handler.button_project_create_template(mock_update_with_callback, mock_context)
-
-    assert state == ConversationHandler.END
-    create_mock.assert_not_called()
+async def test_expired_template_does_not_create(mock_update_with_callback, mock_context):
+    mock_update_with_callback.callback_query.data = 'tpl_vacation'
+    with patch('handlers.project.projects.create_project', AsyncMock()) as create:
+        assert await project_handler.button_project_create_template(mock_update_with_callback, mock_context) == ConversationHandler.END
+        create.assert_not_called()
 
 
 @pytest.mark.asyncio
-async def test_project_create_command_stays_plain(mock_update, mock_context):
-    """Команда /project_create создаёт обычный проект (без template_key)."""
-    mock_update.message.text = "/project_create Командный"
-
-    create_mock = AsyncMock(return_value={
-        "success": True, "project_id": 70, "project_name": "Командный",
-        "categories_isolated": False, "message": "Проект 'Командный' создан",
-    })
-    with patch("handlers.project.projects.create_project", new=create_mock), \
-         patch("handlers.project.projects.set_active_project", new=AsyncMock()):
-        await project_handler.project_create_command(mock_update, mock_context)
-
-    create_mock.assert_awaited_once()
-    # вызвана позиционно с (user_id, name) — без template_key
-    assert len(create_mock.call_args.args) == 2
-    assert create_mock.call_args.args[1] == "Командный"
+async def test_project_command_requests_reporting_currency(mock_update, mock_context):
+    mock_update.message.text = '/project_create Командный'
+    with patch('handlers.project.projects.create_project', AsyncMock()) as create:
+        assert await project_handler.project_create_command(mock_update, mock_context) == project_handler.CHOOSING_REPORT_CURRENCY
+        create.assert_not_called()
+    assert mock_context.user_data['new_project_name'] == 'Командный'
+    assert mock_context.user_data['new_project_template'] is None

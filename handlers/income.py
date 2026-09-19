@@ -11,6 +11,7 @@ from telegram.ext import (
 )
 
 import config
+from handlers.currency import format_snapshot
 from metrics import (
     classify_error_type,
     track_command,
@@ -21,7 +22,7 @@ from metrics import (
     track_handler_start,
     track_handler_success,
 )
-from utils import helpers, income_categories, incomes, projects
+from utils import currencies, helpers, income_categories, incomes, projects
 from utils.helpers import income_menu_button_regex
 from utils.logger import get_logger, log_event
 
@@ -45,7 +46,9 @@ async def income_add_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             await update.message.reply_text("❌ У вас нет прав на добавление доходов в этом проекте.")
             return ConversationHandler.END
 
-        await update.message.reply_text("Введите сумму дохода:")
+        context.user_data["income_project_id"] = project_id
+        context.user_data["income_currency"] = await currencies.get_input_currency(user_id, project_id)
+        await update.message.reply_text(f"Введите сумму дохода в {context.user_data['income_currency']}. Для другой валюты: 100 USD")
         return ENTERING_AMOUNT
     except Exception as e:
         error_type = classify_error_type(e)
@@ -64,10 +67,15 @@ async def handle_amount(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
     error_type = None
     try:
         user_id = update.effective_user.id
-        project_id = context.user_data.get("active_project_id")
+        project_id = context.user_data.get("income_project_id")
 
         try:
-            amount = float(update.message.text.replace(",", "."))
+            parts = update.message.text.split()
+            if len(parts) not in (1, 2):
+                raise ValueError("Введите сумму и необязательный код валюты")
+            amount = currencies.parse_amount(parts[0])
+            if len(parts) == 2:
+                context.user_data["income_currency"] = currencies.normalize_currency(parts[1])
             if amount <= 0:
                 raise ValueError("amount_must_be_positive")
         except ValueError:
@@ -94,7 +102,7 @@ async def handle_amount(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
 
         keyboard.append([InlineKeyboardButton("➕ Создать категорию", callback_data="icat_create")])
         await update.message.reply_text(
-            f"Сумма: {amount:.2f}\n\nВыберите категорию дохода:",
+            f"Сумма: {currencies.format_money(amount, context.user_data.get('income_currency'))}\n\nВыберите категорию дохода:",
             reply_markup=InlineKeyboardMarkup(keyboard),
         )
         return CHOOSING_CATEGORY
@@ -118,7 +126,7 @@ async def handle_category_callback(update: Update, context: ContextTypes.DEFAULT
         await query.answer()
 
         user_id = update.effective_user.id
-        project_id = context.user_data.get("active_project_id")
+        project_id = context.user_data.get("income_project_id")
 
         if query.data == "icat_create":
             await query.edit_message_text("Введите название новой категории дохода:")
@@ -136,9 +144,8 @@ async def handle_category_callback(update: Update, context: ContextTypes.DEFAULT
             await query.edit_message_text("❌ Ошибка выбора категории.")
             return ConversationHandler.END
 
-        category = await income_categories.get_income_category_by_id(user_id, income_category_id)
-        if not category and project_id is not None:
-            category = await income_categories.get_income_category_by_id_only(income_category_id)
+        available = await income_categories.get_income_categories_for_user_project(user_id, project_id)
+        category = next((c for c in available if c["income_category_id"] == income_category_id), None)
         if not category:
             error_type = "validation"
             await query.edit_message_text("❌ Категория дохода не найдена.")
@@ -148,7 +155,7 @@ async def handle_category_callback(update: Update, context: ContextTypes.DEFAULT
         context.user_data["income_category_name"] = category["name"]
 
         await query.edit_message_text(
-            f"Сумма: {context.user_data.get('income_amount', 0):.2f}\n"
+            f"Сумма: {currencies.format_money(context.user_data.get('income_amount', 0), context.user_data.get('income_currency'))}\n"
             f"Категория: {category['name']}\n\n"
             "Введите описание дохода или /skip, чтобы пропустить:"
         )
@@ -169,8 +176,11 @@ async def handle_create_category(update: Update, context: ContextTypes.DEFAULT_T
     track_handler_start("income_handle_create_category")
     error_type = None
     try:
+        if 'income_project_id' not in context.user_data:
+            await update.message.reply_text("Диалог устарел. Начните добавление дохода заново.")
+            return ConversationHandler.END
         user_id = update.effective_user.id
-        project_id = context.user_data.get("active_project_id")
+        project_id = context.user_data.get("income_project_id")
         category_name = update.message.text.strip()
 
         result = await income_categories.create_income_category(
@@ -210,23 +220,26 @@ async def handle_description(update: Update, context: ContextTypes.DEFAULT_TYPE)
         amount = context.user_data.get("income_amount")
         income_category_id = context.user_data.get("income_category_id")
         income_category_name = context.user_data.get("income_category_name", "")
-        project_id = context.user_data.get("active_project_id")
+        project_id = context.user_data.get("income_project_id")
 
-        if not amount or not income_category_id:
+        if (not amount or not income_category_id or 'income_project_id' not in context.user_data
+                or not context.user_data.get('income_currency')):
             await update.message.reply_text("❌ Ошибка: не удалось определить сумму или категорию.")
             return ConversationHandler.END
 
         description = "" if update.message.text == "/skip" else update.message.text
 
+        money = await currencies.prepare_money(user_id, project_id, amount, context.user_data.get("income_currency"))
         success = await incomes.add_income(
             user_id=user_id,
             amount=amount,
             income_category_id=income_category_id,
             description=description,
             project_id=project_id,
+            money=money,
         )
 
-        for key in ["income_amount", "income_category_id", "income_category_name"]:
+        for key in ["income_amount", "income_category_id", "income_category_name", "income_project_id", "income_currency"]:
             context.user_data.pop(key, None)
 
         if not success:
@@ -242,7 +255,7 @@ async def handle_description(update: Update, context: ContextTypes.DEFAULT_TYPE)
         emoji = config.DEFAULT_INCOME_CATEGORIES.get(income_category_name, "💵")
         message = (
             "✅ Доход добавлен:\n"
-            f"💰 Сумма: {amount:.2f}\n"
+            f"💰 Сумма: {format_snapshot(money)}\n"
             f"{emoji} Категория: {income_category_name}\n"
             f"{project_line}"
         )
@@ -252,6 +265,9 @@ async def handle_description(update: Update, context: ContextTypes.DEFAULT_TYPE)
         log_event(logger, "income_added", user_id=user_id, project_id=project_id, amount=amount)
         track_flow_completed("add_income")
         await update.message.reply_text(message, reply_markup=helpers.get_main_menu_keyboard())
+        return ConversationHandler.END
+    except currencies.CurrencyError as e:
+        await update.message.reply_text(f"❌ {e} Настройки: /currency")
         return ConversationHandler.END
     except Exception as e:
         error_type = classify_error_type(e)
@@ -269,7 +285,7 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     track_handler_start("income_cancel")
     error_type = None
     try:
-        for key in ["income_amount", "income_category_id", "income_category_name"]:
+        for key in ["income_amount", "income_category_id", "income_category_name", "income_project_id", "income_currency"]:
             context.user_data.pop(key, None)
         track_flow_cancelled("add_income")
         return await helpers.cancel_conversation(update, context, "Добавление дохода отменено.")
