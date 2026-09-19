@@ -10,9 +10,10 @@
 
 import calendar
 import datetime
+from decimal import Decimal
 from typing import Optional
 
-from utils import db
+from utils import currencies, db
 from utils.logger import get_logger, log_error, log_event
 
 logger = get_logger("utils.recurring")
@@ -223,6 +224,7 @@ async def create_rule(
     day_of_month: Optional[int],
     is_last_day_of_month: bool,
     start_date: datetime.date,
+    currency: Optional[str] = None,
 ) -> Optional[int]:
     """
     Создаёт новое правило постоянного расхода.
@@ -253,50 +255,96 @@ async def create_rule(
         # Для будущей даты стартуем ровно в start_date (без немедленного расхода).
         next_run_at = datetime.datetime.combine(start_date, datetime.time(0, 0, 0))
 
+    money = await currencies.prepare_money(user_id, project_id, amount, currency, today)
     try:
-        rule_id = await db.fetchval(
-            """
-            INSERT INTO recurring_rules
-                (user_id, amount, category_id, comment, project_id,
-                 frequency_type, interval_value, weekday, day_of_month,
-                 is_last_day_of_month, start_date, next_run_at)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
-            RETURNING id
-            """,
-            user_id, float(amount), int(category_id), comment or '',
-            project_id, frequency_type, interval_value, weekday,
-            day_of_month, is_last_day_of_month, start_date, next_run_at,
-        )
-
-        # Немедленно создаём первый расход за сегодня, если правило уже активно.
-        # Это нужно, чтобы /day сразу показывал новую запись.
-        if start_date <= today:
-            await db.execute(
-                """
-                INSERT INTO expenses
-                    (user_id, project_id, date, time, amount, category_id,
-                     description, month, source_type, recurring_rule_id, created_by_system)
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'recurring', $9, TRUE)
-                """,
-                user_id,
-                project_id,
-                today,
-                now.time().replace(microsecond=0),
-                float(amount),
-                int(category_id),
-                comment,
-                today.month,
-                rule_id,
-            )
-
-        log_event(logger, "recurring_rule_created",
-                  user_id=user_id, rule_id=rule_id, frequency_type=frequency_type,
-                  initial_expense_created=(start_date <= today), next_run_at=str(next_run_at))
+        async with db.transaction() as conn:
+            async with conn.transaction():
+                await currencies.validate_money_context(conn, user_id, project_id, money)
+                await _validate_legacy_context(conn, user_id, project_id)
+                await _validate_category(conn, user_id, project_id, category_id)
+                rule_id = await conn.fetchval(
+                    """
+                    INSERT INTO recurring_rules
+                        (user_id, amount, category_id, comment, project_id,
+                         frequency_type, interval_value, weekday, day_of_month,
+                         is_last_day_of_month, start_date, next_run_at, currency)
+                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+                    RETURNING id
+                    """,
+                    user_id, money['amount'], int(category_id), comment or '',
+                    project_id, frequency_type, interval_value, weekday,
+                    day_of_month, is_last_day_of_month, start_date, next_run_at,
+                    money['currency'],
+                )
+                if start_date <= today:
+                    await _insert_recurring_expense(conn, {
+                        'id': rule_id, 'user_id': user_id, 'project_id': project_id,
+                        'amount': money['amount'], 'category_id': category_id,
+                        'comment': comment,
+                    }, now, money)
+        log_event(logger, "recurring_rule_created", user_id=user_id, rule_id=rule_id)
         return rule_id
-    except Exception as e:
-        log_error(logger, e, "recurring_rule_create_error",
-                  user_id=user_id, frequency_type=frequency_type)
+    except currencies.CurrencyError:
+        raise
+    except Exception as exc:
+        log_error(logger, exc, "recurring_rule_create_error", user_id=user_id)
         return None
+
+
+async def _validate_legacy_context(conn, user_id: str, project_id: Optional[int]) -> None:
+    """Check current write access inside the monetary transaction, including legacy rules."""
+    if project_id is None:
+        return
+    allowed = await conn.fetchval(
+        """SELECT pm.role FROM projects p
+           JOIN project_members pm ON pm.project_id = p.project_id
+           WHERE p.project_id = $1 AND pm.user_id = $2 AND p.deleted_at IS NULL
+             AND pm.role IN ('owner', 'editor')
+           FOR SHARE OF p, pm""", project_id, str(user_id),
+    )
+    if not allowed:
+        raise PermissionError("Нет прав на запись в проект")
+
+
+async def _validate_category(conn, user_id, project_id, category_id, *, income=False):
+    """Accept only the same category scope exposed in the account's picker."""
+    table, key = ('income_categories', 'income_category_id') if income else ('categories', 'category_id')
+    isolation = '' if income else 'AND NOT p.categories_isolated'
+    allowed = await conn.fetchval(
+        f"""SELECT EXISTS(SELECT 1 FROM {table} c WHERE c.{key}=$1 AND c.is_active
+            AND (($3::integer IS NULL AND c.project_id IS NULL AND c.user_id=$2)
+                 OR ($3 IS NOT NULL AND (c.project_id=$3 OR (c.project_id IS NULL
+                     AND EXISTS(SELECT 1 FROM projects p WHERE p.project_id=$3
+                                AND p.user_id=c.user_id {isolation}))))))""",
+        int(category_id), str(user_id), project_id,
+    )
+    if not allowed:
+        raise currencies.CurrencyError('Категория недоступна в этом проекте.')
+
+
+def _money_values(money: Optional[dict]) -> tuple:
+    """Nullable snapshot fields deliberately preserve untyped legacy rules."""
+    return tuple((money or {}).get(key) for key in (
+        'currency', 'reporting_amount', 'reporting_currency',
+        'fx_rate', 'fx_date', 'fx_source',
+    ))
+
+
+async def _insert_recurring_expense(conn, rule: dict, now: datetime.datetime,
+                                    money: Optional[dict]) -> None:
+    await conn.execute(
+        """INSERT INTO expenses
+            (user_id, project_id, date, time, amount, category_id,
+             description, month, source_type, recurring_rule_id, created_by_system,
+             currency, reporting_amount, reporting_currency, fx_rate, fx_date, fx_source)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'recurring', $9, TRUE,
+                   $10, $11, $12, $13, $14, $15)""",
+        rule['user_id'], rule['project_id'], now.date(),
+        now.time().replace(microsecond=0),
+        money['amount'] if money else Decimal(str(rule['amount'])),
+        int(rule['category_id']), rule['comment'] or None, now.month, rule['id'],
+        *_money_values(money),
+    )
 
 
 async def get_rules_for_user(
@@ -513,128 +561,67 @@ async def update_rule_schedule(
 # ---------------------------------------------------------------------------
 
 async def process_recurring_expenses(bot) -> None:
-    """
-    Основная функция планировщика постоянных расходов.
-    Запускается каждые 5 минут через APScheduler (настройка в main.py).
-
-    Алгоритм:
-    1. Выбрать все активные правила с next_run_at <= now (UTC)
-    2. Для каждого правила:
-       a. Проверить idempotency: нет ли уже расхода с этим rule_id за сегодня
-       b. Создать расход напрямую через SQL (без excel.add_expense — у воркера
-          системные права, permission check не нужен)
-       c. Отправить уведомление пользователю
-       d. Вычислить следующий next_run_at и обновить правило
-    3. Логировать итоги
-
-    Важно:
-    - Если воркер не работал несколько дней, пропущенные периоды НЕ backfill-ятся —
-      только один расход за текущий день, затем next_run_at обновляется вперёд
-    - Все datetime — naive UTC (как в остальном проекте)
-    """
+    """Create one due expense atomically; concurrent workers lock and recheck each rule."""
     now = datetime.datetime.utcnow()
-    today = now.date()
-    current_time = now.time().replace(microsecond=0)
-
     try:
-        # Выбираем только активные правила, чей срок пришёл
         rules = await db.fetch(
-            """
-            SELECT rr.*, c.name AS category_name
-            FROM recurring_rules rr
-            JOIN categories c ON c.category_id = rr.category_id
-            WHERE rr.status = 'active' AND rr.next_run_at <= $1
-            """,
-            now,
+            """SELECT rr.*, c.name AS category_name FROM recurring_rules rr
+               JOIN categories c ON c.category_id = rr.category_id
+               WHERE rr.status = 'active' AND rr.next_run_at <= $1""", now,
         )
-    except Exception as e:
-        log_error(logger, e, "recurring_scheduler_fetch_error")
+    except Exception as exc:
+        log_error(logger, exc, "recurring_scheduler_fetch_error")
         return
-
-    if not rules:
-        return
-
-    processed = 0
-    skipped = 0
-    errors = 0
 
     for row in rules:
         rule = dict(row)
-        rule_id = rule['id']
-
         try:
-            # --- Проверка идемпотентности ---
-            # Не создаём дубль, если расход за сегодня уже есть
-            already_created = await db.fetchval(
-                """
-                SELECT 1 FROM expenses
-                WHERE recurring_rule_id = $1 AND date = $2
-                LIMIT 1
-                """,
-                rule_id, today,
-            )
-            if already_created:
-                skipped += 1
+            # Resolve exchange rates without holding a database transaction/row lock.
+            money = (await currencies.prepare_money(
+                rule['user_id'], rule['project_id'], rule['amount'],
+                rule['currency'], now.date(),
+            )) if rule.get('currency') else None
+            async with db.transaction() as conn:
+                async with conn.transaction():
+                    current = await conn.fetchrow(
+                        "SELECT * FROM recurring_rules WHERE id = $1 FOR UPDATE", rule['id'],
+                    )
+                    if (not current or current['status'] != 'active'
+                            or current['next_run_at'] > now):
+                        continue
+                    if money:
+                        await currencies.validate_money_context(
+                            conn, rule['user_id'], rule['project_id'], money,
+                        )
+                    await _validate_legacy_context(conn, rule['user_id'], rule['project_id'])
+                    exists = await conn.fetchval(
+                        """SELECT 1 FROM expenses
+                           WHERE recurring_rule_id = $1 AND date = $2 LIMIT 1""",
+                        rule['id'], now.date(),
+                    )
+                    if not exists:
+                        await _insert_recurring_expense(conn, rule, now, money)
+                    await conn.execute(
+                        "UPDATE recurring_rules SET next_run_at = $1, updated_at = now() WHERE id = $2",
+                        calculate_next_run(dict(current), now), rule['id'],
+                    )
+            if exists:
                 continue
-
-            # --- Создаём расход ---
-            await db.execute(
-                """
-                INSERT INTO expenses
-                    (user_id, project_id, date, time, amount, category_id,
-                     description, month, source_type, recurring_rule_id, created_by_system)
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'recurring', $9, TRUE)
-                """,
-                rule['user_id'],
-                rule['project_id'],
-                today,
-                current_time,
-                float(rule['amount']),
-                rule['category_id'],
-                rule['comment'] or None,
-                today.month,
-                rule_id,
-            )
-
-            # --- Уведомляем пользователя ---
-            freq_text = format_frequency(rule)
-            cat_name = rule.get('category_name', '')
-            comment_text = rule['comment'] or cat_name
+            currency_text = rule.get('currency') or 'валюта не указана'
+            conversion = ''
+            if money and money['currency'] != money['reporting_currency']:
+                conversion = f" ≈ {money['reporting_amount']} {money['reporting_currency']}"
+                if money['fx_source'] == 'manual':
+                    conversion += ' (резервный курс)'
             try:
                 await bot.send_message(
                     chat_id=rule['user_id'],
-                    text=(
-                        f"🔁 Добавлен постоянный расход:\n"
-                        f"💰 {rule['amount']} — {comment_text}\n"
-                        f"📅 {freq_text}"
-                    ),
+                    text=(f"🔁 Добавлен постоянный расход:\n"
+                          f"💰 {rule['amount']} {currency_text}{conversion} — "
+                          f"{rule['comment'] or rule.get('category_name', '')}\n"
+                          f"📅 {format_frequency(rule)}"),
                 )
-            except Exception as notify_err:
-                # Ошибка уведомления не должна отменять создание расхода
-                log_error(logger, notify_err, "recurring_notify_error",
-                          rule_id=rule_id, user_id=rule['user_id'])
-
-            # --- Обновляем next_run_at ---
-            next_run = calculate_next_run(rule, now)
-            await db.execute(
-                """
-                UPDATE recurring_rules
-                SET next_run_at = $1, updated_at = now()
-                WHERE id = $2
-                """,
-                next_run, rule_id,
-            )
-
-            processed += 1
-            log_event(logger, "recurring_expense_created",
-                      rule_id=rule_id, user_id=rule['user_id'],
-                      amount=rule['amount'], next_run=str(next_run))
-
-        except Exception as e:
-            errors += 1
-            log_error(logger, e, "recurring_rule_process_error",
-                      rule_id=rule_id, user_id=rule.get('user_id'))
-
-    log_event(logger, "recurring_scheduler_done",
-              processed=processed, skipped=skipped, errors=errors,
-              total=len(rules))
+            except Exception as exc:
+                log_error(logger, exc, "recurring_notify_error", rule_id=rule['id'])
+        except Exception as exc:
+            log_error(logger, exc, "recurring_rule_process_error", rule_id=rule['id'])

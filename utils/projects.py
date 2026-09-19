@@ -39,6 +39,9 @@ async def create_project(
     user_id: int,
     project_name: str,
     template_key: Optional[str] = None,
+    *, reporting_currency: str = "RUB",
+    input_currency: Optional[str] = None,
+    fallback_rate=None,
 ) -> dict:
     """
     Create a new project. The creator becomes the owner.
@@ -53,7 +56,12 @@ async def create_project(
             глобальные не подмешиваются. Для None проект не изолируется (как раньше).
     """
     import config
+    from utils.currencies import normalize_currency, parse_amount
 
+    reporting_currency = normalize_currency(reporting_currency)
+    input_currency = normalize_currency(input_currency or reporting_currency)
+    if fallback_rate is not None:
+        fallback_rate = parse_amount(fallback_rate)
     await db.execute(
         "INSERT INTO users(user_id) VALUES($1) ON CONFLICT (user_id) DO NOTHING",
         str(user_id),
@@ -87,10 +95,10 @@ async def create_project(
     async with db.transaction() as conn:
         async with conn.transaction():
             row = await conn.fetchrow(
-                """INSERT INTO projects(user_id, project_name, created_date, categories_isolated)
-                   VALUES($1, $2, $3, $4)
+                """INSERT INTO projects(user_id, project_name, created_date, categories_isolated, reporting_currency)
+                   VALUES($1, $2, $3, $4, $5)
                    RETURNING project_id""",
-                str(user_id), project_name, datetime.date.today(), isolated
+                str(user_id), project_name, datetime.date.today(), isolated, reporting_currency
             )
             project_id = row['project_id']
 
@@ -101,6 +109,17 @@ async def create_project(
                    ON CONFLICT (project_id, user_id) DO NOTHING""",
                 project_id, str(user_id)
             )
+
+            await conn.execute(
+                "INSERT INTO currency_preferences(user_id,project_id,currency) VALUES($1,$2,$3)",
+                str(user_id), project_id, input_currency,
+            )
+            if fallback_rate is not None and input_currency != reporting_currency:
+                await conn.execute(
+                    """INSERT INTO currency_fallback_rates(user_id,project_id,source_currency,target_currency,rate)
+                       VALUES($1,$2,$3,$4,$5)""",
+                    str(user_id), project_id, input_currency, reporting_currency, fallback_rate,
+                )
 
             # Копируем категории шаблона (если выбран). Имена внутри шаблона
             # уникальны, project_id новый → конфликта с уникальным индексом нет,
@@ -135,6 +154,7 @@ async def create_project(
         'project_name': project_name,
         'categories_isolated': isolated,
         'template_key': template_key,
+        'reporting_currency': reporting_currency,
         'message': f"Проект '{project_name}' создан"
     }
 
@@ -152,7 +172,7 @@ async def get_all_projects(user_id: int) -> list:
     rows = await db.fetch(
         """
         -- Собственные проекты пользователя (он владелец)
-        SELECT p.project_id, p.project_name, p.created_date,
+        SELECT p.project_id, p.project_name, p.created_date, p.reporting_currency,
                p.user_id as owner_id,
                pm.role
         FROM projects p
@@ -163,7 +183,7 @@ async def get_all_projects(user_id: int) -> list:
         UNION
 
         -- Проекты, в которых пользователь состоит как участник (не владелец)
-        SELECT p.project_id, p.project_name, p.created_date,
+        SELECT p.project_id, p.project_name, p.created_date, p.reporting_currency,
                p.user_id as owner_id,
                pm.role
         FROM projects p
@@ -180,6 +200,7 @@ async def get_all_projects(user_id: int) -> list:
         {
             'project_id': r['project_id'],
             'project_name': r['project_name'],
+            'reporting_currency': r.get('reporting_currency'),
             'created_date': r['created_date'].strftime('%Y-%m-%d') if r['created_date'] else None,
             'owner_id': r['owner_id'],
             'role': r['role'],
@@ -196,7 +217,7 @@ async def get_project_by_id(user_id: int, project_id: int) -> Optional[dict]:
     """
     row = await db.fetchrow(
         """
-        SELECT p.project_id, p.project_name, p.created_date,
+        SELECT p.project_id, p.project_name, p.created_date, p.reporting_currency,
                p.user_id as owner_id,
                pm.role
         FROM projects p
@@ -211,6 +232,7 @@ async def get_project_by_id(user_id: int, project_id: int) -> Optional[dict]:
     return {
         'project_id': row['project_id'],
         'project_name': row['project_name'],
+        'reporting_currency': row.get('reporting_currency'),
         'created_date': row['created_date'].strftime('%Y-%m-%d') if row['created_date'] else None,
         'owner_id': row['owner_id'],
         'role': row['role'],
@@ -224,7 +246,7 @@ async def get_project_by_name(user_id: int, project_name: str) -> Optional[dict]
     """
     row = await db.fetchrow(
         """
-        SELECT p.project_id, p.project_name, p.created_date,
+        SELECT p.project_id, p.project_name, p.created_date, p.reporting_currency,
                p.user_id as owner_id,
                pm.role
         FROM projects p
@@ -239,6 +261,7 @@ async def get_project_by_name(user_id: int, project_name: str) -> Optional[dict]
     return {
         'project_id': row['project_id'],
         'project_name': row['project_name'],
+        'reporting_currency': row.get('reporting_currency'),
         'created_date': row['created_date'].strftime('%Y-%m-%d') if row['created_date'] else None,
         'owner_id': row['owner_id'],
         'role': row['role'],
@@ -376,10 +399,13 @@ async def get_project_stats(user_id: int, project_id: int) -> dict:
     if not await is_project_member(user_id, project_id):
         return {'count': 0, 'total': 0.0, 'by_category': {}, 'by_participant': {}}
 
+    from utils import currencies, currency_reporting
+    currency = await currencies.get_reporting_currency(user_id, project_id)
+    legacy = await currency_reporting.get_legacy_summary(user_id, project_id)
     row = await db.fetchrow(
         """
         SELECT COUNT(*) as count, COALESCE(SUM(amount), 0) as total
-        FROM expenses 
+        FROM reporting_expenses
         WHERE project_id = $1
         """,
         project_id
@@ -387,7 +413,7 @@ async def get_project_stats(user_id: int, project_id: int) -> dict:
     category_rows = await db.fetch(
         """
         SELECT c.name as category, COALESCE(SUM(e.amount), 0) as total
-        FROM expenses e
+        FROM reporting_expenses e
         JOIN categories c ON e.category_id = c.category_id
         WHERE e.project_id = $1
         GROUP BY c.name
@@ -399,7 +425,7 @@ async def get_project_stats(user_id: int, project_id: int) -> dict:
     participant_rows = await db.fetch(
         """
         SELECT e.user_id, COALESCE(SUM(e.amount), 0) as total
-        FROM expenses e
+        FROM reporting_expenses e
         WHERE e.project_id = $1
         GROUP BY e.user_id
         ORDER BY total DESC
@@ -418,6 +444,8 @@ async def get_project_stats(user_id: int, project_id: int) -> dict:
 
     return {
         'count': row['count'],
+        'currency': currency,
+        'legacy': legacy,
         'total': float(row['total']),
         'by_category': by_category,
         'by_participant': by_participant,

@@ -110,3 +110,30 @@ def test_user_id():
 def test_project_id():
     """Тестовый ID проекта"""
     return 1
+
+
+@pytest.fixture
+def mock_currency_context(monkeypatch):
+    """Isolate pre-existing handler tests from the new currency repository.
+
+    Currency behaviour itself is tested without this fixture in test_currencies.
+    """
+    import datetime
+    from decimal import Decimal
+
+    from utils import currencies, currency_reporting, report_generator
+
+    async def prepare(user_id, project_id, amount, currency=None, operation_date=None):
+        return {"amount": Decimal(str(amount)), "currency": currency or "RUB",
+                "reporting_amount": Decimal(str(amount)), "reporting_currency": "RUB",
+                "fx_rate": Decimal(1), "fx_date": operation_date or datetime.date.today(),
+                "fx_source": "identity"}
+
+    monkeypatch.setattr(currencies, "get_reporting_currency", AsyncMock(return_value="RUB"))
+    monkeypatch.setattr(currencies, "get_input_currency", AsyncMock(return_value="RUB"))
+    monkeypatch.setattr(currencies, "prepare_money", AsyncMock(side_effect=prepare))
+    monkeypatch.setattr(currencies, "validate_money_context", AsyncMock())
+    empty = {"expenses": {"count": 0, "total": 0}, "incomes": {"count": 0, "total": 0}}
+    monkeypatch.setattr(currency_reporting, "get_legacy_summary", AsyncMock(return_value=empty))
+    monkeypatch.setattr(report_generator, "get_legacy_summary", AsyncMock(return_value=empty))
+    monkeypatch.setattr(report_generator, "get_reporting_currency", AsyncMock(return_value="RUB"))

@@ -33,6 +33,7 @@ from telegram.ext import (
 
 import config
 from utils import categories as cat_utils
+from utils import currencies
 from utils import pattern_detector as pd_utils
 from utils import recurring as rec_utils
 from utils.helpers import get_main_menu_keyboard, main_menu_button_regex
@@ -100,7 +101,7 @@ def _build_rules_message_and_keyboard(rules: list) -> tuple:
         comment = rule.get('comment') or cat_name
 
         lines.append(
-            f"{i}. {comment} — {rule['amount']}\n"
+            f"{i}. {comment} — {rule['amount']} {rule.get('currency') or 'без валюты'}\n"
             f"   📅 {freq_text} | {status_icon}\n"
             f"   Следующее: {next_run}"
         )
@@ -220,11 +221,13 @@ async def rec_add_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
 
     # Сохраняем user_id в контексте для использования в _finalize_rule
     context.user_data['rec_user_id'] = user_id
+    context.user_data['rec_project_id'] = context.user_data.get('active_project_id')
+    context.user_data['rec_currency'] = await currencies.get_input_currency(user_id, context.user_data['rec_project_id'])
     log_event(logger, "rec_add_started", user_id=user_id)
 
     await query.edit_message_text(
         "➕ *Добавить постоянный расход*\n\n"
-        "Введи сумму расхода:",
+        f"Введи сумму в {context.user_data['rec_currency']}. Для другой валюты: 100 USD",
         parse_mode="Markdown",
     )
     return REC_ENTERING_AMOUNT
@@ -236,7 +239,12 @@ async def rec_handle_amount(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     text = update.message.text.strip().replace(',', '.')
 
     try:
-        amount = float(text)
+        parts = text.split()
+        if len(parts) not in (1, 2):
+            raise ValueError('Введите сумму и код валюты')
+        amount = currencies.parse_amount(parts[0])
+        if len(parts) == 2:
+            context.user_data['rec_currency'] = currencies.normalize_currency(parts[1])
         if amount <= 0:
             await update.message.reply_text(
                 "❌ Сумма должна быть больше нуля. Попробуй ещё раз:"
@@ -249,7 +257,7 @@ async def rec_handle_amount(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         return REC_ENTERING_AMOUNT
 
     context.user_data['rec_amount'] = amount
-    project_id = context.user_data.get('active_project_id')
+    project_id = context.user_data.get('rec_project_id')
 
     # Загружаем категории пользователя
     cats = await cat_utils.get_categories_for_user_project(user_id, project_id)
@@ -277,13 +285,11 @@ async def rec_handle_category(update: Update, context: ContextTypes.DEFAULT_TYPE
     # Формат: cat_rec_{category_id}
     category_id = int(query.data.split('_')[2])
     user_id = str(update.effective_user.id)
-    project_id = context.user_data.get('active_project_id')
+    project_id = context.user_data.get('rec_project_id')
 
     # Проверяем категорию
-    cat = await cat_utils.get_category_by_id(user_id, category_id)
-    if not cat and project_id is not None:
-        from utils.categories import get_category_by_id_only
-        cat = await get_category_by_id_only(category_id)
+    available = await cat_utils.get_categories_for_user_project(user_id, project_id)
+    cat = next((c for c in available if c["category_id"] == category_id), None)
     if not cat:
         await query.edit_message_text("❌ Категория не найдена. Попробуй ещё раз.")
         return ConversationHandler.END
@@ -295,7 +301,7 @@ async def rec_handle_category(update: Update, context: ContextTypes.DEFAULT_TYPE
     amount = context.user_data.get('rec_amount')
 
     await query.edit_message_text(
-        f"💰 Сумма: *{amount}*\n"
+        f"💰 Сумма: *{amount} {context.user_data.get('rec_currency')}*\n"
         f"{emoji} Категория: *{cat['name']}*\n\n"
         "Введи комментарий к расходу\n"
         "(комментарий обязателен):",
@@ -409,7 +415,7 @@ async def _finalize_rule(
     # user_id сохранён при старте диалога в rec_add_start
     user_id = context.user_data.get('rec_user_id', '')
 
-    project_id = context.user_data.get('active_project_id')
+    project_id = context.user_data.get('rec_project_id')
     amount = context.user_data.get('rec_amount')
     category_id = context.user_data.get('rec_category_id')
     cat_name = context.user_data.get('rec_category_name', '')
@@ -417,20 +423,28 @@ async def _finalize_rule(
     freq_params = context.user_data.get('rec_freq_params', {})
 
     today = datetime.date.today()
-
-    rule_id = await rec_utils.create_rule(
-        user_id=user_id,
-        amount=amount,
-        category_id=category_id,
-        comment=comment,
-        project_id=project_id,
-        frequency_type=freq_params.get('frequency_type', 'monthly'),
-        interval_value=freq_params.get('interval_value'),
-        weekday=freq_params.get('weekday'),
-        day_of_month=freq_params.get('day_of_month'),
-        is_last_day_of_month=freq_params.get('is_last_day_of_month', False),
-        start_date=today,
-    )
+    currency = context.user_data.get('rec_currency')
+    if 'rec_project_id' not in context.user_data or not currency:
+        await _reply_rule_error(message_or_query, 'Диалог устарел. Начните добавление заново.')
+        return ConversationHandler.END
+    try:
+        rule_id = await rec_utils.create_rule(
+            user_id=user_id,
+            amount=amount,
+            category_id=category_id,
+            comment=comment,
+            project_id=project_id,
+            currency=context.user_data.get('rec_currency'),
+            frequency_type=freq_params.get('frequency_type', 'monthly'),
+            interval_value=freq_params.get('interval_value'),
+            weekday=freq_params.get('weekday'),
+            day_of_month=freq_params.get('day_of_month'),
+            is_last_day_of_month=freq_params.get('is_last_day_of_month', False),
+            start_date=today,
+        )
+    except (currencies.CurrencyError, PermissionError) as exc:
+        await _reply_rule_error(message_or_query, str(exc))
+        return ConversationHandler.END
 
     # Очищаем данные диалога
     for key in ['rec_amount', 'rec_category_id', 'rec_category_name',
@@ -448,7 +462,7 @@ async def _finalize_rule(
         display_name = comment or cat_name
         text = (
             f"✅ Постоянный расход добавлен!\nТакже расход внесен в базу!\n"
-            f"💰 {amount} — {display_name}\n"
+            f"💰 {amount} {currency} — {display_name}\n"
             f"📅 {freq_text}\n"
             f"🗓 Следующее списание: {next_run}"
         )
@@ -469,6 +483,14 @@ async def _finalize_rule(
         await message_or_query.reply_text(text, reply_markup=get_main_menu_keyboard())
 
     return ConversationHandler.END
+
+
+async def _reply_rule_error(message_or_query, text):
+    text = f"❌ {text}\nНастройте валюту через /currency и начните добавление заново."
+    if hasattr(message_or_query, 'edit_message_text'):
+        await message_or_query.edit_message_text(text)
+    else:
+        await message_or_query.reply_text(text)
 
 
 async def rec_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -740,6 +762,7 @@ async def suggest_recurring_if_pattern(
     category_id: int,
     comment: str,
     bot_data: dict,
+    currency=None,
 ) -> None:
     """
     Проверяет историю расходов на наличие паттерна и предлагает создать постоянный расход.
@@ -770,9 +793,11 @@ async def suggest_recurring_if_pattern(
               AND category_id = $2
               AND LOWER(TRIM(comment)) = $3
               AND status = 'active'
+              AND project_id IS NOT DISTINCT FROM $4
+              AND currency IS NOT DISTINCT FROM $5
             LIMIT 1
             """,
-            user_id, category_id, norm,
+            user_id, category_id, norm, project_id, currency,
         )
         if existing_rule:
             return
@@ -785,6 +810,7 @@ async def suggest_recurring_if_pattern(
         project_id=project_id,
         category_id=category_id,
         comment=comment,
+        currency=currency,
     )
     if pattern is None:
         return
@@ -794,7 +820,7 @@ async def suggest_recurring_if_pattern(
 
     # Формируем сообщение
     freq_text = _freq_display(pattern)
-    ch = pd_utils.comment_hash(comment)
+    ch = pd_utils.pattern_hash(pattern)
     keyboard = InlineKeyboardMarkup([[
         InlineKeyboardButton(
             "✅ Да",
@@ -811,7 +837,7 @@ async def suggest_recurring_if_pattern(
             chat_id=user_id,
             text=(
                 f"💡 Замечен регулярный расход:\n"
-                f"💰 {pattern['amount']} — {comment}\n"
+                f"💰 {pattern['amount']} {pattern.get('currency') or 'без валюты'} — {comment}\n"
                 f"📅 ~{freq_text}\n\n"
                 "Сделать постоянным расходом?"
             ),
@@ -853,8 +879,6 @@ async def rec_suggest_yes_callback(update: Update, context: ContextTypes.DEFAULT
     query = update.callback_query
     await query.answer()
     user_id = str(update.effective_user.id)
-    project_id = context.user_data.get('active_project_id')
-
     parts = query.data.split('_')
     # rec_suggest_yes_{category_id}_{comment_hash}
     category_id = int(parts[3])
@@ -869,7 +893,7 @@ async def rec_suggest_yes_callback(update: Update, context: ContextTypes.DEFAULT
     for key, cached_pattern in patterns_cache.items():
         if (key.startswith(user_id + '_') and
                 cached_pattern.get('category_id') == category_id and
-                pd_utils.comment_hash(cached_pattern.get('comment', '')) == ch):
+                pd_utils.pattern_hash(cached_pattern) == ch):
             pattern = cached_pattern
             break
 
@@ -882,19 +906,25 @@ async def rec_suggest_yes_callback(update: Update, context: ContextTypes.DEFAULT
 
     # Создаём правило
     today = datetime.date.today()
-    rule_id = await rec_utils.create_rule(
-        user_id=user_id,
-        amount=pattern['amount'],
-        category_id=pattern['category_id'],
-        comment=pattern['comment'],
-        project_id=project_id,
-        frequency_type=pattern['frequency_type'],
-        interval_value=pattern.get('interval_value'),
-        weekday=None,
-        day_of_month=None,
-        is_last_day_of_month=False,
-        start_date=today,
-    )
+    try:
+        rule_id = await rec_utils.create_rule(
+            user_id=user_id,
+            amount=pattern['amount'],
+            category_id=pattern['category_id'],
+            comment=pattern['comment'],
+            project_id=pattern.get('project_id'),
+            currency=pattern.get('currency'),
+            frequency_type=pattern['frequency_type'],
+            interval_value=pattern.get('interval_value'),
+            weekday=None,
+            day_of_month=None,
+            is_last_day_of_month=False,
+            start_date=today,
+        )
+    except (currencies.CurrencyError, PermissionError) as exc:
+        await _reply_rule_error(query, str(exc))
+        return
+
 
     # Устанавливаем cooldown чтобы не предлагать снова
     pd_utils.set_cooldown(bot_data, user_id, pattern['comment'])
@@ -904,7 +934,7 @@ async def rec_suggest_yes_callback(update: Update, context: ContextTypes.DEFAULT
         freq_text = rec_utils.format_frequency(rule) if rule else _freq_display(pattern)
         await query.edit_message_text(
             f"✅ Постоянный расход создан!\n\n"
-            f"💰 {pattern['amount']} — {pattern['comment']}\n"
+            f"💰 {pattern['amount']} {pattern.get('currency') or 'без валюты'} — {pattern['comment']}\n"
             f"📅 {freq_text}"
         )
         log_event(logger, "rec_rule_created_via_suggest",
@@ -925,6 +955,8 @@ async def rec_suggest_no_callback(update: Update, context: ContextTypes.DEFAULT_
     parts = query.data.split('_')
     # rec_suggest_no_{user_id}_{comment_hash}
     target_user_id = parts[3]
+    if target_user_id != str(update.effective_user.id):
+        return
     ch = parts[4]
 
     # Ищем комментарий в кэше для cooldown
@@ -933,7 +965,7 @@ async def rec_suggest_no_callback(update: Update, context: ContextTypes.DEFAULT_
     comment_for_cooldown = None
     for key, cached_pattern in patterns_cache.items():
         if (key.startswith(target_user_id + '_') and
-                pd_utils.comment_hash(cached_pattern.get('comment', '')) == ch):
+                pd_utils.pattern_hash(cached_pattern) == ch):
             comment_for_cooldown = cached_pattern.get('comment', '')
             break
 
