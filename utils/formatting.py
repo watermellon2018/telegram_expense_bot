@@ -31,7 +31,7 @@ def format_month_expenses(expenses, month=None, year=None):
 
     month_name = get_month_name(month)
 
-    if not expenses or expenses["total"] == 0:
+    if not expenses or expenses.get("count", 0) == 0:
         return f"В {month_name} {year} года расходов не было."
 
     report = f"📊 Статистика расходов за {month_name} {year} года:\n\n"
@@ -71,7 +71,7 @@ def format_category_expenses(category_data, category, year=None):
     if year is None:
         year = datetime.datetime.now().year
 
-    if not category_data or category_data["total"] == 0:
+    if not category_data or category_data.get("count", 0) == 0:
         return f"В {year} году расходов по категории '{category}' не было."
 
     from utils.categories import get_category_emoji
@@ -95,7 +95,7 @@ def format_day_expenses(expenses, date=None):
     if date is None:
         date = datetime.datetime.now().strftime("%Y-%m-%d")
 
-    if not expenses or expenses["total"] == 0:
+    if not expenses or expenses.get("count", 0) == 0:
         return f"Расходов за {date} не было."
 
     report = f"📊 Статистика расходов за {date}:\n\n"
@@ -140,8 +140,16 @@ async def format_budget_status(user_id, month=None, year=None):
     return "📊 Функция бюджета отключена."
 
 
-async def add_project_context_to_report(report: str, user_id: int, project_id: int = None) -> str:
+async def add_project_context_to_report(report: str, user_id: int, project_id: int = None, **period) -> str:
     """Prefix report with current project context."""
+    from utils.currencies import get_reporting_currency
+    from utils.currency_reporting import format_legacy_summary, get_legacy_summary
+
+    currency = await get_reporting_currency(user_id, project_id)
+    legacy = format_legacy_summary(await get_legacy_summary(user_id, project_id, **period))
+    report = f"Валюта отчётности: {currency}\n\n{report}"
+    if legacy:
+        report += "\n\n" + legacy
     if project_id is not None:
         from utils import projects
 

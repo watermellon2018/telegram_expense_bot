@@ -5,7 +5,14 @@ CRUD-операции для работы с бюджетами.
 
 from typing import Dict, List, Optional
 
+from utils.currencies import (
+    get_reporting_currency,
+    parse_amount,
+    round_money,
+    validate_money_context,
+)
 from utils.logger import get_logger, log_error, log_event
+from utils.permissions import Permission, require_permission
 
 from . import db
 
@@ -23,6 +30,7 @@ def _row_to_dict(row) -> dict:
         'id':                     row['id'],
         'user_id':                row['user_id'],
         'project_id':             row['project_id'],
+        'currency':               row.get('currency'),
         'amount':                 float(row['amount']),
         'month':                  row['month'],
         'year':                   row['year'],
@@ -116,58 +124,48 @@ async def get_or_inherit_budget(user_id: int, month: int, year: int,
 
 
 async def set_budget(user_id: int, month: int, year: int, amount: float,
-                     project_id=None) -> Optional[dict]:
-    """
-    Установить или обновить бюджет на месяц (UPSERT).
-    При изменении суммы сбрасывает счётчики уведомлений.
-    """
+                     project_id=None, currency: Optional[str] = None) -> Optional[dict]:
+    """Save a budget in the account's reporting currency, preserving legacy data elsewhere."""
     project_id = _normalize_project_id(project_id)
     try:
-        if project_id is None:
-            row = await db.fetchrow(
-                """
-                INSERT INTO budgets (user_id, project_id, amount, month, year, updated_at)
-                VALUES ($1, NULL, $2, $3, $4, now())
-                ON CONFLICT (user_id, month, year) WHERE project_id IS NULL
-                DO UPDATE SET
-                    amount                  = EXCLUDED.amount,
-                    updated_at              = now(),
-                    -- Reset notifications when budget amount changes
-                    threshold_notified_at   = CASE WHEN budgets.amount != EXCLUDED.amount
-                                                   THEN NULL ELSE budgets.threshold_notified_at END,
-                    overspent_notified_at   = CASE WHEN budgets.amount != EXCLUDED.amount
-                                                   THEN NULL ELSE budgets.overspent_notified_at END,
-                    last_notified_spending  = CASE WHEN budgets.amount != EXCLUDED.amount
-                                                   THEN NULL ELSE budgets.last_notified_spending END
-                RETURNING *
-                """,
-                str(user_id), amount, month, year
-            )
-        else:
-            row = await db.fetchrow(
-                """
-                INSERT INTO budgets (user_id, project_id, amount, month, year, updated_at)
-                VALUES ($1, $5, $2, $3, $4, now())
-                ON CONFLICT (user_id, project_id, month, year) WHERE project_id IS NOT NULL
-                DO UPDATE SET
-                    amount                  = EXCLUDED.amount,
-                    updated_at              = now(),
-                    threshold_notified_at   = CASE WHEN budgets.amount != EXCLUDED.amount
-                                                   THEN NULL ELSE budgets.threshold_notified_at END,
-                    overspent_notified_at   = CASE WHEN budgets.amount != EXCLUDED.amount
-                                                   THEN NULL ELSE budgets.overspent_notified_at END,
-                    last_notified_spending  = CASE WHEN budgets.amount != EXCLUDED.amount
-                                                   THEN NULL ELSE budgets.last_notified_spending END
-                RETURNING *
-                """,
-                str(user_id), amount, month, year, project_id
-            )
-        log_event(logger, "set_budget_success",
-                  user_id=user_id, month=month, year=year, amount=amount, project_id=project_id)
+        await require_permission(user_id, project_id, Permission.SET_BUDGET)
+        currency = currency or await get_reporting_currency(user_id, project_id)
+        amount = parse_amount(round_money(parse_amount(amount), currency))
+        conflict = ("(user_id, month, year) WHERE project_id IS NULL" if project_id is None
+                    else "(user_id, project_id, month, year) WHERE project_id IS NOT NULL")
+        async with db.transaction() as conn:
+            async with conn.transaction():
+                await validate_money_context(conn, user_id, project_id, {"reporting_currency": currency}, writer=True)
+                row = await conn.fetchrow(
+                    f"""
+                    INSERT INTO budgets (user_id, project_id, amount, month, year, currency, updated_at)
+                    VALUES ($1, $2, $3, $4, $5, $6, now())
+                    ON CONFLICT {conflict} DO UPDATE SET
+                        amount = EXCLUDED.amount,
+                        currency = EXCLUDED.currency,
+                        updated_at = now(),
+                        notify_enabled = CASE WHEN budgets.currency IS DISTINCT FROM EXCLUDED.currency
+                                              THEN FALSE ELSE budgets.notify_enabled END,
+                        notify_threshold = CASE WHEN budgets.currency IS DISTINCT FROM EXCLUDED.currency
+                                                THEN NULL ELSE budgets.notify_threshold END,
+                        threshold_notified_at = CASE WHEN budgets.amount != EXCLUDED.amount
+                            OR budgets.currency IS DISTINCT FROM EXCLUDED.currency
+                            THEN NULL ELSE budgets.threshold_notified_at END,
+                        overspent_notified_at = CASE WHEN budgets.amount != EXCLUDED.amount
+                            OR budgets.currency IS DISTINCT FROM EXCLUDED.currency
+                            THEN NULL ELSE budgets.overspent_notified_at END,
+                        last_notified_spending = CASE WHEN budgets.amount != EXCLUDED.amount
+                            OR budgets.currency IS DISTINCT FROM EXCLUDED.currency
+                            THEN NULL ELSE budgets.last_notified_spending END
+                    RETURNING *
+                    """, str(user_id), project_id, amount, month, year, currency,
+                )
+        log_event(logger, "set_budget_success", user_id=user_id, month=month, year=year,
+                  amount=str(amount), project_id=project_id, currency=currency)
         return _row_to_dict(row) if row else None
     except Exception as e:
-        log_error(logger, e, "set_budget_error",
-                  user_id=user_id, month=month, year=year, amount=amount, project_id=project_id)
+        log_error(logger, e, "set_budget_error", user_id=user_id, month=month, year=year,
+                  project_id=project_id)
         return None
 
 
@@ -179,6 +177,9 @@ async def set_notification(user_id: int, month: int, year: int, threshold: float
     """
     project_id = _normalize_project_id(project_id)
     try:
+        await require_permission(user_id, project_id, Permission.SET_BUDGET)
+        currency = await get_reporting_currency(user_id, project_id)
+        threshold = parse_amount(round_money(parse_amount(threshold), currency))
         if project_id is None:
             row = await db.fetchrow(
                 """
@@ -190,10 +191,10 @@ async def set_notification(user_id: int, month: int, year: int, threshold: float
                     last_notified_spending = NULL,
                     updated_at = now()
                 WHERE user_id = $1 AND month = $3 AND year = $4
-                  AND project_id IS NULL
+                  AND project_id IS NULL AND currency = $5 AND amount >= $2
                 RETURNING *
                 """,
-                str(user_id), threshold, month, year
+                str(user_id), threshold, month, year, currency
             )
         else:
             row = await db.fetchrow(
@@ -206,10 +207,10 @@ async def set_notification(user_id: int, month: int, year: int, threshold: float
                     last_notified_spending = NULL,
                     updated_at = now()
                 WHERE user_id = $1 AND month = $3 AND year = $4
-                  AND project_id = $5
+                  AND project_id = $5 AND currency = $6 AND amount >= $2
                 RETURNING *
                 """,
-                str(user_id), threshold, month, year, project_id
+                str(user_id), threshold, month, year, project_id, currency
             )
         log_event(logger, "set_notification_success",
                   user_id=user_id, month=month, year=year, threshold=threshold)
@@ -266,17 +267,19 @@ async def enable_notification(user_id: int, month: int, year: int,
     """
     project_id = _normalize_project_id(project_id)
     try:
+        await require_permission(user_id, project_id, Permission.SET_BUDGET)
+        currency = await get_reporting_currency(user_id, project_id)
         if project_id is None:
             row = await db.fetchrow(
                 """
                 UPDATE budgets
                 SET notify_enabled = TRUE, updated_at = now()
                 WHERE user_id = $1 AND month = $2 AND year = $3
-                  AND project_id IS NULL
+                  AND project_id IS NULL AND currency = $4
                   AND notify_threshold IS NOT NULL
                 RETURNING *
                 """,
-                str(user_id), month, year
+                str(user_id), month, year, currency
             )
         else:
             row = await db.fetchrow(
@@ -284,11 +287,11 @@ async def enable_notification(user_id: int, month: int, year: int,
                 UPDATE budgets
                 SET notify_enabled = TRUE, updated_at = now()
                 WHERE user_id = $1 AND month = $2 AND year = $3
-                  AND project_id = $4
+                  AND project_id = $4 AND currency = $5
                   AND notify_threshold IS NOT NULL
                 RETURNING *
                 """,
-                str(user_id), month, year, project_id
+                str(user_id), month, year, project_id, currency
             )
         log_event(logger, "enable_notification_success", user_id=user_id, month=month, year=year)
         return _row_to_dict(row) if row else None
@@ -307,7 +310,7 @@ async def get_all_active_budgets_with_notifications(month: int, year: int) -> Li
         rows = await db.fetch(
             """
             SELECT * FROM budgets
-            WHERE notify_enabled = TRUE AND month = $1 AND year = $2
+            WHERE notify_enabled = TRUE AND currency IS NOT NULL AND month = $1 AND year = $2
             ORDER BY id
             """,
             month, year
@@ -366,6 +369,7 @@ async def get_budgets_for_year(user_id: int, year: int,
                 """
                 SELECT * FROM budgets
                 WHERE user_id = $1 AND year = $2 AND project_id IS NULL
+                AND currency IS NOT NULL
                 ORDER BY month ASC
                 """,
                 str(user_id), year
@@ -375,6 +379,7 @@ async def get_budgets_for_year(user_id: int, year: int,
                 """
                 SELECT * FROM budgets
                 WHERE user_id = $1 AND year = $2 AND project_id = $3
+                AND currency IS NOT NULL
                 ORDER BY month ASC
                 """,
                 str(user_id), year, project_id

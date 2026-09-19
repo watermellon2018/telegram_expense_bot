@@ -54,7 +54,7 @@ async def test_export_command_no_data(mock_update, mock_context):
     """Тест /export когда нет данных"""
     mock_context.args = ["2024"]
 
-    with patch('handlers.export.excel.get_all_expenses', new=AsyncMock(return_value=None)):
+    with patch('utils.currency_reporting.get_export_expenses', new=AsyncMock(return_value=None)):
         await export_stats_command(mock_update, mock_context)
 
         # Проверяем, что отправлено сообщение об отсутствии данных
@@ -161,7 +161,7 @@ async def test_perform_export_message_selection():
 
     mock_df = pd.DataFrame({'date': [], 'amount': [], 'category': [], 'month': []})
 
-    with patch('handlers.export.excel.get_all_expenses', new=AsyncMock(return_value=mock_df)):
+    with patch('utils.currency_reporting.get_export_expenses', new=AsyncMock(return_value=mock_df)):
         # Тест 1: callback query update - должен использовать callback_query.message
         await perform_export(mock_callback_update, 123, None, None, None)
         mock_callback_update.callback_query.message.reply_text.assert_called()

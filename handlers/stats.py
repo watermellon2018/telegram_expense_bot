@@ -55,7 +55,7 @@ async def month_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         year = now.year
 
         # Получаем активный проект
-        project_id = context.user_data.get('active_project_id')
+        project_id = await helpers.get_active_project_id(user_id, context)
 
         log_event(logger, "month_stats_requested", user_id=user_id,
                  project_id=project_id, month=month, year=year)
@@ -102,7 +102,7 @@ async def month_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         )
 
         # Добавляем информацию о проекте
-        report = await helpers.add_project_context_to_report(report, user_id, project_id)
+        report = await helpers.add_project_context_to_report(report, user_id, project_id, month=month, year=year)
 
         # Отправляем отчет
         await update.message.reply_text(report, reply_markup=helpers.get_main_menu_keyboard())
@@ -174,7 +174,7 @@ async def category_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         # Проверяем, что указана категория
         if not context.args or len(context.args) < 1:
             # Получаем активный проект
-            project_id = context.user_data.get('active_project_id')
+            project_id = await helpers.get_active_project_id(user_id, context)
 
             # Получаем доступные категории для пользователя
             await categories.ensure_system_categories_exist(user_id)
@@ -201,7 +201,7 @@ async def category_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         category_name = context.args[0].lower()
 
         # Получаем активный проект
-        project_id = context.user_data.get('active_project_id')
+        project_id = await helpers.get_active_project_id(user_id, context)
 
         # Ищем категорию по имени одним SQL-запросом
         await categories.ensure_system_categories_exist(user_id)
@@ -223,7 +223,7 @@ async def category_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         report = helpers.format_category_expenses(category_data, category_found['name'], year)
 
         # Добавляем информацию о проекте
-        report = await helpers.add_project_context_to_report(report, user_id, project_id)
+        report = await helpers.add_project_context_to_report(report, user_id, project_id, year=year, category_id=category_found['category_id'])
 
         # Отправляем отчет
         await update.message.reply_text(report, reply_markup=helpers.get_main_menu_keyboard())
@@ -252,12 +252,14 @@ async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     track_handler_start("stats_command")
     error_type = None
     user_id = update.effective_user.id
-    project_id = context.user_data.get('active_project_id')
+    project_id = await helpers.get_active_project_id(user_id, context)
 
     # Получаем текущий год
     year = datetime.datetime.now().year
 
     try:
+        scope = await helpers.add_project_context_to_report("Графики по операциям с указанной валютой.", user_id, project_id, year=year)
+        await update.message.reply_text(scope)
         # Генерируем графики параллельно
         category_chart, budget_chart, income_category_chart, income_vs_expense_chart = await asyncio.gather(
             visualization.create_category_distribution_chart(user_id, year, project_id=project_id),
@@ -321,7 +323,7 @@ async def handle_category_choice(update: Update, context: ContextTypes.DEFAULT_T
         return ConversationHandler.END
 
     # Получаем активный проект
-    project_id = context.user_data.get('active_project_id')
+    project_id = await helpers.get_active_project_id(user_id, context)
 
     # Ищем категорию по имени одним SQL-запросом
     await categories.ensure_system_categories_exist(user_id)
@@ -362,7 +364,7 @@ async def day_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         date = datetime.datetime.now().strftime('%Y-%m-%d')
 
         # Получаем активный проект
-        project_id = context.user_data.get('active_project_id')
+        project_id = await helpers.get_active_project_id(user_id, context)
 
         # Получаем статистику расходов
         expenses = await excel.get_day_expenses(user_id, date, project_id)
@@ -371,7 +373,7 @@ async def day_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         report = helpers.format_day_expenses(expenses, date)
 
         # Добавляем информацию о проекте
-        report = await helpers.add_project_context_to_report(report, user_id, project_id)
+        report = await helpers.add_project_context_to_report(report, user_id, project_id, date=date)
 
         # Отправляем отчет
         await update.message.reply_text(report, reply_markup=helpers.get_main_menu_keyboard())

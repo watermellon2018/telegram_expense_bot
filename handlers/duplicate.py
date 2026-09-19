@@ -19,8 +19,10 @@ from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import CallbackQueryHandler, ContextTypes
 
 import metrics
+from handlers.currency import format_snapshot
 from utils import excel, expense_creation, expense_formatter
 from utils.logger import get_logger, log_event
+from utils.permissions import Permission, has_permission
 
 logger = get_logger("handlers.duplicate")
 
@@ -77,11 +79,11 @@ async def dup_confirm_callback(update: Update, context: ContextTypes.DEFAULT_TYP
     if status == "created":
         # Расход успешно создан — убираем черновик
         expense_creation.discard_draft(context.bot_data, draft_id)
-        await query.edit_message_text("✅ Расход добавлен.")
+        await query.edit_message_text("✅ Расход добавлен.\n" + format_snapshot(result.get("money")))
     elif status == "already":
         # Повторное нажатие — расход уже был создан, второй не создаём
         expense_creation.discard_draft(context.bot_data, draft_id)
-        await query.edit_message_text("✅ Расход уже добавлен.")
+        await query.edit_message_text("✅ Расход уже добавлен.\n" + format_snapshot(result.get("money")))
     elif status == "expired":
         await query.edit_message_text("⌛️ Запрос устарел. Добавьте расход заново.")
     else:
@@ -141,7 +143,16 @@ async def dup_view_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) 
 
     await query.answer()
 
+    project_id = draft.get("project_id")
+    if (draft.get("existing_expense_id") != existing_expense_id
+            or not await has_permission(update.effective_user.id, project_id, Permission.VIEW_HISTORY)):
+        await query.edit_message_text("Расход недоступен. Откройте добавление заново.")
+        return
     expense = await excel.get_expense_by_id(existing_expense_id)
+    if expense is not None and (expense.get("project_id") != project_id or
+            (project_id is None and str(expense.get("user_id")) != str(update.effective_user.id))):
+        await query.edit_message_text("Расход недоступен.")
+        return
     if expense is None:
         # Расход был удалён до нажатия кнопки — корректно сообщаем и оставляем
         # возможность всё равно добавить/отменить.

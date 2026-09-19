@@ -5,29 +5,51 @@
 как раньше, без проверки дубликатов и без уведомлений.
 """
 
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+
+pytestmark = pytest.mark.usefixtures("mock_currency_context")
 
 from utils import excel
 
 
+@pytest.fixture
+def connection(monkeypatch):
+    conn = MagicMock()
+    async def fetchval(sql, *args):
+        if 'SELECT pm.role' in sql:
+            return 'editor'
+        if 'SELECT EXISTS' in sql:
+            return True
+        return 321
+    conn.fetchval = AsyncMock(side_effect=fetchval)
+    conn.execute = AsyncMock()
+    conn.transaction.return_value.__aenter__ = AsyncMock(return_value=conn)
+    conn.transaction.return_value.__aexit__ = AsyncMock(return_value=False)
+    acquire = MagicMock()
+    acquire.__aenter__ = AsyncMock(return_value=conn)
+    acquire.__aexit__ = AsyncMock(return_value=False)
+    monkeypatch.setattr(excel.db, 'transaction', lambda: acquire)
+    monkeypatch.setattr('utils.projects.get_user_role_in_project', AsyncMock(return_value='editor'))
+    return conn
+
+
 @pytest.mark.asyncio
-async def test_create_expense_returns_id():
-    with patch("utils.excel.db.fetchval", new=AsyncMock(return_value=321)):
-        expense_id = await excel.create_expense(
-            user_id=111, amount=100, category_id=5, description="кофе", project_id=None)
+async def test_create_expense_returns_id(connection):
+    expense_id = await excel.create_expense(111, 100, 5, 'кофе', None)
     assert expense_id == 321
+    sql, *values = connection.fetchval.call_args.args
+    assert 'INSERT INTO expenses' in sql
+    assert values[8] == 'RUB'
+    assert values[9] == 100
 
 
 @pytest.mark.asyncio
-async def test_create_expense_uses_conn_when_provided():
-    conn = AsyncMock()
-    conn.fetchval = AsyncMock(return_value=999)
-    expense_id = await excel.create_expense(
-        user_id=111, amount=100, category_id=5, description="", project_id=1, conn=conn)
-    assert expense_id == 999
-    conn.fetchval.assert_awaited_once()
+async def test_create_expense_uses_conn_when_provided(connection):
+    with patch.object(excel.db, 'transaction', side_effect=AssertionError('nested acquire')):
+        assert await excel.create_expense(111, 100, 5, '', 1, conn=connection) == 321
+    assert sum('INSERT INTO expenses' in call.args[0] for call in connection.fetchval.await_args_list) == 1
 
 
 @pytest.mark.asyncio
@@ -81,7 +103,7 @@ async def test_acquire_project_expense_lock_calls_advisory():
 # --- Обратная совместимость add_expense (личный расход) ---
 
 @pytest.mark.asyncio
-async def test_add_expense_personal_still_works():
+async def test_add_expense_personal_still_works(connection):
     """Сценарий 11: личный расход через старый add_expense не сломан."""
     category = {"category_id": 5, "name": "кафе", "project_id": None}
     # add_expense импортирует utils.categories локально, поэтому патчим источник

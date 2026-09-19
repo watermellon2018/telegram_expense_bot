@@ -4,6 +4,8 @@
 from unittest.mock import AsyncMock
 
 import pytest
+
+pytestmark = pytest.mark.usefixtures("mock_currency_context")
 from telegram.ext import ConversationHandler
 
 from utils import helpers

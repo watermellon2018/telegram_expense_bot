@@ -10,6 +10,7 @@
 """
 
 import datetime
+from decimal import Decimal
 
 from telegram import ReplyKeyboardMarkup, Update
 from telegram.ext import (
@@ -21,7 +22,7 @@ from telegram.ext import (
 
 import config
 from utils import budgets as budgets_utils
-from utils import excel
+from utils import currencies, excel
 from utils.budget_notifier import check_user_budget_now
 from utils.helpers import get_main_menu_keyboard, main_menu_button_regex
 from utils.logger import get_logger, log_event
@@ -65,8 +66,8 @@ def _budget_menu_button_regex(key: str) -> str:
     return "^" + re.escape(config.BUDGET_MENU_BUTTONS[key]) + "$"
 
 
-def _fmt_amount(value: float) -> str:
-    return f"{value:,.0f}".replace(",", "\u202f") + "\u00a0руб."
+def _fmt_amount(value: float, currency=None) -> str:
+    return currencies.format_money(value, currency)
 
 
 def _progress_bar(spent: float, budget: float, length: int = 10) -> str:
@@ -83,28 +84,31 @@ def _format_budget_status_text(budget: dict, spending: float,
                                 month: int, year: int) -> str:
     """Формирует текстовый статус бюджета."""
     from utils.helpers import get_month_name
+    if not budget.get('currency'):
+        return "Бюджет без указанной валюты: " + _fmt_amount(budget["amount"]) + "\nЗадайте бюджет заново для сравнения с пересчитанными расходами."
+    currency = budget["currency"]
     month_name = get_month_name(month)
     budget_amount = budget['amount']
     bar = _progress_bar(spending, budget_amount)
 
     if spending <= budget_amount:
         remaining = budget_amount - spending
-        status_line = f"✅ Остаток: {_fmt_amount(remaining)}"
+        status_line = f"✅ Остаток: {_fmt_amount(remaining, budget.get('currency'))}"
     else:
         overspent = spending - budget_amount
-        status_line = f"❌ Перерасход: {_fmt_amount(overspent)}"
+        status_line = f"❌ Перерасход: {_fmt_amount(overspent, budget.get('currency'))}"
 
     lines = [
         f"📊 Бюджет на {month_name} {year}",
         "",
-        f"💰 Установлен: {_fmt_amount(budget_amount)}",
-        f"💸 Потрачено:  {_fmt_amount(spending)}",
+        f"💰 Установлен: {_fmt_amount(budget_amount, budget.get('currency'))}",
+        f"💸 Потрачено:  {_fmt_amount(spending, budget.get('currency'))}",
         f"   {bar}",
         status_line,
     ]
 
     if budget.get('notify_enabled') and budget.get('notify_threshold'):
-        lines.append(f"🔔 Порог уведомления: {_fmt_amount(budget['notify_threshold'])}")
+        lines.append(f"🔔 Порог уведомления: {_fmt_amount(budget['notify_threshold'], budget.get('currency'))}")
     elif not budget.get('notify_enabled'):
         lines.append("🔕 Уведомления отключены")
 
@@ -152,7 +156,7 @@ async def budget_status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
     budget = await budgets_utils.get_or_inherit_budget(user_id, month, year, project_id)
 
-    if budget is None:
+    if budget is None or not budget.get("currency"):
         await update.message.reply_text(
             "ℹ️ Бюджет на текущий месяц не установлен.\n"
             "Нажмите «💰 Установить бюджет», чтобы задать лимит.",
@@ -177,6 +181,8 @@ async def set_budget_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     """Начало диалога установки бюджета."""
     user_id = update.effective_user.id
     project_id = context.user_data.get('active_project_id')
+    context.user_data['budget_project_id'] = project_id
+    context.user_data['budget_currency'] = await currencies.get_reporting_currency(user_id, project_id)
 
     if not await has_permission(user_id, project_id, Permission.SET_BUDGET):
         await update.message.reply_text(
@@ -194,10 +200,10 @@ async def set_budget_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     existing = await budgets_utils.get_budget(user_id, now.month, now.year, project_id)
     hint = ""
     if existing:
-        hint = f"\n\nТекущий бюджет: {_fmt_amount(existing['amount'])}"
+        hint = f"\n\nТекущий бюджет: {_fmt_amount(existing['amount'], existing.get('currency'))}"
 
     await update.message.reply_text(
-        f"💰 Введите сумму бюджета на {month_name} {now.year}:{hint}",
+        f"💰 Введите сумму бюджета на {month_name} {now.year} в {context.user_data['budget_currency']}:{hint}",
         reply_markup=ReplyKeyboardMarkup([["Отмена"]], resize_keyboard=True),
     )
     return ENTERING_AMOUNT
@@ -210,7 +216,7 @@ async def set_budget_amount(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         return await _cancel_set(update, context)
 
     try:
-        amount = float(text.replace(",", ".").replace("\u202f", "").replace("\u00a0", ""))
+        amount = currencies.parse_amount(text.replace("\u202f", "").replace("\u00a0", ""))
         if amount <= 0:
             raise ValueError("Amount must be positive")
     except ValueError:
@@ -223,7 +229,7 @@ async def set_budget_amount(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     context.user_data['budget_amount'] = amount
 
     await update.message.reply_text(
-        f"✅ Сумма бюджета: {_fmt_amount(amount)}\n\n"
+        f"✅ Сумма бюджета: {_fmt_amount(amount, context.user_data.get('budget_currency'))}\n\n"
         "Хотите получать уведомление при приближении к лимиту?",
         reply_markup=ReplyKeyboardMarkup([["Да", "Нет"], ["Отмена"]], resize_keyboard=True),
     )
@@ -237,28 +243,28 @@ async def set_budget_notify_choice(update: Update, context: ContextTypes.DEFAULT
         return await _cancel_set(update, context)
 
     user_id = update.effective_user.id
-    project_id = context.user_data.get('active_project_id')
+    project_id = context.user_data.get('budget_project_id')
     amount = context.user_data.get('budget_amount', 0.0)
     now = datetime.datetime.now()
 
     if text == "Да":
         await update.message.reply_text(
             f"Введите сумму, при которой отправлять уведомление.\n"
-            f"Например: если бюджет {_fmt_amount(amount)}, "
-            f"введите {_fmt_amount(amount * 0.9)} для уведомления при 90% использования.",
+            f"Например: если бюджет {_fmt_amount(amount, context.user_data.get('budget_currency'))}, "
+            f"введите {_fmt_amount(amount * Decimal('0.9'), context.user_data.get('budget_currency'))} для уведомления при 90% использования.",
             reply_markup=ReplyKeyboardMarkup([["Отмена"]], resize_keyboard=True),
         )
         return ENTERING_THRESHOLD
 
     # «Нет» — сохраняем бюджет без уведомлений
-    result = await budgets_utils.set_budget(user_id, now.month, now.year, amount, project_id)
+    result = await budgets_utils.set_budget(user_id, now.month, now.year, amount, project_id, currency=context.user_data.get('budget_currency'))
     if result:
         # Явно отключаем уведомления — set_budget() не трогает notify_enabled,
         # поэтому если раньше было notify_enabled=TRUE, оно бы осталось включённым.
         await budgets_utils.disable_notification(user_id, now.month, now.year, project_id)
         from utils.helpers import get_month_name
         await update.message.reply_text(
-            f"✅ Бюджет на {get_month_name(now.month)} {now.year} установлен: {_fmt_amount(amount)}\n"
+            f"✅ Бюджет на {get_month_name(now.month)} {now.year} установлен: {_fmt_amount(amount, context.user_data.get('budget_currency'))}\n"
             f"🔕 Уведомления отключены.",
             reply_markup=_budget_menu_keyboard(),
         )
@@ -282,12 +288,12 @@ async def set_budget_threshold(update: Update, context: ContextTypes.DEFAULT_TYP
     amount = context.user_data.get('budget_amount', 0.0)
 
     try:
-        threshold = float(text.replace(",", ".").replace("\u202f", "").replace("\u00a0", ""))
+        threshold = currencies.parse_amount(text.replace("\u202f", "").replace("\u00a0", ""))
         if threshold <= 0:
             raise ValueError
         if threshold > amount:
             await update.message.reply_text(
-                f"❌ Порог не может быть больше бюджета ({_fmt_amount(amount)}).\n"
+                f"❌ Порог не может быть больше бюджета ({_fmt_amount(amount, context.user_data.get('budget_currency'))}).\n"
                 "Введите корректное значение:",
                 reply_markup=ReplyKeyboardMarkup([["Отмена"]], resize_keyboard=True),
             )
@@ -300,12 +306,12 @@ async def set_budget_threshold(update: Update, context: ContextTypes.DEFAULT_TYP
         return ENTERING_THRESHOLD
 
     user_id = update.effective_user.id
-    project_id = context.user_data.get('active_project_id')
+    project_id = context.user_data.get('budget_project_id')
     now = datetime.datetime.now()
 
     # Сохраняем бюджет и порог
     budget_result = await budgets_utils.set_budget(
-        user_id, now.month, now.year, amount, project_id
+        user_id, now.month, now.year, amount, project_id, currency=context.user_data.get('budget_currency')
     )
     notify_result = None
     if budget_result:
@@ -316,8 +322,8 @@ async def set_budget_threshold(update: Update, context: ContextTypes.DEFAULT_TYP
     if budget_result and notify_result:
         await update.message.reply_text(
             f"✅ Бюджет установлен!\n\n"
-            f"💰 Бюджет: {_fmt_amount(amount)}\n"
-            f"🔔 Уведомление при: {_fmt_amount(threshold)}",
+            f"💰 Бюджет: {_fmt_amount(amount, context.user_data.get('budget_currency'))}\n"
+            f"🔔 Уведомление при: {_fmt_amount(threshold, context.user_data.get('budget_currency'))}",
             reply_markup=_budget_menu_keyboard(notify_enabled=True),
         )
         log_event(logger, "budget_set", user_id=user_id, amount=amount,
@@ -376,6 +382,8 @@ async def edit_notification_start(update: Update, context: ContextTypes.DEFAULT_
         )
         return ConversationHandler.END
 
+    context.user_data['budget_project_id'] = project_id
+    context.user_data['budget_currency'] = await currencies.get_reporting_currency(user_id, project_id)
     now = datetime.datetime.now()
     current_budget = await budgets_utils.get_budget(user_id, now.month, now.year, project_id)
     inherited = current_budget is None
@@ -383,7 +391,7 @@ async def edit_notification_start(update: Update, context: ContextTypes.DEFAULT_
         user_id, now.month, now.year, project_id
     )
 
-    if budget is None:
+    if budget is None or not budget.get("currency"):
         await update.message.reply_text(
             "ℹ️ Сначала установите бюджет (кнопка «💰 Установить бюджет»).",
             reply_markup=_budget_menu_keyboard(),
@@ -391,17 +399,17 @@ async def edit_notification_start(update: Update, context: ContextTypes.DEFAULT_
         return ConversationHandler.END
 
     current = budget.get('notify_threshold')
-    hint = f"Текущий порог: {_fmt_amount(current)}\n\n" if current else ""
+    hint = f"Текущий порог: {_fmt_amount(current, context.user_data.get('budget_currency'))}\n\n" if current else ""
     inherited_note = ""
     if inherited:
         inherited_note = (
-            f"ℹ️ Текущий месяц унаследует бюджет {_fmt_amount(budget['amount'])} "
+            f"ℹ️ Текущий месяц унаследует бюджет {_fmt_amount(budget['amount'], context.user_data.get('budget_currency'))} "
             f"из {budget['month']:02d}.{budget['year']}.\n\n"
         )
 
     await update.message.reply_text(
         f"🔔 Настройка уведомления о бюджете\n\n"
-        f"💰 Бюджет: {_fmt_amount(budget['amount'])}\n"
+        f"💰 Бюджет: {_fmt_amount(budget['amount'], context.user_data.get('budget_currency'))}\n"
         f"{inherited_note}"
         f"{hint}"
         f"Введите новый порог уведомления:",
@@ -413,7 +421,7 @@ async def edit_notification_start(update: Update, context: ContextTypes.DEFAULT_
 async def edit_notification_threshold(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Обрабатывает новый порог уведомления."""
     user_id = update.effective_user.id
-    project_id = context.user_data.get('active_project_id')
+    project_id = context.user_data.get('budget_project_id')
     now = datetime.datetime.now()
 
     text = update.message.text.strip()
@@ -425,12 +433,12 @@ async def edit_notification_threshold(update: Update, context: ContextTypes.DEFA
     budget = await budgets_utils.get_budget(user_id, now.month, now.year, project_id)
     if budget is None:
         inherited = await budgets_utils.get_or_inherit_budget(user_id, now.month, now.year, project_id)
-        if inherited is not None:
+        if inherited is not None and inherited.get("currency"):
             budget = await budgets_utils.set_budget(
-                user_id, now.month, now.year, inherited['amount'], project_id
+                user_id, now.month, now.year, inherited['amount'], project_id, currency=inherited['currency']
             )
 
-    if budget is None:
+    if budget is None or not budget.get("currency"):
         await update.message.reply_text(
             "❌ Бюджет не найден.",
             reply_markup=_budget_menu_keyboard(),
@@ -438,12 +446,12 @@ async def edit_notification_threshold(update: Update, context: ContextTypes.DEFA
         return ConversationHandler.END
 
     try:
-        threshold = float(text.replace(",", ".").replace("\u202f", "").replace("\u00a0", ""))
+        threshold = currencies.parse_amount(text.replace("\u202f", "").replace("\u00a0", ""))
         if threshold <= 0 or threshold > budget['amount']:
             raise ValueError
     except ValueError:
         await update.message.reply_text(
-            f"❌ Введите число от 1 до {_fmt_amount(budget['amount'])}:",
+            f"❌ Введите число от 1 до {_fmt_amount(budget['amount'], context.user_data.get('budget_currency'))}:",
             reply_markup=ReplyKeyboardMarkup([["Отмена"]], resize_keyboard=True),
         )
         return EDITING_THRESHOLD
@@ -453,7 +461,7 @@ async def edit_notification_threshold(update: Update, context: ContextTypes.DEFA
     )
     if result:
         await update.message.reply_text(
-            f"✅ Порог уведомления изменён: {_fmt_amount(threshold)}",
+            f"✅ Порог уведомления изменён: {_fmt_amount(threshold, context.user_data.get('budget_currency'))}",
             reply_markup=_budget_menu_keyboard(notify_enabled=True),
         )
         log_event(logger, "notification_updated", user_id=user_id, threshold=threshold)
@@ -518,7 +526,7 @@ async def enable_notifications_handler(update: Update,
     now = datetime.datetime.now()
     budget = await budgets_utils.get_budget(user_id, now.month, now.year, project_id)
 
-    if budget is None:
+    if budget is None or not budget.get("currency"):
         await update.message.reply_text(
             "ℹ️ Бюджет на текущий месяц не установлен.\n"
             "Нажмите «💰 Установить бюджет», чтобы задать лимит.",
@@ -540,7 +548,7 @@ async def enable_notifications_handler(update: Update,
     )
     if result:
         await update.message.reply_text(
-            f"🔔 Уведомления включены. Порог: {_fmt_amount(threshold)}",
+            f"🔔 Уведомления включены. Порог: {_fmt_amount(threshold, budget.get('currency'))}",
             reply_markup=_budget_menu_keyboard(notify_enabled=True),
         )
         log_event(logger, "notifications_enabled", user_id=user_id, threshold=threshold)

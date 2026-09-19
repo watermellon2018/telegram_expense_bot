@@ -14,7 +14,7 @@ from telegram.ext import (
 )
 
 import config
-from utils import income_categories, recurring_incomes
+from utils import currencies, income_categories, recurring_incomes
 from utils import recurring as recurring_utils
 from utils.helpers import get_main_menu_keyboard, income_menu_button_regex
 
@@ -48,7 +48,7 @@ def _build_rules_message_and_keyboard(rules: list) -> Tuple[str, InlineKeyboardM
         freq_text = recurring_utils.format_frequency(rule)
         display_name = rule.get("comment") or rule.get("category_name")
         lines.append(
-            f"{idx}. {display_name} — {rule['amount']}\n"
+            f"{idx}. {display_name} — {rule['amount']} {rule.get('currency') or 'без валюты'}\n"
             f"   📅 {freq_text} | {status_icon}\n"
             f"   Следующее: {_format_next_run(rule.get('next_run_at'))}"
         )
@@ -106,16 +106,25 @@ async def rin_add_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
     await query.answer()
 
     context.user_data["rin_user_id"] = str(update.effective_user.id)
+    context.user_data["rin_project_id"] = context.user_data.get("active_project_id")
+    context.user_data["rin_currency"] = await currencies.get_input_currency(update.effective_user.id, context.user_data["rin_project_id"])
     for key in ["rin_amount", "rin_category_id", "rin_category_name", "rin_comment", "rin_freq_params"]:
         context.user_data.pop(key, None)
 
-    await query.edit_message_text("➕ *Добавить постоянный доход*\n\nВведите сумму:", parse_mode="Markdown")
+    await query.edit_message_text(
+        f"➕ *Добавить постоянный доход*\n\nВведите сумму в {context.user_data['rin_currency']}. "
+        "Для другой валюты: 100 USD", parse_mode="Markdown")
     return REC_ENTERING_AMOUNT
 
 
 async def rin_handle_amount(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     try:
-        amount = float(update.message.text.replace(",", "."))
+        parts = update.message.text.split()
+        if len(parts) not in (1, 2):
+            raise ValueError("Введите сумму и код валюты")
+        amount = currencies.parse_amount(parts[0])
+        if len(parts) == 2:
+            context.user_data["rin_currency"] = currencies.normalize_currency(parts[1])
         if amount <= 0:
             await update.message.reply_text("❌ Сумма должна быть больше нуля.")
             return REC_ENTERING_AMOUNT
@@ -126,7 +135,7 @@ async def rin_handle_amount(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     context.user_data["rin_amount"] = amount
 
     user_id = update.effective_user.id
-    project_id = context.user_data.get("active_project_id")
+    project_id = context.user_data.get("rin_project_id")
     cats = await income_categories.get_income_categories_for_user_project(user_id, project_id)
     if not cats:
         await update.message.reply_text("❌ Нет категорий доходов.", reply_markup=get_main_menu_keyboard())
@@ -151,7 +160,8 @@ async def rin_handle_category(update: Update, context: ContextTypes.DEFAULT_TYPE
         return ConversationHandler.END
 
     user_id = update.effective_user.id
-    category = await income_categories.get_income_category_by_id(user_id, category_id)
+    available = await income_categories.get_income_categories_for_user_project(user_id, context.user_data.get("rin_project_id"))
+    category = next((c for c in available if c["income_category_id"] == category_id), None)
     if not category:
         await query.edit_message_text("❌ Категория не найдена.")
         return ConversationHandler.END
@@ -160,7 +170,7 @@ async def rin_handle_category(update: Update, context: ContextTypes.DEFAULT_TYPE
     context.user_data["rin_category_name"] = category["name"]
 
     await query.edit_message_text(
-        f"💰 Сумма: *{context.user_data.get('rin_amount')}*\n"
+        f"💰 Сумма: *{context.user_data.get('rin_amount')} {context.user_data.get('rin_currency')}*\n"
         f"Категория: *{category['name']}*\n\n"
         "Введите комментарий (обязательный):",
         parse_mode="Markdown",
@@ -231,22 +241,32 @@ async def _finalize_rule(message_or_query, context: ContextTypes.DEFAULT_TYPE) -
     amount = context.user_data.get("rin_amount")
     category_id = context.user_data.get("rin_category_id")
     comment = context.user_data.get("rin_comment", "")
-    project_id = context.user_data.get("active_project_id")
+    project_id = context.user_data.get("rin_project_id")
     freq_params = context.user_data.get("rin_freq_params", {})
 
-    rule_id = await recurring_incomes.create_rule(
-        user_id=user_id,
-        amount=amount,
-        income_category_id=category_id,
-        comment=comment,
-        project_id=project_id,
-        frequency_type=freq_params.get("frequency_type", "monthly"),
-        interval_value=freq_params.get("interval_value"),
-        weekday=freq_params.get("weekday"),
-        day_of_month=freq_params.get("day_of_month"),
-        is_last_day_of_month=freq_params.get("is_last_day_of_month", False),
-        start_date=datetime.date.today(),
-    )
+    from handlers.recurring import _reply_rule_error
+    currency = context.user_data.get('rin_currency')
+    if 'rin_project_id' not in context.user_data or not currency:
+        await _reply_rule_error(message_or_query, 'Диалог устарел. Начните добавление заново.')
+        return ConversationHandler.END
+    try:
+        rule_id = await recurring_incomes.create_rule(
+            user_id=user_id,
+            amount=amount,
+            income_category_id=category_id,
+            comment=comment,
+            project_id=project_id,
+            currency=context.user_data.get("rin_currency"),
+            frequency_type=freq_params.get("frequency_type", "monthly"),
+            interval_value=freq_params.get("interval_value"),
+            weekday=freq_params.get("weekday"),
+            day_of_month=freq_params.get("day_of_month"),
+            is_last_day_of_month=freq_params.get("is_last_day_of_month", False),
+            start_date=datetime.date.today(),
+        )
+    except (currencies.CurrencyError, PermissionError) as exc:
+        await _reply_rule_error(message_or_query, str(exc))
+        return ConversationHandler.END
 
     for key in ["rin_user_id", "rin_amount", "rin_category_id", "rin_category_name", "rin_comment", "rin_freq_params"]:
         context.user_data.pop(key, None)
@@ -259,7 +279,7 @@ async def _finalize_rule(message_or_query, context: ContextTypes.DEFAULT_TYPE) -
         text = (
             "✅ Постоянный доход добавлен!\n"
             "Также создана фактическая запись дохода за сегодня.\n"
-            f"💰 {amount} — {comment}\n"
+            f"💰 {amount} {currency} — {comment}\n"
             f"📅 {freq_text}\n"
             f"🗓 Следующее начисление: {_format_next_run(rule.get('next_run_at') if rule else None)}"
         )

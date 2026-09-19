@@ -23,14 +23,14 @@ async def test_process_budget_does_not_resend_overspent_when_already_notified():
         "id": 1,
         "user_id": "123",
         "project_id": None,
-        "amount": 1000.0,
+        "amount": 1000.0, "currency": "RUB",
         "notify_threshold": None,
         "overspent_notified_at": datetime.datetime.now(),
         "threshold_notified_at": None,
         "last_notified_spending": 1100.0,
     }
 
-    with patch("utils.budget_notifier.excel.get_month_expenses", new=AsyncMock(return_value={"total": 1200.0})), \
+    with patch("utils.budget_notifier.excel.get_month_expenses", new=AsyncMock(return_value={"total": 1200.0, "currency": "RUB"})), \
          patch("utils.budget_notifier._send_to_users", new=AsyncMock()) as send_mock, \
          patch("utils.budget_notifier.budgets_utils.update_notification_state", new=AsyncMock()) as update_mock:
         await budget_notifier._process_budget(
@@ -54,14 +54,14 @@ async def test_process_budget_sends_overspent_once_and_updates_state():
         "id": 2,
         "user_id": "123",
         "project_id": None,
-        "amount": 1000.0,
+        "amount": 1000.0, "currency": "RUB",
         "notify_threshold": None,
         "overspent_notified_at": None,
         "threshold_notified_at": None,
         "last_notified_spending": None,
     }
 
-    with patch("utils.budget_notifier.excel.get_month_expenses", new=AsyncMock(return_value={"total": 1200.0})), \
+    with patch("utils.budget_notifier.excel.get_month_expenses", new=AsyncMock(return_value={"total": 1200.0, "currency": "RUB"})), \
          patch("utils.budget_notifier._send_to_users", new=AsyncMock()) as send_mock, \
          patch("utils.budget_notifier.budgets_utils.update_notification_state", new=AsyncMock()) as update_mock:
         await budget_notifier._process_budget(

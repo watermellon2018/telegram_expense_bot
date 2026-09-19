@@ -11,6 +11,8 @@
 import datetime
 from typing import Optional
 
+from utils.currencies import format_money
+
 # Месяцы в родительном падеже для дат вида «8 июня 2026»
 _MONTHS_GENITIVE = [
     "января", "февраля", "марта", "апреля", "мая", "июня",
@@ -91,6 +93,15 @@ def _author_display(author_id: str, author_name: Optional[str]) -> str:
     return f"ID: {author_id}"
 
 
+def format_expense_money(expense: dict) -> str:
+    result = format_money(expense['amount'], expense.get('currency'))
+    if expense.get('reporting_currency') and expense.get('currency') != expense['reporting_currency']:
+        result += " ≈ " + format_money(expense['reporting_amount'], expense['reporting_currency'])
+    if expense.get('fx_source') == 'manual':
+        result += " (резервный курс)"
+    return result
+
+
 def format_duplicate_warning(existing: dict, author_name: Optional[str] = None,
                              now: Optional[datetime.datetime] = None) -> str:
     """
@@ -102,7 +113,7 @@ def format_duplicate_warning(existing: dict, author_name: Optional[str] = None,
     lines = ["⚠️ Возможно, этот расход уже добавлен", ""]
 
     title = existing.get("description") or existing.get("category_name", "Расход")
-    lines.append(f"{title} — {format_amount(existing['amount'])} ₽")
+    lines.append(f"{title} — {format_expense_money(existing)}")
     lines.append(f"Категория: {existing.get('category_name', '—')}")
     lines.append(f"Добавил: {_author_display(existing.get('author_id', ''), author_name)}")
     lines.append(f"Дата расхода: {format_date_human(existing.get('date'))}")
@@ -116,7 +127,7 @@ def format_expense_details(expense: dict, author_name: Optional[str] = None) -> 
     """Подробности расхода (для кнопки «Посмотреть расход»)."""
     lines = ["👁 Детали расхода", ""]
     title = expense.get("description") or expense.get("category_name", "Расход")
-    lines.append(f"{title} — {format_amount(expense['amount'])} ₽")
+    lines.append(f"{title} — {format_expense_money(expense)}")
     lines.append(f"Категория: {expense.get('category_name', '—')}")
     lines.append(f"Добавил: {_author_display(expense.get('author_id') or expense.get('user_id', ''), author_name)}")
     lines.append(f"Дата расхода: {format_date_human(expense.get('date'))}")
@@ -138,7 +149,7 @@ def format_expense_notification(project_name: str, expense: dict,
     lines = [f"💸 В проект «{project_name}» добавлен расход", ""]
 
     title = expense.get("description") or expense.get("category_name", "Расход")
-    lines.append(f"{title} — {format_amount(expense['amount'])} ₽")
+    lines.append(f"{title} — {format_expense_money(expense)}")
     lines.append(f"Категория: {expense.get('category_name', '—')}")
     lines.append(f"Добавил: {_author_display(expense.get('author_id') or expense.get('user_id', ''), author_name)}")
 
@@ -160,7 +171,7 @@ def format_duplicate_report_to_author(project_name: str, expense: dict,
     """Уведомление автора расхода о том, что его пометили как возможный дубликат."""
     lines = ["⚠️ Участник проекта считает расход возможным дубликатом", ""]
     title = expense.get("description") or expense.get("category_name", "Расход")
-    lines.append(f"{title} — {format_amount(expense['amount'])} ₽")
+    lines.append(f"{title} — {format_expense_money(expense)}")
     lines.append(f"Проект: {project_name}")
     reporter = reporter_name or "участник"
     lines.append(f"Отметил: {reporter}")

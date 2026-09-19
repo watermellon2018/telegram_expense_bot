@@ -15,7 +15,9 @@ from telegram.ext import (
     filters,
 )
 
-from utils import helpers, projects
+from handlers.currency import currency_keyboard
+from utils import currencies, helpers, projects
+from utils.currency_reporting import format_project_totals
 from utils.helpers import project_menu_button_regex
 from utils.logger import get_logger, log_command, log_error, log_event
 
@@ -28,74 +30,20 @@ logger = get_logger("handlers.project")
     ENTERING_PROJECT_TO_DELETE,
     CHOOSING_PROJECT_TO_DELETE,
     CHOOSING_TEMPLATE,
-) = range(5)
+    CHOOSING_REPORT_CURRENCY,
+    CHOOSING_INPUT_CURRENCY,
+    ENTERING_FALLBACK_RATE,
+) = range(8)
 
 
-async def project_create_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """
-    Обрабатывает команду /project_create для создания нового проекта
-    """
-    user_id = update.effective_user.id
-    message_text = update.message.text
-    start_time = time.time()
-
-    log_command(logger, "project_create", user_id=user_id, command_text=message_text)
-
-    try:
-        # Проверяем, содержит ли команда название проекта
-        parts = message_text.split(maxsplit=1)
-
-        if len(parts) < 2:
-            log_event(logger, "project_create_no_name", user_id=user_id,
-                     reason="name_not_provided")
-            await update.message.reply_text(
-                "❌ Укажите название проекта.\n"
-                "Используйте: /project_create <название>\n"
-                "Например: /project_create Отпуск"
-            )
-            return
-
-        project_name = parts[1].strip()
-
-        if not project_name:
-            log_event(logger, "project_create_empty_name", user_id=user_id,
-                     reason="empty_name")
-            await update.message.reply_text("❌ Название проекта не может быть пустым.")
-            return
-
-        log_event(logger, "project_create_start", user_id=user_id, project_name=project_name)
-
-        # Создаем проект
-        result = await projects.create_project(user_id, project_name)
-
-        if result['success']:
-            project_id = result['project_id']
-
-            # Автоматически переключаемся на созданный проект
-            await projects.set_active_project(user_id, project_id)
-
-            # Сохраняем в контексте пользователя
-            context.user_data['active_project_id'] = project_id
-
-            duration = time.time() - start_time
-            log_event(logger, "project_create_success", user_id=user_id,
-                     project_id=project_id, project_name=project_name, duration=duration)
-
-            await update.message.reply_text(
-                f"✅ {result['message']}\n"
-                f"📁 Проект '{project_name}' активирован\n\n"
-                f"Теперь все расходы будут записываться в этот проект."
-            )
-        else:
-            duration = time.time() - start_time
-            log_event(logger, "project_create_failed", user_id=user_id,
-                     project_name=project_name, reason=result.get('message'), duration=duration)
-            await update.message.reply_text(f"❌ {result['message']}")
-
-    except Exception as e:
-        duration = time.time() - start_time
-        log_error(logger, e, "project_create_error", user_id=user_id, duration=duration)
-        await update.message.reply_text("❌ Произошла ошибка при создании проекта.")
+async def project_create_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    parts = update.message.text.split(maxsplit=1)
+    if len(parts) < 2 or not parts[1].strip():
+        return await button_project_create_start(update, context)
+    context.user_data['new_project_name'] = parts[1].strip()
+    context.user_data['new_project_template'] = None
+    await update.message.reply_text("Выберите валюту отчётности проекта:", reply_markup=currency_keyboard("proj_report_"))
+    return CHOOSING_REPORT_CURRENCY
 
 
 async def project_list_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -150,8 +98,7 @@ async def project_list_command(update: Update, context: ContextTypes.DEFAULT_TYP
             message += f"   {role_emoji}\n"
             message += f"   ID: {project_id}\n"
             message += f"   Создан: {created_date}\n"
-            message += f"   Расходов: {stats['count']}\n"
-            message += f"   Сумма: {stats['total']:.2f}\n\n"
+            message += format_project_totals(stats) + "\n\n"
 
         # Показываем текущий режим
         if active_project_id is None:
@@ -336,7 +283,7 @@ async def project_delete_choose_callback(update: Update, context: ContextTypes.D
 
     await query.edit_message_text(
         f"⚠️ Удалить проект «{project['project_name']}»?\n\n"
-        f"📊 Расходов: {stats['count']} на сумму {stats['total']:.2f}\n\n"
+        f"📊 {format_project_totals(stats)}\n\n"
         f"Проект будет деактивирован. Данные будут храниться в базе месяц.",
         reply_markup=reply_markup
     )
@@ -461,51 +408,78 @@ async def button_project_create_name(update: Update, context: ContextTypes.DEFAU
 
 
 async def button_project_create_template(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """
-    Создаёт проект по выбранному шаблону (callback tpl_<key> | tpl_none).
-    """
-    query = update.callback_query
-    await query.answer()
-
-    user_id = update.effective_user.id
-    project_name = context.user_data.get('new_project_name')
-
-    if not project_name:
-        await query.edit_message_text("❌ Сессия создания проекта истекла. Начните заново.")
+    await update.callback_query.answer()
+    raw = update.callback_query.data.removeprefix("tpl_")
+    import config
+    if not context.user_data.get('new_project_name') or (raw != "none" and raw not in config.PROJECT_TEMPLATES):
+        await update.callback_query.edit_message_text("Сессия истекла. Начните создание проекта заново.")
         return ConversationHandler.END
+    context.user_data['new_project_template'] = None if raw == "none" else raw
+    await update.callback_query.edit_message_text("Выберите валюту отчётности проекта:", reply_markup=currency_keyboard("proj_report_"))
+    return CHOOSING_REPORT_CURRENCY
 
-    # tpl_none → обычный проект (template_key=None); иначе ключ шаблона
-    raw = query.data[len("tpl_"):] if query.data.startswith("tpl_") else "none"
-    template_key = None if raw == "none" else raw
 
-    result = await projects.create_project(user_id, project_name, template_key)
-
-    context.user_data.pop('new_project_name', None)
-
-    if not result['success']:
-        await query.edit_message_text(f"❌ {result['message']}")
+async def project_report_currency(update, context):
+    await update.callback_query.answer()
+    try:
+        code = currencies.normalize_currency(update.callback_query.data.removeprefix("proj_report_"))
+    except currencies.CurrencyError as exc:
+        await update.callback_query.edit_message_text(str(exc))
         return ConversationHandler.END
+    context.user_data['new_project_reporting'] = code
+    await update.callback_query.edit_message_text("В какой валюте вы будете вводить расходы по умолчанию?", reply_markup=currency_keyboard("proj_input_", default=code))
+    return CHOOSING_INPUT_CURRENCY
 
-    await projects.set_active_project(user_id, result['project_id'])
-    context.user_data['active_project_id'] = result['project_id']
 
-    if result.get('categories_isolated'):
-        import config
-        template = config.PROJECT_TEMPLATES.get(template_key, {})
-        cats = ", ".join(template.get("categories", {}).keys())
-        body = (
-            f"📁 Проект «{project_name}» активирован ({template.get('title', '')}).\n\n"
-            f"Категории проекта: {cats}.\n"
-            "Общие категории в этом проекте не показываются.\n\n"
-            "Теперь все расходы будут записываться в этот проект."
-        )
+async def project_input_currency(update, context):
+    await update.callback_query.answer()
+    try:
+        code = currencies.normalize_currency(update.callback_query.data.removeprefix("proj_input_"))
+        report = context.user_data['new_project_reporting']
+    except (currencies.CurrencyError, KeyError):
+        await update.callback_query.edit_message_text("Сессия истекла. Начните создание проекта заново.")
+        return ConversationHandler.END
+    context.user_data['new_project_input'] = code
+    if code == report:
+        return await finish_project_creation(update, context)
+    await update.callback_query.edit_message_text(
+        f"Задайте резервный курс: сколько {report} стоит 1 {code}?\n"
+        "Он применяется, если автоматический курс недоступен. Введите число или /skip."
+    )
+    return ENTERING_FALLBACK_RATE
+
+
+async def project_fallback_rate(update, context):
+    try:
+        rate = None if update.message.text == '/skip' else currencies.parse_amount(update.message.text)
+    except currencies.CurrencyError as exc:
+        await update.message.reply_text(f"{exc} Введите курс или /skip.")
+        return ENTERING_FALLBACK_RATE
+    return await finish_project_creation(update, context, rate)
+
+
+async def finish_project_creation(update, context, rate=None):
+    uid = update.effective_user.id
+    name = context.user_data.get('new_project_name')
+    report = context.user_data.get('new_project_reporting')
+    source = context.user_data.get('new_project_input')
+    reply = update.callback_query.edit_message_text if update.callback_query else update.message.reply_text
+    if not all((name, report, source)):
+        await reply("Сессия истекла. Начните создание проекта заново.")
+        return ConversationHandler.END
+    result = await projects.create_project(uid, name, context.user_data.get('new_project_template'),
+                                          reporting_currency=report, input_currency=source, fallback_rate=rate)
+    if result['success']:
+        pid = result['project_id']
+        selected = await projects.set_active_project(uid, pid)
+        if selected.get('success'):
+            context.user_data['active_project_id'] = pid
+        await reply(f"✅ Проект «{name}» создан.\nВалюта отчётности: {report}\nВаша валюта ввода: {source}\nНастройки валют: /currency")
     else:
-        body = (
-            f"📁 Проект «{project_name}» активирован.\n\n"
-            "Теперь все расходы будут записываться в этот проект."
-        )
-
-    await query.edit_message_text(f"✅ {result['message']}\n{body}")
+        await reply(f"❌ {result['message']}")
+    for key in list(context.user_data):
+        if key.startswith('new_project_'):
+            context.user_data.pop(key, None)
     return ConversationHandler.END
 
 
@@ -673,8 +647,7 @@ async def project_info_command(update: Update, context: ContextTypes.DEFAULT_TYP
     message += f"{role_emoji}\n"
     message += f"ID: {active_project['project_id']}\n"
     message += f"Создан: {active_project['created_date']}\n"
-    message += f"Расходов: {stats['count']}\n"
-    message += f"Общая сумма: {stats['total']:.2f}\n"
+    message += format_project_totals(stats) + "\n"
     message += f"Участников: {len(members)}\n\n"
 
     # Add quick actions button
@@ -689,7 +662,6 @@ def register_project_handlers(application):
     """
 
     # Команды (с /)
-    application.add_handler(CommandHandler("project_create", project_create_command))
     application.add_handler(CommandHandler("project_list", project_list_command))
     application.add_handler(CommandHandler("project_select", project_select_command))
     application.add_handler(CommandHandler("project_main", project_main_command))
@@ -719,10 +691,13 @@ def register_project_handlers(application):
 
     # Conversation для создания (кнопка): ввод имени → выбор шаблона → создание
     create_conv_handler = ConversationHandler(
-        entry_points=[MessageHandler(filters.Regex(project_menu_button_regex("create")), button_project_create_start)],
+        entry_points=[CommandHandler("project_create", project_create_command), MessageHandler(filters.Regex(project_menu_button_regex("create")), button_project_create_start)],
         states={
             ENTERING_PROJECT_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, button_project_create_name)],
             CHOOSING_TEMPLATE: [CallbackQueryHandler(button_project_create_template, pattern=r'^tpl_')],
+            CHOOSING_REPORT_CURRENCY: [CallbackQueryHandler(project_report_currency, pattern=r'^proj_report_')],
+            CHOOSING_INPUT_CURRENCY: [CallbackQueryHandler(project_input_currency, pattern=r'^proj_input_')],
+            ENTERING_FALLBACK_RATE: [CommandHandler('skip', project_fallback_rate), MessageHandler(filters.TEXT & ~filters.COMMAND, project_fallback_rate)],
         },
         fallbacks=[CommandHandler("cancel", project_cancel)],
         name="create_project_conversation",
