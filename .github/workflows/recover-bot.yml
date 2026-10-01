@@ -1,0 +1,55 @@
+name: Emergency bot recovery
+
+on:
+  push:
+    branches:
+      - recovery-bot-20261001
+
+jobs:
+  recover:
+    runs-on: self-hosted
+    steps:
+      - name: Checkout recovery branch
+        uses: actions/checkout@v4
+
+      - name: Restart existing bot or recreate stable version
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if docker inspect money_bot >/dev/null 2>&1; then
+            echo "Existing money_bot container found"
+            docker restart money_bot
+          else
+            echo "money_bot container is missing; recreating the last known stable image"
+
+            cat > .env <<'EOF'
+          TELEGRAM_BOT_TOKEN=${{ secrets.TELEGRAM_BOT_TOKEN }}
+          DB_HOST=${{ secrets.DB_HOST }}
+          DB_PORT=${{ secrets.DB_PORT }}
+          DB_NAME=${{ secrets.DB_NAME }}
+          DB_USER=${{ secrets.DB_USER }}
+          DB_PASSWORD=${{ secrets.DB_PASSWORD }}
+          USER_FOLDER_FOR_MIGRATION=/app/data/users
+          HTTPS_PROXY=${{ secrets.HTTPS_PROXY }}
+          EOF
+
+            export BOT_TAG=20260609-170149-a230a79
+            docker compose pull money_bot
+            docker compose up -d --no-deps money_bot
+          fi
+
+          sleep 15
+
+          echo "Container state:"
+          docker inspect money_bot --format='status={{.State.Status}} image={{.Config.Image}} restart_count={{.RestartCount}}' || true
+
+          echo "Recent logs:"
+          docker logs money_bot --tail 100 || true
+
+          if ! docker ps --filter name=^/money_bot$ --filter status=running --format '{{.Names}}' | grep -qx money_bot; then
+            echo "money_bot is not running after recovery"
+            exit 1
+          fi
+
+          echo "money_bot is running"
