@@ -1,0 +1,62 @@
+name: Recover Telegram connection
+
+on:
+  push:
+    branches:
+      - fix-telegram-direct-20261001
+
+jobs:
+  recover:
+    runs-on: self-hosted
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Test direct Telegram and bypass broken proxy if possible
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          STABLE_TAG=20260609-170149-a230a79
+
+          echo "=== Current bot state ==="
+          docker inspect money_bot --format='status={{.State.Status}} image={{.Config.Image}} restart_count={{.RestartCount}}' || true
+
+          echo "=== Test Telegram directly, ignoring HTTPS_PROXY ==="
+          if ! docker run --rm               --network postgres_net               -e TELEGRAM_BOT_TOKEN="${{ secrets.TELEGRAM_BOT_TOKEN }}"               --entrypoint python               ghcr.io/watermellon2018/money_bot:$STABLE_TAG               -c 'import os,httpx; t=os.environ["TELEGRAM_BOT_TOKEN"]; r=httpx.get("https://api.telegram.org/bot"+t+"/getMe",timeout=15,trust_env=False); print("DIRECT",r.status_code,r.json().get("ok")); raise SystemExit(0 if r.status_code==200 and r.json().get("ok") else 1)'
+          then
+            echo "Direct Telegram connection is unavailable. Leaving current container unchanged."
+            exit 1
+          fi
+
+          echo "Direct Telegram works. Recreating bot WITHOUT HTTPS_PROXY."
+
+          cat > .env <<'EOF'
+          TELEGRAM_BOT_TOKEN=${{ secrets.TELEGRAM_BOT_TOKEN }}
+          DB_HOST=${{ secrets.DB_HOST }}
+          DB_PORT=${{ secrets.DB_PORT }}
+          DB_NAME=${{ secrets.DB_NAME }}
+          DB_USER=${{ secrets.DB_USER }}
+          DB_PASSWORD=${{ secrets.DB_PASSWORD }}
+          USER_FOLDER_FOR_MIGRATION=/app/data/users
+          HTTPS_PROXY=
+          EOF
+
+          export BOT_TAG=$STABLE_TAG
+          docker compose up -d --no-deps --force-recreate money_bot
+
+          sleep 20
+
+          echo "=== Verify container ==="
+          docker inspect money_bot --format='status={{.State.Status}} running={{.State.Running}} exit={{.State.ExitCode}} restart_count={{.RestartCount}} image={{.Config.Image}}'
+
+          echo "=== Verify DB ==="
+          docker exec money_bot python -c 'import os,psycopg; c=psycopg.connect(host=os.environ["DB_HOST"],port=os.environ.get("DB_PORT","5432"),dbname=os.environ["DB_NAME"],user=os.environ["DB_USER"],password=os.environ["DB_PASSWORD"],connect_timeout=5); cur=c.cursor(); cur.execute("select 1"); print("DB",cur.fetchone()[0]); c.close()'
+
+          echo "=== Verify Telegram from recreated bot ==="
+          docker exec money_bot python -c 'import os,httpx; t=os.environ["TELEGRAM_BOT_TOKEN"]; r=httpx.get("https://api.telegram.org/bot"+t+"/getMe",timeout=15,trust_env=True); print("TELEGRAM",r.status_code,r.json().get("ok")); raise SystemExit(0 if r.status_code==200 and r.json().get("ok") else 1)'
+
+          echo "=== Recent logs ==="
+          docker logs money_bot --since 2m --tail 100 2>&1 || true
+
+          echo "Recovery completed."
