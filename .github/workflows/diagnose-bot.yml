@@ -1,0 +1,41 @@
+name: Diagnose bot
+
+on:
+  push:
+    branches:
+      - recovery-bot-20261001
+
+jobs:
+  diagnose:
+    runs-on: self-hosted
+    steps:
+      - name: Inspect containers and bot
+        shell: bash
+        run: |
+          set +e
+          echo "=== docker ps -a ==="
+          docker ps -a --format 'table {{.Names}}\t{{.Image}}\t{{.Status}}\t{{.Networks}}'
+
+          echo
+          echo "=== money_bot inspect ==="
+          docker inspect money_bot --format='status={{.State.Status}} running={{.State.Running}} exit={{.State.ExitCode}} restart_count={{.RestartCount}} image={{.Config.Image}} health={{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' || true
+
+          echo
+          echo "=== postgres_net members ==="
+          docker network inspect postgres_net --format '{{range $id, $c := .Containers}}{{println $c.Name $c.IPv4Address}}{{end}}' || true
+
+          echo
+          echo "=== database TCP test from money_bot ==="
+          docker exec money_bot python -c 'import os,socket; h=os.environ["DB_HOST"]; p=int(os.environ.get("DB_PORT","5432")); s=socket.create_connection((h,p),5); print("DB TCP: OK"); s.close()' || echo "DB TCP: FAILED"
+
+          echo
+          echo "=== database query test from money_bot ==="
+          docker exec money_bot python -c 'import os,psycopg; c=psycopg.connect(host=os.environ["DB_HOST"],port=os.environ.get("DB_PORT","5432"),dbname=os.environ["DB_NAME"],user=os.environ["DB_USER"],password=os.environ["DB_PASSWORD"],connect_timeout=5); cur=c.cursor(); cur.execute("select 1"); print("DB SELECT 1:",cur.fetchone()[0]); cur.execute("select version_num from alembic_version"); print("Alembic:",cur.fetchone()[0]); c.close()' || echo "DB QUERY: FAILED"
+
+          echo
+          echo "=== Telegram HTTPS test from money_bot ==="
+          docker exec money_bot python -c 'import os,httpx; token=os.environ["TELEGRAM_BOT_TOKEN"]; r=httpx.get("https://api.telegram.org/bot"+token+"/getMe",timeout=10,trust_env=True); print("Telegram HTTP:",r.status_code,"ok=",r.json().get("ok"))' || echo "TELEGRAM HTTP: FAILED"
+
+          echo
+          echo "=== recent money_bot logs ==="
+          docker logs money_bot --since 20m --tail 300 2>&1 || true
