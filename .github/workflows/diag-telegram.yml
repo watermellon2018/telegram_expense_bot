@@ -1,0 +1,88 @@
+name: Diagnose Telegram connectivity
+
+on:
+  push:
+    branches:
+      - diag-telegram-20261001
+
+jobs:
+  diagnose:
+    runs-on: self-hosted
+    steps:
+      - name: Diagnose Telegram path
+        shell: bash
+        run: |
+          set +e
+
+          echo "=== bot state ==="
+          docker inspect money_bot --format='status={{.State.Status}} running={{.State.Running}} exit={{.State.ExitCode}} restart_count={{.RestartCount}} image={{.Config.Image}}' || true
+
+          echo
+          echo "=== recent bot logs ==="
+          docker logs money_bot --since 30m --tail 200 2>&1 || true
+
+          echo
+          echo "=== proxy metadata (credentials hidden) ==="
+          docker exec money_bot python - <<'PY'
+          import os
+          from urllib.parse import urlsplit
+          p=os.environ.get("HTTPS_PROXY") or os.environ.get("https_proxy") or ""
+          if not p:
+              print("HTTPS_PROXY: not set")
+          else:
+              u=urlsplit(p)
+              print(f"HTTPS_PROXY: scheme={u.scheme!r} host={u.hostname!r} port={u.port!r} auth={'yes' if u.username else 'no'}")
+          PY
+
+          echo
+          echo "=== DNS + TCP direct api.telegram.org:443 ==="
+          docker exec money_bot python - <<'PY'
+          import socket
+          try:
+              ips=socket.getaddrinfo("api.telegram.org",443,type=socket.SOCK_STREAM)
+              print("DNS:", sorted({x[4][0] for x in ips}))
+              s=socket.create_connection(("api.telegram.org",443),8)
+              print("DIRECT TCP: OK", s.getpeername())
+              s.close()
+          except Exception as e:
+              print("DIRECT TCP: FAILED", type(e).__name__, repr(e))
+          PY
+
+          echo
+          echo "=== Telegram getMe DIRECT (ignore proxy env) ==="
+          docker exec money_bot python - <<'PY'
+          import os, httpx, time
+          token=os.environ["TELEGRAM_BOT_TOKEN"]
+          t=time.time()
+          try:
+              with httpx.Client(timeout=12, trust_env=False) as c:
+                  r=c.get("https://api.telegram.org/bot"+token+"/getMe")
+              print("DIRECT HTTP:",r.status_code,"ok=",r.json().get("ok"),"sec=",round(time.time()-t,2))
+          except Exception as e:
+              print("DIRECT HTTP: FAILED",type(e).__name__,repr(e),"sec=",round(time.time()-t,2))
+          PY
+
+          echo
+          echo "=== Telegram getMe USING current proxy env ==="
+          docker exec money_bot python - <<'PY'
+          import os, httpx, time
+          token=os.environ["TELEGRAM_BOT_TOKEN"]
+          t=time.time()
+          try:
+              with httpx.Client(timeout=12, trust_env=True) as c:
+                  r=c.get("https://api.telegram.org/bot"+token+"/getMe")
+              print("PROXY HTTP:",r.status_code,"ok=",r.json().get("ok"),"sec=",round(time.time()-t,2))
+          except Exception as e:
+              print("PROXY HTTP: FAILED",type(e).__name__,repr(e),"sec=",round(time.time()-t,2))
+          PY
+
+          echo
+          echo "=== DB quick check ==="
+          docker exec money_bot python - <<'PY'
+          import os, psycopg
+          try:
+              c=psycopg.connect(host=os.environ["DB_HOST"],port=os.environ.get("DB_PORT","5432"),dbname=os.environ["DB_NAME"],user=os.environ["DB_USER"],password=os.environ["DB_PASSWORD"],connect_timeout=5)
+              cur=c.cursor(); cur.execute("select 1"); print("DB:",cur.fetchone()[0]); c.close()
+          except Exception as e:
+              print("DB FAILED",type(e).__name__,repr(e))
+          PY
