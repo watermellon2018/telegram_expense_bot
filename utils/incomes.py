@@ -5,7 +5,7 @@ from typing import Dict, Optional
 
 import pandas as pd
 
-from utils import db, income_categories
+from utils import currencies, db, income_categories
 from utils.logger import get_logger, log_error, log_event
 
 logger = get_logger("utils.incomes")
@@ -26,6 +26,8 @@ async def add_income(
     income_date: Optional[datetime.date] = None,
     recurring_income_id: Optional[int] = None,
     created_by_system: bool = False,
+    currency: Optional[str] = None,
+    money: Optional[dict] = None,
 ) -> bool:
     """Добавляет фактическую запись дохода."""
     try:
@@ -52,31 +54,46 @@ async def add_income(
         if category["project_id"] is not None and category["project_id"] != project_id:
             return False
 
-        await db.execute(
-            """
-            INSERT INTO incomes(
-                user_id,
-                amount,
-                income_category_id,
-                project_id,
-                description,
-                month,
-                income_date,
-                recurring_income_id,
-                created_by_system
-            )
-            VALUES($1, $2, $3, $4, $5, $6, $7, $8, $9)
-            """,
-            str(user_id),
-            float(amount),
-            int(income_category_id),
-            project_id,
-            description or None,
-            month,
-            target_date,
-            recurring_income_id,
-            created_by_system,
-        )
+        money = money or await currencies.prepare_money(user_id, project_id, amount, currency, target_date)
+        async with db.transaction() as conn:
+            async with conn.transaction():
+                await currencies.validate_money_context(conn, user_id, project_id, money)
+                if project_id is not None:
+                    role = await conn.fetchval(
+                        "SELECT role FROM project_members WHERE user_id=$1 AND project_id=$2 FOR SHARE",
+                        str(user_id), project_id,
+                    )
+                    if role not in ("owner", "editor"):
+                        return False
+                from utils.recurring import _validate_category
+                await _validate_category(conn, user_id, project_id, income_category_id, income=True)
+                await conn.execute(
+                    """
+                    INSERT INTO incomes(
+                        user_id,
+                        amount,
+                        income_category_id,
+                        project_id,
+                        description,
+                        month,
+                        income_date,
+                        recurring_income_id,
+                        created_by_system, currency, reporting_amount, reporting_currency, fx_rate, fx_date, fx_source
+                    )
+                    VALUES($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+                    """,
+                    str(user_id),
+                    money['amount'],
+                    int(income_category_id),
+                    project_id,
+                    description or None,
+                    month,
+                    target_date,
+                    recurring_income_id,
+                    created_by_system,
+                    money['currency'], money['reporting_amount'], money['reporting_currency'],
+                    money['fx_rate'], money['fx_date'], money['fx_source'],
+                )
         return True
     except Exception as exc:
         log_error(logger, exc, "add_income_error", user_id=user_id, project_id=project_id)
@@ -98,7 +115,7 @@ async def get_month_incomes(user_id: int, month: Optional[int] = None, year: Opt
             rows = await db.fetch(
                 """
                 SELECT i.amount, c.name AS category
-                FROM incomes i
+                FROM reporting_incomes i
                 JOIN income_categories c ON c.income_category_id = i.income_category_id
                 WHERE i.project_id = $1
                   AND i.month = $2
@@ -112,7 +129,7 @@ async def get_month_incomes(user_id: int, month: Optional[int] = None, year: Opt
             rows = await db.fetch(
                 """
                 SELECT i.amount, c.name AS category
-                FROM incomes i
+                FROM reporting_incomes i
                 JOIN income_categories c ON c.income_category_id = i.income_category_id
                 WHERE i.user_id = $1
                   AND i.project_id IS NULL
@@ -156,7 +173,7 @@ async def get_day_incomes(user_id: int, date: Optional[str] = None, project_id: 
             rows = await db.fetch(
                 """
                 SELECT i.amount, c.name AS category
-                FROM incomes i
+                FROM reporting_incomes i
                 JOIN income_categories c ON c.income_category_id = i.income_category_id
                 WHERE i.project_id = $1
                   AND i.income_date = $2
@@ -168,7 +185,7 @@ async def get_day_incomes(user_id: int, date: Optional[str] = None, project_id: 
             rows = await db.fetch(
                 """
                 SELECT i.amount, c.name AS category
-                FROM incomes i
+                FROM reporting_incomes i
                 JOIN income_categories c ON c.income_category_id = i.income_category_id
                 WHERE i.user_id = $1
                   AND i.project_id IS NULL
@@ -209,14 +226,14 @@ async def get_all_incomes(user_id: int, year: Optional[int] = None, project_id: 
             rows = await db.fetch(
                 """
                 SELECT i.income_date AS date,
-                       i.amount,
+                       i.amount, i.original_amount, i.currency, i.reporting_currency, i.fx_rate, i.fx_date, i.fx_source,
                        c.name AS category,
                        i.description,
                        i.month,
                        i.project_id,
                        i.user_id,
                        i.created_at
-                FROM incomes i
+                FROM reporting_incomes i
                 JOIN income_categories c ON c.income_category_id = i.income_category_id
                 WHERE i.project_id = $1
                   AND EXTRACT(YEAR FROM i.income_date) = $2
@@ -229,14 +246,14 @@ async def get_all_incomes(user_id: int, year: Optional[int] = None, project_id: 
             rows = await db.fetch(
                 """
                 SELECT i.income_date AS date,
-                       i.amount,
+                       i.amount, i.original_amount, i.currency, i.reporting_currency, i.fx_rate, i.fx_date, i.fx_source,
                        c.name AS category,
                        i.description,
                        i.month,
                        i.project_id,
                        i.user_id,
                        i.created_at
-                FROM incomes i
+                FROM reporting_incomes i
                 JOIN income_categories c ON c.income_category_id = i.income_category_id
                 WHERE i.user_id = $1
                   AND i.project_id IS NULL
@@ -275,11 +292,13 @@ async def get_yearly_income_vs_expense(
     """Возвращает помесячные агрегаты доходов и расходов за год."""
     year = year or datetime.datetime.now().year
     project_id = _normalize_project_id(project_id)
+    from utils.permissions import Permission, require_permission
+    await require_permission(user_id, project_id, Permission.VIEW_STATS)
 
     income_rows = await db.fetch(
         """
         SELECT month, SUM(amount) AS total
-        FROM incomes
+        FROM reporting_incomes
         WHERE (($1::int IS NULL AND user_id = $2 AND project_id IS NULL) OR project_id = $1)
           AND EXTRACT(YEAR FROM income_date) = $3
         GROUP BY month
@@ -292,7 +311,7 @@ async def get_yearly_income_vs_expense(
     expense_rows = await db.fetch(
         """
         SELECT month, SUM(amount) AS total
-        FROM expenses
+        FROM reporting_expenses
         WHERE (($1::int IS NULL AND user_id = $2 AND project_id IS NULL) OR project_id = $1)
           AND EXTRACT(YEAR FROM date) = $3
         GROUP BY month

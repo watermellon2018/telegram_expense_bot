@@ -19,7 +19,7 @@ async def test_start_message_keeps_core_format_blocks(mock_update, mock_context)
 
     text = mock_update.message.reply_text.call_args.args[0]
     assert "Я бот для учета и анализа расходов" in text
-    assert "/add <сумма> <категория> [описание]" in text
+    assert "/add <сумма> [валюта] <категория> [описание]" in text
     assert "Например: /add 100 продукты хлеб и молоко" in text
     assert "Для получения справки используйте команду /help" in text
 
@@ -33,7 +33,8 @@ async def test_project_info_message_format_for_active_project(mock_update, mock_
         "created_date": "2026-04-19",
         "role": "owner",
     }
-    stats = {"count": 3, "total": 150.0}
+    stats = {"count": 3, "total": 150.0, "currency": "USD",
+             "legacy": {"expenses": {"count": 2, "total": 500.0}}}
     members = [{"user_id": "1"}, {"user_id": "2"}]
 
     with patch("handlers.project.projects.get_active_project", new=AsyncMock(return_value=project)), \
@@ -46,8 +47,11 @@ async def test_project_info_message_format_for_active_project(mock_update, mock_
     assert "📁 Текущий проект: Trip" in text
     assert "ID: 42" in text
     assert "Создан: 2026-04-19" in text
-    assert "Расходов: 3" in text
-    assert "Общая сумма: 150.00" in text
+    assert "Расходов с валютой: 3" in text
+    assert "Сумма: 150.00 USD" in text
+    assert "Исторические записи без валюты (отдельно от итогов):" in text
+    assert "Расходы: 2 записей; исходная сумма 500.00" in text
+    assert "650.00" not in text
     assert "Участников: 2" in text
 
 

@@ -2,8 +2,9 @@
 Тесты repository слоя отметок дубликатов и настроек уведомлений (feature_110).
 """
 
+from contextlib import asynccontextmanager
 from decimal import Decimal
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -85,35 +86,60 @@ async def test_set_notify_mode_rejects_invalid():
     assert ok is False
 
 
+@pytest.fixture
+def notification_write_context(monkeypatch):
+    conn = MagicMock()
+    conn.execute = AsyncMock(return_value="INSERT 0 1")
+
+    @asynccontextmanager
+    async def transaction():
+        yield conn
+
+    conn.transaction = transaction
+    permission = AsyncMock()
+    validate = AsyncMock()
+    monkeypatch.setattr(project_notifications.db, "execute", AsyncMock())
+    monkeypatch.setattr(project_notifications.db, "transaction", transaction)
+    monkeypatch.setattr(project_notifications, "require_permission", permission)
+    monkeypatch.setattr(project_notifications.currencies, "get_reporting_currency", AsyncMock(return_value="JPY"))
+    monkeypatch.setattr(project_notifications.currencies, "validate_money_context", validate)
+    return conn, permission, validate
+
+
 @pytest.mark.asyncio
-async def test_set_notify_mode_large_only_persists_threshold():
-    executed = []
-
-    async def fake_execute(sql, *args):
-        executed.append((sql, args))
-        return "INSERT 0 1"
-
-    with patch("utils.project_notifications.db.execute", new=fake_execute):
-        ok = await project_notifications.set_notify_mode(
-            1, 111, config.ExpenseNotifyMode.LARGE_ONLY, large_expense_threshold=Decimal("750"))
+async def test_set_notify_mode_large_only_persists_threshold(notification_write_context):
+    conn, permission, validate = notification_write_context
+    ok = await project_notifications.set_notify_mode(
+        1, 111, config.ExpenseNotifyMode.LARGE_ONLY, large_expense_threshold=Decimal("750"))
     assert ok is True
-    # последний execute — это upsert настроек; порог 750.0 присутствует среди args
-    upsert_args = executed[-1][1]
-    assert 750.0 in upsert_args
+    permission.assert_awaited_once_with(111, 1, project_notifications.Permission.VIEW_HISTORY)
+    validate.assert_awaited_once_with(conn, 111, 1, {"reporting_currency": "JPY"})
+    conn.execute.assert_awaited_once()
+    assert conn.execute.await_args.args[1:] == (
+        1, "111", config.ExpenseNotifyMode.LARGE_ONLY, Decimal("750"), "JPY",
+    )
 
 
 @pytest.mark.asyncio
-async def test_set_notify_mode_all_clears_threshold():
-    executed = []
-
-    async def fake_execute(sql, *args):
-        executed.append((sql, args))
-        return "INSERT 0 1"
-
-    with patch("utils.project_notifications.db.execute", new=fake_execute):
-        ok = await project_notifications.set_notify_mode(
-            1, 111, config.ExpenseNotifyMode.ALL, large_expense_threshold=Decimal("750"))
+async def test_set_notify_mode_all_clears_threshold(notification_write_context):
+    conn, permission, validate = notification_write_context
+    ok = await project_notifications.set_notify_mode(
+        1, 111, config.ExpenseNotifyMode.ALL, large_expense_threshold=Decimal("750"))
     assert ok is True
-    # для режима ALL порог должен быть None (обнулён)
-    upsert_args = executed[-1][1]
-    assert None in upsert_args
+    permission.assert_awaited_once_with(111, 1, project_notifications.Permission.VIEW_HISTORY)
+    validate.assert_awaited_once_with(conn, 111, 1, {"reporting_currency": "JPY"})
+    conn.execute.assert_awaited_once()
+    assert conn.execute.await_args.args[1:] == (
+        1, "111", config.ExpenseNotifyMode.ALL, None, None,
+    )
+
+
+@pytest.mark.asyncio
+async def test_set_notify_mode_denied_member_does_not_write(notification_write_context):
+    conn, permission, validate = notification_write_context
+    permission.side_effect = PermissionError("not a member")
+    ok = await project_notifications.set_notify_mode(
+        1, 111, config.ExpenseNotifyMode.LARGE_ONLY, large_expense_threshold=Decimal("750"))
+    assert ok is False
+    conn.execute.assert_not_awaited()
+    validate.assert_not_awaited()

@@ -19,7 +19,7 @@ Telegram-обработчики уведомлений о расходах пр�
   - изменение настроек уведомлений — только сам участник для себя.
 """
 
-from decimal import Decimal, InvalidOperation
+from decimal import InvalidOperation
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import (
@@ -34,6 +34,7 @@ from telegram.ext import (
 import config
 import metrics
 from utils import (
+    currencies,
     duplicate_reports,
     excel,
     expense_formatter,
@@ -262,8 +263,10 @@ async def _render_settings(query, project_id: int, user_id: int) -> None:
 
     text_lines = ["🔔 Уведомления о новых расходах", "", f"Текущий режим: {mode_name}"]
     if mode == config.ExpenseNotifyMode.LARGE_ONLY and settings.get("large_expense_threshold"):
-        threshold = expense_formatter.format_amount(settings["large_expense_threshold"])
-        text_lines.append(f"Порог: {threshold} ₽")
+        threshold = currencies.format_money(settings["large_expense_threshold"], settings.get("threshold_currency"))
+        text_lines.append(f"Порог: {threshold}")
+        if not settings.get("threshold_currency"):
+            text_lines.append("Задайте порог заново в валюте проекта, чтобы получать уведомления.")
 
     await query.edit_message_text("\n".join(text_lines), reply_markup=_settings_keyboard(project_id))
 
@@ -333,8 +336,9 @@ async def set_notify_mode_callback(update: Update, context: ContextTypes.DEFAULT
         # Запрашиваем сумму порога
         await query.answer()
         context.user_data["notify_threshold_project_id"] = project_id
+        context.user_data["notify_threshold_currency"] = await currencies.get_reporting_currency(user_id, project_id)
         await query.edit_message_text(
-            "💰 Введите сумму порога для крупных расходов (в валюте проекта).\n"
+            f"💰 Введите сумму порога для крупных расходов в {context.user_data['notify_threshold_currency']}.\n"
             "Например: 1000\n\n"
             "Отправьте /cancel для отмены."
         )
@@ -368,7 +372,7 @@ async def handle_threshold_input(update: Update, context: ContextTypes.DEFAULT_T
 
     # Валидация суммы: положительное число
     try:
-        threshold = Decimal(text)
+        threshold = currencies.parse_amount(text)
     except (InvalidOperation, ValueError):
         await update.message.reply_text("❌ Неверный формат суммы. Введите число, например: 1000")
         return ENTERING_LARGE_THRESHOLD
@@ -378,15 +382,15 @@ async def handle_threshold_input(update: Update, context: ContextTypes.DEFAULT_T
         return ENTERING_LARGE_THRESHOLD
 
     ok = await project_notifications.set_notify_mode(
-        project_id, user_id, config.ExpenseNotifyMode.LARGE_ONLY, large_expense_threshold=threshold
+        project_id, user_id, config.ExpenseNotifyMode.LARGE_ONLY, large_expense_threshold=threshold, currency=context.user_data.get("notify_threshold_currency")
     )
     context.user_data.pop("notify_threshold_project_id", None)
 
     if ok:
-        threshold_str = expense_formatter.format_amount(threshold)
+        threshold_str = currencies.format_money(threshold, context.user_data.get("notify_threshold_currency"))
         await update.message.reply_text(
             f"✅ Режим «Только крупные» включён.\n"
-            f"Порог: {threshold_str} ₽",
+            f"Порог: {threshold_str}",
             reply_markup=helpers.get_main_menu_keyboard(),
         )
     else:

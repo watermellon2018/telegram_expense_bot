@@ -200,7 +200,8 @@ async def test_create_project_without_template_not_isolated():
     assert conn.category_insert_count() == 0
     # в INSERT projects флаг изоляции = False
     proj_insert = next(a for sql, a in conn.executed if "INSERT INTO projects" in sql)
-    assert proj_insert[-1] is False
+    assert proj_insert[3] is False
+    assert proj_insert[4] == "RUB"
 
 
 @pytest.mark.asyncio
@@ -230,7 +231,8 @@ async def test_create_project_with_template_copies_categories_and_isolates():
 
     # в INSERT projects флаг изоляции = True
     proj_insert = next(a for sql, a in conn.executed if "INSERT INTO projects" in sql)
-    assert proj_insert[-1] is True
+    assert proj_insert[3] is True
+    assert proj_insert[4] == "RUB"
 
 
 @pytest.mark.asyncio

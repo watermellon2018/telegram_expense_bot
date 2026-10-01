@@ -13,8 +13,9 @@ from decimal import Decimal
 from typing import Optional
 
 import config
-from utils import db
+from utils import currencies, db
 from utils.logger import get_logger, log_error, log_event
+from utils.permissions import Permission, require_permission
 
 logger = get_logger("utils.project_notifications")
 
@@ -41,7 +42,7 @@ async def get_member_settings(project_id: int, user_id: int) -> dict:
         row = await db.fetchrow(
             """
             SELECT project_id, user_id, expense_notify_mode,
-                   large_expense_threshold, updated_at
+                   large_expense_threshold, threshold_currency, updated_at
             FROM project_member_settings
             WHERE project_id = $1 AND user_id = $2
             """,
@@ -62,6 +63,7 @@ async def set_notify_mode(
     user_id: int,
     mode: str,
     large_expense_threshold: Optional[Decimal] = None,
+    currency: Optional[str] = None,
 ) -> bool:
     """
     Устанавливает режим уведомлений участника (upsert).
@@ -80,7 +82,7 @@ async def set_notify_mode(
         large_expense_threshold = None
 
     threshold_val = (
-        float(large_expense_threshold)
+        currencies.parse_amount(large_expense_threshold)
         if large_expense_threshold is not None else None
     )
 
@@ -89,19 +91,28 @@ async def set_notify_mode(
             "INSERT INTO users(user_id) VALUES($1) ON CONFLICT (user_id) DO NOTHING",
             str(user_id),
         )
-        await db.execute(
-            """
-            INSERT INTO project_member_settings
-                (project_id, user_id, expense_notify_mode, large_expense_threshold, updated_at)
-            VALUES ($1, $2, $3, $4, now())
-            ON CONFLICT (project_id, user_id)
-            DO UPDATE SET
-                expense_notify_mode = EXCLUDED.expense_notify_mode,
-                large_expense_threshold = EXCLUDED.large_expense_threshold,
-                updated_at = now()
-            """,
-            project_id, str(user_id), mode, threshold_val,
-        )
+        await require_permission(user_id, project_id, Permission.VIEW_HISTORY)
+        currency = currency or await currencies.get_reporting_currency(user_id, project_id)
+        if mode == config.ExpenseNotifyMode.LARGE_ONLY and threshold_val is None:
+            return False
+        async with db.transaction() as conn:
+            async with conn.transaction():
+                await currencies.validate_money_context(conn, user_id, project_id, {'reporting_currency': currency})
+                await conn.execute(
+                    """
+                    INSERT INTO project_member_settings
+                        (project_id, user_id, expense_notify_mode, large_expense_threshold, threshold_currency, updated_at)
+                    VALUES ($1, $2, $3, $4, $5, now())
+                    ON CONFLICT (project_id, user_id)
+                    DO UPDATE SET
+                        expense_notify_mode = EXCLUDED.expense_notify_mode,
+                        large_expense_threshold = EXCLUDED.large_expense_threshold,
+                        threshold_currency = EXCLUDED.threshold_currency,
+                        updated_at = now()
+                    """,
+                    project_id, str(user_id), mode, threshold_val, currency if threshold_val is not None else None,
+                )
+
         log_event(logger, "project_member_notify_mode_set",
                   project_id=project_id, user_id=user_id, mode=mode,
                   has_threshold=threshold_val is not None)

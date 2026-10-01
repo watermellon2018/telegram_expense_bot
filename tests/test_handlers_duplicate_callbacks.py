@@ -112,14 +112,17 @@ async def test_view_handles_deleted_expense():
     """Сценарий 18: найденный расход удалён до нажатия 'Посмотреть'."""
     bot_data = {}
     draft = {"author_id": "111", "amount": 100, "category_id": 5,
-             "category_name": "кафе", "description": "", "project_id": 1}
+             "category_name": "кафе", "description": "", "project_id": 1, "existing_expense_id": 55}
     draft_id = expense_creation._store_draft(bot_data, owner_user_id=111, draft=draft)
     update, query = _make_update(111, f"dupview_{draft_id}_55")
     ctx = _make_context(bot_data)
 
-    with patch("handlers.duplicate.excel.get_expense_by_id", new=AsyncMock(return_value=None)):
+    with patch("handlers.duplicate.has_permission", new=AsyncMock(return_value=True)) as permission, \
+         patch("handlers.duplicate.excel.get_expense_by_id", new=AsyncMock(return_value=None)) as fetch:
         await dup.dup_view_callback(update, ctx)
 
+    permission.assert_awaited_once_with(111, 1, dup.Permission.VIEW_HISTORY)
+    fetch.assert_awaited_once_with(55)
     query.edit_message_text.assert_awaited()
     text = query.edit_message_text.call_args.args[0]
     assert "удал" in text.lower()
@@ -127,6 +130,68 @@ async def test_view_handles_deleted_expense():
     markup = query.edit_message_text.call_args.kwargs["reply_markup"]
     callbacks = [b.callback_data for row in markup.inline_keyboard for b in row]
     assert f"dupconfirm_{draft_id}" in callbacks
+
+
+def _duplicate_view_context(project_id=1, callback_expense_id=55):
+    bot_data = {}
+    draft = {"author_id": "111", "project_id": project_id, "existing_expense_id": 55}
+    draft_id = expense_creation._store_draft(bot_data, owner_user_id=111, draft=draft)
+    update, query = _make_update(111, f"dupview_{draft_id}_{callback_expense_id}")
+    return update, query, _make_context(bot_data)
+
+
+@pytest.mark.asyncio
+async def test_duplicate_view_rejects_forged_expense_id_before_fetch():
+    update, query, ctx = _duplicate_view_context(callback_expense_id=999)
+    with patch("handlers.duplicate.has_permission", new=AsyncMock(return_value=True)) as permission, \
+         patch("handlers.duplicate.excel.get_expense_by_id", new=AsyncMock()) as fetch:
+        await dup.dup_view_callback(update, ctx)
+    fetch.assert_not_awaited()
+    permission.assert_not_awaited()
+    assert "недоступен" in query.edit_message_text.call_args.args[0]
+
+
+@pytest.mark.asyncio
+async def test_duplicate_view_rechecks_revoked_access_before_fetch():
+    update, query, ctx = _duplicate_view_context()
+    with patch("handlers.duplicate.has_permission", new=AsyncMock(return_value=False)) as permission, \
+         patch("handlers.duplicate.excel.get_expense_by_id", new=AsyncMock()) as fetch:
+        await dup.dup_view_callback(update, ctx)
+    permission.assert_awaited_once_with(111, 1, dup.Permission.VIEW_HISTORY)
+    fetch.assert_not_awaited()
+    assert "недоступен" in query.edit_message_text.call_args.args[0]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("draft_project,expense_project,expense_owner", [(1, 99, "111"), (1, None, "111"), (None, None, "222")])
+async def test_duplicate_view_hides_expense_outside_draft_scope(draft_project, expense_project, expense_owner):
+    update, query, ctx = _duplicate_view_context(project_id=draft_project)
+    expense = {"id": 55, "project_id": expense_project, "user_id": expense_owner}
+    with patch("handlers.duplicate.has_permission", new=AsyncMock(return_value=True)), \
+         patch("handlers.duplicate.excel.get_expense_by_id", new=AsyncMock(return_value=expense)) as fetch, \
+         patch("handlers.duplicate.expense_formatter.format_expense_details") as formatter:
+        await dup.dup_view_callback(update, ctx)
+    fetch.assert_awaited_once_with(55)
+    formatter.assert_not_called()
+    ctx.bot.get_chat.assert_not_awaited()
+    assert query.edit_message_text.call_args.args[0] == "Расход недоступен."
+
+
+@pytest.mark.asyncio
+async def test_duplicate_view_displays_bound_expense_in_authorized_project():
+    update, query, ctx = _duplicate_view_context()
+    expense = {"id": 55, "project_id": 1, "user_id": "222", "amount": Decimal("1500"),
+               "currency": "JPY", "reporting_amount": Decimal("900"), "reporting_currency": "RUB",
+               "category_name": "Кафе", "description": "Завтрак", "date": datetime.date.today()}
+    with patch("handlers.duplicate.has_permission", new=AsyncMock(return_value=True)) as permission, \
+         patch("handlers.duplicate.excel.get_expense_by_id", new=AsyncMock(return_value=expense)) as fetch, \
+         patch("handlers.duplicate._safe_user_name", new=AsyncMock(return_value="Анна")):
+        await dup.dup_view_callback(update, ctx)
+    permission.assert_awaited_once_with(111, 1, dup.Permission.VIEW_HISTORY)
+    fetch.assert_awaited_once_with(55)
+    text = query.edit_message_text.call_args.args[0]
+    assert "Завтрак — 1 500 JPY ≈ 900.00 RUB" in text
+    assert "Добавил: Анна" in text
 
 
 # ---------------------------------------------------------------------------
@@ -331,11 +396,15 @@ async def test_set_notify_mode_large_only_requests_threshold():
     """Выбор LARGE_ONLY переводит в состояние ввода порога."""
     update, query = _make_update(111, "projnotify_set_42_large_only")
     ctx = _make_context()
-    with patch("handlers.expense_notifications.projects.is_project_member", new=AsyncMock(return_value=True)):
+    with patch("handlers.expense_notifications.projects.is_project_member", new=AsyncMock(return_value=True)), \
+         patch("handlers.expense_notifications.currencies.get_reporting_currency", new=AsyncMock(return_value="JPY")) as currency:
         ret = await en.set_notify_mode_callback(update, ctx)
 
     assert ret == en.ENTERING_LARGE_THRESHOLD
     assert ctx.user_data["notify_threshold_project_id"] == 42
+    assert ctx.user_data["notify_threshold_currency"] == "JPY"
+    currency.assert_awaited_once_with(111, 42)
+    assert "в JPY" in query.edit_message_text.call_args.args[0]
 
 
 @pytest.mark.asyncio
@@ -369,6 +438,7 @@ async def test_threshold_input_saves_valid_value():
     update.message.reply_text = AsyncMock()
     ctx = _make_context()
     ctx.user_data["notify_threshold_project_id"] = 42
+    ctx.user_data["notify_threshold_currency"] = "JPY"
 
     with patch("handlers.expense_notifications.projects.is_project_member", new=AsyncMock(return_value=True)), \
          patch("handlers.expense_notifications.project_notifications.set_notify_mode", new=AsyncMock(return_value=True)) as set_mock:
@@ -377,3 +447,5 @@ async def test_threshold_input_saves_valid_value():
     set_mock.assert_awaited_once()
     assert set_mock.call_args.args[2] == config.ExpenseNotifyMode.LARGE_ONLY
     assert set_mock.call_args.kwargs["large_expense_threshold"] == Decimal("1500")
+    assert set_mock.call_args.kwargs["currency"] == "JPY"
+    assert "1 500 JPY" in update.message.reply_text.call_args.args[0]

@@ -18,12 +18,15 @@ import config
 from utils import project_notifier
 
 
-def _expense(amount=1000, author="111", project_id=1):
+def _expense(amount=1000, author="111", project_id=1, currency="RUB", reporting_amount=None):
     return {
         "id": 10,
         "user_id": author,
         "project_id": project_id,
         "amount": Decimal(str(amount)),
+        "currency": currency,
+        "reporting_amount": Decimal(str(amount if reporting_amount is None else reporting_amount)),
+        "reporting_currency": "RUB",
         "category_id": 5,
         "category_name": "Кафе и рестораны",
         "description": "Завтрак",
@@ -34,11 +37,12 @@ def _expense(amount=1000, author="111", project_id=1):
     }
 
 
-def _settings(mode=config.ExpenseNotifyMode.ALL, threshold=None):
+def _settings(mode=config.ExpenseNotifyMode.ALL, threshold=None, currency="RUB"):
     return {
         "project_id": 1, "user_id": "x",
         "expense_notify_mode": mode,
         "large_expense_threshold": threshold,
+        "threshold_currency": currency,
         "updated_at": None,
     }
 
@@ -73,17 +77,23 @@ def test_should_notify_disabled():
 
 def test_should_notify_large_only_above_threshold():
     s = _settings(config.ExpenseNotifyMode.LARGE_ONLY, threshold=Decimal("500"))
-    assert project_notifier._should_notify(s, Decimal("1000"))
+    assert project_notifier._should_notify(s, Decimal("1000"), "RUB")
 
 
 def test_should_notify_large_only_below_threshold():
     s = _settings(config.ExpenseNotifyMode.LARGE_ONLY, threshold=Decimal("500"))
-    assert not project_notifier._should_notify(s, Decimal("100"))
+    assert not project_notifier._should_notify(s, Decimal("100"), "RUB")
 
 
 def test_should_notify_large_only_no_threshold_defaults_true():
     s = _settings(config.ExpenseNotifyMode.LARGE_ONLY, threshold=None)
-    assert project_notifier._should_notify(s, Decimal("100"))
+    assert project_notifier._should_notify(s, Decimal("100"), "RUB")
+
+
+@pytest.mark.parametrize("threshold_currency,expense_currency", [(None, "RUB"), ("RUB", None), ("JPY", "RUB")])
+def test_should_notify_does_not_compare_unknown_or_different_currencies(threshold_currency, expense_currency):
+    s = _settings(config.ExpenseNotifyMode.LARGE_ONLY, threshold=Decimal("500"), currency=threshold_currency)
+    assert not project_notifier._should_notify(s, Decimal("1000"), expense_currency)
 
 
 # --- Сценарий 10: уведомляются все подходящие, кроме автора ---
@@ -145,8 +155,8 @@ async def test_notify_large_only_below_threshold_skipped():
         {"user_id": "111", "role": "owner"},   # автор
         {"user_id": "222", "role": "editor"},
     ]
-    # Расход 100, порог участника 500 → не уведомляем
-    with patch("utils.project_notifier.excel.get_expense_by_id", new=AsyncMock(return_value=_expense(amount=100, author="111"))), \
+    # Исходная сумма 1000 JPY выше порога численно, но 100 RUB после пересчёта — ниже.
+    with patch("utils.project_notifier.excel.get_expense_by_id", new=AsyncMock(return_value=_expense(amount=1000, author="111", currency="JPY", reporting_amount=100))), \
          patch("utils.project_notifier.projects.get_project_by_id", new=AsyncMock(return_value={"project_name": "P"})), \
          patch("utils.project_notifier.projects.get_project_members", new=AsyncMock(return_value=members)), \
          patch("utils.project_notifier.has_permission", new=AsyncMock(return_value=True)), \

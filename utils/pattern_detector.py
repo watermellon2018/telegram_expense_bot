@@ -69,6 +69,7 @@ async def detect_pattern_for_user(
     project_id: Optional[int],
     category_id: int,
     comment: str,
+    currency: Optional[str] = None,
 ) -> Optional[dict]:
     """
     Ищет повторяющийся паттерн расходов для комбинации (category_id, comment).
@@ -115,10 +116,11 @@ async def detect_pattern_for_user(
                   AND e.project_id IS NULL
                   AND e.date >= $3
                   AND e.source_type IS DISTINCT FROM 'recurring'
+                  AND e.currency IS NOT DISTINCT FROM $5 AND e.deleted_at IS NULL
                   AND LOWER(TRIM(COALESCE(e.description, ''))) = $4
                 ORDER BY e.date ASC
                 """,
-                user_id, category_id, cutoff, norm_comment,
+                user_id, category_id, cutoff, norm_comment, currency,
             )
         else:
             rows = await db.fetch(
@@ -129,10 +131,11 @@ async def detect_pattern_for_user(
                   AND e.category_id = $2
                   AND e.date >= $3
                   AND e.source_type IS DISTINCT FROM 'recurring'
+                  AND e.currency IS NOT DISTINCT FROM $5 AND e.deleted_at IS NULL
                   AND LOWER(TRIM(COALESCE(e.description, ''))) = $4
                 ORDER BY e.date ASC
                 """,
-                project_id, category_id, cutoff, norm_comment,
+                project_id, category_id, cutoff, norm_comment, currency,
             )
     except Exception:
         return None
@@ -176,7 +179,9 @@ async def detect_pattern_for_user(
               avg_interval=round(avg_interval, 1), count=len(rows))
 
     return {
-        'amount': round(avg_amount, 2),
+        'amount': round(avg_amount, 0 if currency in ('JPY','KRW') else 2),
+        'currency': currency,
+        'project_id': project_id,
         'category_id': category_id,
         'comment': comment,
         'frequency_type': frequency_type,
@@ -246,21 +251,27 @@ def set_cooldown(bot_data: dict, user_id: str, com: str) -> None:
     bot_data['rec_cooldowns'][user_id][comment_hash(com)] = datetime.datetime.utcnow()
 
 
+def pattern_hash(pattern: dict) -> str:
+    """Bind buttons to the exact displayed amount, currency and project."""
+    fields = ('project_id', 'currency', 'category_id', 'comment', 'amount', 'frequency_type', 'interval_value')
+    return comment_hash(repr(tuple(pattern.get(key) for key in fields)))
+
+
 def save_pattern_to_cache(bot_data: dict, user_id: str, pattern: dict) -> None:
     """
     Сохраняет найденный паттерн в bot_data для использования при нажатии «Да».
-    Ключ: f"{user_id}_{comment_hash(pattern['comment'])}".
+    Ключ привязан к пользователю и неизменным параметрам предложения.
     """
     if 'rec_patterns' not in bot_data:
         bot_data['rec_patterns'] = {}
-    key = f"{user_id}_{comment_hash(pattern['comment'])}"
+    key = f"{user_id}_{pattern_hash(pattern)}"
     bot_data['rec_patterns'][key] = pattern
 
 
-def get_pattern_from_cache(bot_data: dict, user_id: str, com: str) -> Optional[dict]:
+def get_pattern_from_cache(bot_data: dict, user_id: str, token: str) -> Optional[dict]:
     """Извлекает кэшированный паттерн. Возвращает None если не найден."""
     patterns = bot_data.get('rec_patterns', {})
-    key = f"{user_id}_{comment_hash(com)}"
+    key = f"{user_id}_{token}"
     return patterns.get(key)
 
 

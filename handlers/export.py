@@ -159,8 +159,21 @@ async def export_stats_command(update: Update, context: ContextTypes.DEFAULT_TYP
 
 def _build_excel_file(expenses_df: pd.DataFrame, tmp_path: str, month: int) -> None:
     """Синхронная генерация Excel-файла. Вызывается через run_in_executor."""
+    expenses_df = expenses_df.copy()
+    for column in ("amount", "original_amount", "fx_rate"):
+        if column in expenses_df:
+            expenses_df[column] = pd.to_numeric(expenses_df[column], errors="raise")
     with pd.ExcelWriter(tmp_path, engine='openpyxl') as writer:
         expenses_df.to_excel(writer, sheet_name='Все расходы', index=False)
+        if 'currency' in expenses_df:
+            legacy = expenses_df[expenses_df['currency'].isna()]
+            if not legacy.empty:
+                legacy.to_excel(writer, sheet_name='Без указанной валюты', index=False)
+            expenses_df = expenses_df[expenses_df['currency'].notna()].copy()
+            codes = expenses_df['reporting_currency'].dropna().unique()
+            if len(codes) > 1:
+                raise ValueError('В выгрузке несколько валют отчётности')
+            pd.DataFrame({'Валюта отчётности': list(codes), 'Примечание': ['Исторические суммы без валюты исключены из итогов'] * len(codes)}).to_excel(writer, sheet_name='Валюта отчёта', index=False)
 
         if not expenses_df.empty:
             category_stats = expenses_df.groupby('category')['amount'].agg(['sum', 'count', 'mean']).round(2)
@@ -211,7 +224,8 @@ async def perform_export(update: Update, user_id: int, project_id: int, year: in
         message = update.message
 
     # Получаем все данные
-    expenses_df = await excel.get_all_expenses(user_id, year, project_id)
+    from utils.currency_reporting import get_export_expenses
+    expenses_df = await get_export_expenses(user_id, project_id, year=year, month=month)
 
     if expenses_df is None or expenses_df.empty:
         log_event(logger, "export_no_data", user_id=user_id, project_id=project_id, year=year, month=month)

@@ -2,6 +2,7 @@
 Тесты для handlers/budget.py
 """
 import datetime
+from decimal import Decimal
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -40,11 +41,14 @@ async def test_edit_notification_threshold_materializes_inherited_budget(mock_up
     mock_update.message.text = "900"
     mock_update.effective_user.id = 123456789
     mock_context.user_data["active_project_id"] = None
+    mock_context.user_data["budget_project_id"] = None
+    mock_context.user_data["budget_currency"] = "JPY"
 
     inherited_budget = {
         "amount": 1000.0,
         "month": 3,
         "year": 2026,
+        "currency": "JPY",
     }
     current_budget = {
         "amount": 1000.0,
@@ -52,6 +56,7 @@ async def test_edit_notification_threshold_materializes_inherited_budget(mock_up
         "year": 2026,
         "notify_enabled": False,
         "notify_threshold": None,
+        "currency": "JPY",
     }
 
     with patch("handlers.budget.budgets_utils.get_budget", new=AsyncMock(return_value=None)) as get_budget_mock, \
@@ -65,21 +70,15 @@ async def test_edit_notification_threshold_materializes_inherited_budget(mock_up
         result = await budget_handler.edit_notification_threshold(mock_update, mock_context)
 
     assert result == ConversationHandler.END
-    get_budget_mock.assert_called_once()
-    inherited_mock.assert_called_once()
-    set_budget_mock.assert_called_once()
-    set_notif_mock.assert_called_once()
-    check_now_mock.assert_called_once()
+    now = datetime.datetime.now()
+    get_budget_mock.assert_awaited_once_with(123456789, now.month, now.year, None)
+    inherited_mock.assert_awaited_once_with(123456789, now.month, now.year, None)
+    set_budget_mock.assert_awaited_once_with(123456789, now.month, now.year, 1000.0, None, currency="JPY")
+    set_notif_mock.assert_awaited_once_with(123456789, now.month, now.year, Decimal("900"), None)
+    check_now_mock.assert_awaited_once_with(mock_context.bot, 123456789, None)
     mock_update.message.reply_text.assert_called()
 
-    # Проверяем, что материализация делается на текущий месяц/год и с суммой inherited-бюджета
-    _, call_kwargs = set_budget_mock.call_args
-    if call_kwargs:
-        assert call_kwargs["amount"] == 1000.0
-    else:
-        # set_budget(user_id, month, year, amount, project_id)
-        args = set_budget_mock.call_args.args
-        assert args[3] == 1000.0
+    assert "900 JPY" in mock_update.message.reply_text.call_args.args[0]
 
 
 @pytest.mark.asyncio
@@ -96,9 +95,11 @@ async def test_edit_notification_start_shows_inherited_note(mock_update, mock_co
         "month": 2,
         "year": 2026,
         "notify_threshold": None,
+        "currency": "JPY",
     }
 
     with patch("handlers.budget.has_permission", new=AsyncMock(return_value=True)), \
+         patch("handlers.budget.currencies.get_reporting_currency", new=AsyncMock(return_value="JPY")), \
          patch("handlers.budget.budgets_utils.get_budget", new=AsyncMock(return_value=None)), \
          patch("handlers.budget.budgets_utils.get_or_inherit_budget",
                new=AsyncMock(return_value=inherited_budget)):
@@ -107,3 +108,45 @@ async def test_edit_notification_start_shows_inherited_note(mock_update, mock_co
     assert result == budget_handler.EDITING_THRESHOLD
     sent_text = mock_update.message.reply_text.call_args.args[0]
     assert "унаследует бюджет" in sent_text
+    assert "1 500 JPY" in sent_text
+    assert mock_context.user_data["budget_currency"] == "JPY"
+
+
+@pytest.mark.asyncio
+async def test_edit_threshold_does_not_materialize_legacy_budget(mock_update, mock_context):
+    mock_update.message.text = "900"
+    mock_context.user_data.update(budget_project_id=42, budget_currency="JPY")
+    old_budget = {"amount": Decimal("1000"), "month": 3, "year": 2026, "currency": None}
+    with patch("handlers.budget.budgets_utils.get_budget", new=AsyncMock(return_value=None)), \
+         patch("handlers.budget.budgets_utils.get_or_inherit_budget", new=AsyncMock(return_value=old_budget)), \
+         patch("handlers.budget.budgets_utils.set_budget", new=AsyncMock()) as set_budget, \
+         patch("handlers.budget.budgets_utils.set_notification", new=AsyncMock()) as set_notification:
+        result = await budget_handler.edit_notification_threshold(mock_update, mock_context)
+    assert result == ConversationHandler.END
+    set_budget.assert_not_awaited()
+    set_notification.assert_not_awaited()
+    assert "не найден" in mock_update.message.reply_text.call_args.args[0]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("initial_project", [None, 42])
+async def test_budget_dialog_preserves_context_after_active_project_switch(mock_update, mock_context, initial_project):
+    mock_context.user_data["active_project_id"] = initial_project
+    currency = AsyncMock(return_value="JPY")
+    with patch("handlers.budget.has_permission", new=AsyncMock(return_value=True)), \
+         patch("handlers.budget.currencies.get_reporting_currency", new=currency), \
+         patch("handlers.budget.budgets_utils.get_budget", new=AsyncMock(return_value=None)), \
+         patch("handlers.budget.budgets_utils.set_budget", new=AsyncMock(return_value={"currency": "JPY"})) as save, \
+         patch("handlers.budget.budgets_utils.disable_notification", new=AsyncMock()) as disable:
+        assert await budget_handler.set_budget_start(mock_update, mock_context) == budget_handler.ENTERING_AMOUNT
+        mock_context.user_data["active_project_id"] = 99
+        mock_update.message.text = "1500"
+        assert await budget_handler.set_budget_amount(mock_update, mock_context) == budget_handler.ASKING_NOTIFY
+        mock_update.message.text = "Нет"
+        assert await budget_handler.set_budget_notify_choice(mock_update, mock_context) == ConversationHandler.END
+
+    now = datetime.datetime.now()
+    user_id = mock_update.effective_user.id
+    currency.assert_awaited_once_with(user_id, initial_project)
+    save.assert_awaited_once_with(user_id, now.month, now.year, Decimal("1500"), initial_project, currency="JPY")
+    disable.assert_awaited_once_with(user_id, now.month, now.year, initial_project)

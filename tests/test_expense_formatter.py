@@ -48,7 +48,8 @@ def test_duplicate_warning_contains_required_fields():
     now = datetime.datetime(2026, 6, 8, 10, 15)
     text = f.format_duplicate_warning(existing, author_name="Анна", now=now)
     assert "Возможно, этот расход уже добавлен" in text
-    assert "Завтрак — 1 250 ₽" in text
+    assert "Завтрак — 1 250.00 (без валюты)" in text
+    assert "RUB" not in text
     assert "Категория: Кафе и рестораны" in text
     assert "Добавил: Анна" in text
     assert "Дата расхода: 8 июня 2026" in text

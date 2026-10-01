@@ -11,7 +11,7 @@ import datetime
 import json
 from typing import Dict, List, Optional, Tuple
 
-from utils import db
+from utils import currencies, db
 from utils.logger import get_logger, log_error, log_event
 
 logger = get_logger("utils.cashback")
@@ -131,6 +131,7 @@ def _snapshot_row_to_summary(row) -> Dict:
         "matched_expenses_count": None,
         "disclaimer": POTENTIAL_CASHBACK_DISCLAIMER,
         "is_snapshot": True,
+        "currency": row.get("currency"),
         "snapshot_created_at": row["created_at"],
     }
 
@@ -149,11 +150,11 @@ async def get_cashback_monthly_snapshot(user_id: int, year: int, month: int) -> 
                 effective_spent,
                 expenses_count,
                 category_breakdown_json,
-                created_at
+                currency, created_at
             FROM cashback_monthly_snapshots
             WHERE user_id = $1
               AND year = $2
-              AND month = $3
+              AND month = $3 AND currency IS NOT NULL
             """,
             str(user_id),
             year,
@@ -185,42 +186,48 @@ async def create_cashback_monthly_snapshot(
         breakdown = summary.get("by_category") or []
         payload = json.dumps(breakdown, ensure_ascii=False)
 
-        created_row = await db.fetchrow(
-            """
-            INSERT INTO cashback_monthly_snapshots(
-                user_id,
-                year,
-                month,
-                total_spent,
-                total_potential_cashback,
-                effective_spent,
-                expenses_count,
-                category_breakdown_json,
-                created_at
-            )
-            VALUES($1, $2, $3, $4, $5, $6, $7, $8::jsonb, NOW())
-            ON CONFLICT (user_id, year, month) DO NOTHING
-            RETURNING
-                id,
-                user_id,
-                year,
-                month,
-                total_spent,
-                total_potential_cashback,
-                effective_spent,
-                expenses_count,
-                category_breakdown_json,
-                created_at
-            """,
-            str(user_id),
-            year,
-            month,
-            float(summary.get("total_spent", 0.0)),
-            float(summary.get("potential_cashback", 0.0)),
-            float(summary.get("effective_spent", 0.0)),
-            int(summary.get("expenses_count", 0)),
-            payload,
-        )
+        currency = await currencies.get_reporting_currency(user_id, None)
+        if summary.get("currency") != currency:
+            return {"success": False}
+        async with db.transaction() as conn:
+            async with conn.transaction():
+                await currencies.validate_money_context(conn, user_id, None, {"reporting_currency": currency})
+                created_row = await conn.fetchrow(
+                    """
+                    INSERT INTO cashback_monthly_snapshots(
+                        user_id,
+                        year,
+                        month,
+                        total_spent,
+                        total_potential_cashback,
+                        effective_spent,
+                        expenses_count,
+                        category_breakdown_json,
+                        currency, created_at
+                    )
+                    VALUES($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9, NOW())
+                    ON CONFLICT (user_id, year, month) DO NOTHING
+                    RETURNING
+                        id,
+                        user_id,
+                        year,
+                        month,
+                        total_spent,
+                        total_potential_cashback,
+                        effective_spent,
+                        expenses_count,
+                        category_breakdown_json,
+                        currency, created_at
+                    """,
+                    str(user_id),
+                    year,
+                    month,
+                    float(summary.get("total_spent", 0.0)),
+                    float(summary.get("potential_cashback", 0.0)),
+                    float(summary.get("effective_spent", 0.0)),
+                    int(summary.get("expenses_count", 0)),
+                    payload, summary.get("currency"),
+                )
 
         was_created = created_row is not None
         row = created_row
@@ -237,11 +244,11 @@ async def create_cashback_monthly_snapshot(
                     effective_spent,
                     expenses_count,
                     category_breakdown_json,
-                    created_at
+                    currency, created_at
                 FROM cashback_monthly_snapshots
                 WHERE user_id = $1
                   AND year = $2
-                  AND month = $3
+                  AND month = $3 AND currency IS NOT NULL
                 """,
                 str(user_id),
                 year,
@@ -969,7 +976,7 @@ async def _calculate_potential_cashback_for_period_dynamic(
             expenses_rows = await db.fetch(
                 """
                 SELECT e.amount, c.name AS expense_category_name
-                FROM expenses e
+                FROM reporting_expenses e
                 JOIN categories c ON c.category_id = e.category_id
                 WHERE e.project_id = $1
                   AND e.month = $2
@@ -983,7 +990,7 @@ async def _calculate_potential_cashback_for_period_dynamic(
             expenses_rows = await db.fetch(
                 """
                 SELECT e.amount, c.name AS expense_category_name
-                FROM expenses e
+                FROM reporting_expenses e
                 JOIN categories c ON c.category_id = e.category_id
                 WHERE e.user_id = $1
                   AND e.project_id IS NULL
@@ -1026,6 +1033,7 @@ async def _calculate_potential_cashback_for_period_dynamic(
             "year": year,
             "month": month,
             "project_id": project_id,
+            "currency": await currencies.get_reporting_currency(user_id, project_id),
             "total_spent": total_spent,
             "potential_cashback": total_potential_cashback,
             "effective_spent": effective_spent,
@@ -1085,7 +1093,7 @@ async def calculate_potential_cashback_for_period(
         )
 
     snapshot = await get_cashback_monthly_snapshot(user_id=user_id, year=year, month=month)
-    if snapshot:
+    if snapshot and snapshot.get("currency") == await currencies.get_reporting_currency(user_id, None):
         log_event(
             logger,
             "cashback_snapshot_hit",
@@ -1167,6 +1175,7 @@ async def calculate_potential_cashback_for_last_12_months(
         return {
             "success": True,
             "period_label": "Скользящие 12 месяцев",
+            "currency": await currencies.get_reporting_currency(user_id, project_id),
             "total_spent": totals["total_spent"],
             "potential_cashback": totals["potential_cashback"],
             "effective_spent": totals["effective_spent"],
@@ -1205,6 +1214,7 @@ def format_cashback_summary(
     header = title or "💳 Теоретический кэшбэк"
     lines = [
         header,
+        "Валюта: " + (summary.get("currency") or "не указана"),
         f"💰 Потрачено всего: {_fmt_amount(float(summary.get('total_spent', 0.0)))}",
         f"💳 Теоретический кэшбэк: {_fmt_amount(float(summary.get('potential_cashback', 0.0)))}",
     ]

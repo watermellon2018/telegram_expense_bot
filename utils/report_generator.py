@@ -26,6 +26,8 @@ from matplotlib.backends.backend_pdf import PdfPages
 import config
 from utils import excel
 from utils import incomes as income_utils
+from utils.currencies import format_money, get_reporting_currency
+from utils.currency_reporting import format_legacy_summary, get_legacy_summary
 
 logger = logging.getLogger(__name__)
 
@@ -50,9 +52,9 @@ PALETTE = [
 
 # ─── Вспомогательные функции ────────────────────────────────────────────────
 
-def _fmt(value: float) -> str:
+def _fmt(value: float, currency=None) -> str:
     """Форматирует сумму: 1 234 567 ₽"""
-    return f"{int(round(float(value))):,}".replace(",", "\u202f") + "\u00a0₽"
+    return format_money(value, currency) if currency else f"{value:,.2f}"
 
 
 def _get_cat_color(cat: str, idx: int = 0) -> str:
@@ -106,7 +108,7 @@ def _month_label(year: int, month: int, today: datetime.date) -> str:
 
 # ─── Страница 1: Обзор — KPI + line + топ-5 + pivot ─────────────────────────
 
-def _page_overview(pdf: PdfPages, df: pd.DataFrame, today: datetime.date):
+def _page_overview(pdf: PdfPages, df: pd.DataFrame, today: datetime.date, currency=None):
     months = _rolling_months(today)
     cur_year, cur_month = today.year, today.month
     prev_month = today.month - 1 if today.month > 1 else 12
@@ -164,12 +166,12 @@ def _page_overview(pdf: PdfPages, df: pd.DataFrame, today: datetime.date):
     kpi_ax.set_axis_off()
 
     kpi_items = [
-        (f"Прошлый месяц\n({MONTH_NAMES_RU[prev_month]})", _fmt(prev_total), "#F28E2B"),
-        (f"Текущий месяц\n({MONTH_NAMES_RU[cur_month]})", _fmt(cur_total), "#59A14F"),
+        (f"Прошлый месяц\n({MONTH_NAMES_RU[prev_month]})", _fmt(prev_total, currency=currency), "#F28E2B"),
+        (f"Текущий месяц\n({MONTH_NAMES_RU[cur_month]})", _fmt(cur_total, currency=currency), "#59A14F"),
         ("Сравнение с прошлым месяцем\n(в процентах)",
          (f"+{diff_pct:.1f}%" if diff_pct >= 0 else f"{diff_pct:.1f}%"),
          "#E15759" if diff_pct > 0 else "#59A14F"),
-         ("Итого за год", _fmt(total), "#4E79A7"),
+         ("Итого за год", _fmt(total, currency=currency), "#4E79A7"),
     ]
     for i, (label, value, color) in enumerate(kpi_items):
         x0 = i * 0.25 + 0.01
@@ -194,14 +196,14 @@ def _page_overview(pdf: PdfPages, df: pd.DataFrame, today: datetime.date):
     ax_line = fig.add_subplot(4, 1, 2)
     ax_line.set_position([0.09, 0.63, 0.92, 0.17])
 
-    max_v = max(monthly_totals) if monthly_totals else 1
+    max_v = (max(monthly_totals) if monthly_totals else 1) or 1
     ax_line.fill_between(range(12), monthly_totals, alpha=0.10, color="#4E79A7")
     ax_line.plot(range(12), monthly_totals, marker='o', color="#4E79A7",
                  linewidth=2.5, markersize=7, markerfacecolor='white',
                  markeredgewidth=2.5, markeredgecolor="#4E79A7")
     for i, v in enumerate(monthly_totals):
         if v > 0:
-            ax_line.text(i, v + max_v * 0.04, _fmt(v),
+            ax_line.text(i, v + max_v * 0.04, _fmt(v, currency=currency),
                          ha='center', fontsize=12, fontweight='bold', color='#444444')
     ax_line.set_xticks(range(12))
     ax_line.set_xticklabels(month_labels, fontsize=12)
@@ -223,10 +225,10 @@ def _page_overview(pdf: PdfPages, df: pd.DataFrame, today: datetime.date):
     for i, (cat, s) in enumerate(top5.items()):
         pct = s / total * 100 if total else 0
         exp = top5_expensive.get(cat, (0, '', ''))
-        exp_str = f"{_fmt(exp[0])} ({exp[1]})"
+        exp_str = f"{_fmt(exp[0], currency=currency)} ({exp[1]})"
         if exp[2]:
             exp_str += f"\n({exp[2][:30]})"
-        table_data.append([_cap(cat), _fmt(s), f"{pct:.1f}%", exp_str])
+        table_data.append([_cap(cat), _fmt(s, currency=currency), f"{pct:.1f}%", exp_str])
 
     # Make a more compact table with larger font, less padding, and optimized bbox
     tbl = ax_top.table(
@@ -288,8 +290,8 @@ def _page_overview(pdf: PdfPages, df: pd.DataFrame, today: datetime.date):
 
     widget_items = [
         ("Транзакций", f"{n_tx:,}".replace(",", "\u202f"), "#4E79A7"),
-        ("Средний расход\nв месяц", _fmt(avg_monthly), "#59A14F"),
-        ("Средний чек", _fmt(avg_check), "#F28E2B"),
+        ("Средний расход\nв месяц", _fmt(avg_monthly, currency=currency), "#59A14F"),
+        ("Средний чек", _fmt(avg_check, currency=currency), "#F28E2B"),
     ]
 
     for i, (label, value, color) in enumerate(widget_items):
@@ -309,7 +311,7 @@ def _page_overview(pdf: PdfPages, df: pd.DataFrame, today: datetime.date):
                        transform=widget_ax.transAxes)
 
     # ── Средний чек по категориям (pivot) ────────────────────────────────────
-    fig.text(0.09, 0.40, "Средний чек по категориям, ₽",
+    fig.text(0.09, 0.40, f"Средний чек по категориям, {currency or 'без валюты'}",
              fontsize=20, fontweight='bold', color='#333333')
 
     ax_pivot = fig.add_axes([0.09, 0.05, 0.93, 0.34])
@@ -359,7 +361,7 @@ def _page_overview(pdf: PdfPages, df: pd.DataFrame, today: datetime.date):
 
 # ─── Страница 2: Структура — большая сводная таблица по месяцам ─────────────
 
-def _page_structure_table(pdf: PdfPages, df: pd.DataFrame, today: datetime.date):
+def _page_structure_table(pdf: PdfPages, df: pd.DataFrame, today: datetime.date, currency=None):
     months = _rolling_months(today)
     cur_m, cur_y = today.month, today.year
     prev_m = cur_m - 1 if cur_m > 1 else 12
@@ -382,22 +384,26 @@ def _page_structure_table(pdf: PdfPages, df: pd.DataFrame, today: datetime.date)
 
     col_labels = [f"{MONTH_SHORT_RU[m]} {str(y)[2:]}" for y, m in months]
     row_labels = [
-        'Факт (₽)',
-        'Бюджет (₽)',
-        'Разница (₽)',
+        f'Факт ({currency or "без валюты"})',
+        f'Бюджет ({currency or "без валюты"})',
+        f'Разница ({currency or "без валюты"})',
         'Разница (%)',
         '% бюджета',
         'Топ-категория',
-        'Ср. расход/день',
+        f'Ср. расход/день ({currency or "без валюты"})',
         'День макс. трат',
-        'Самая дорогая\nпокупка (₽+кат.)',
+        f'Самая дорогая\nпокупка ({currency or "без валюты"}+кат.)',
     ]
 
     table_data = [[] for _ in row_labels]
+    def table_money(value):
+        # Currency is already in row labels; repeating it makes monthly cells overflow.
+        return _fmt(value, currency=currency).removesuffix(f" {currency}")
+
     for y, m in months:
         sub = df[(df['date'].dt.year == y) & (df['date'].dt.month == m)]
         fact = sub['amount'].sum()
-        table_data[0].append(_fmt(fact) if fact else '—')
+        table_data[0].append(table_money(fact) if not sub.empty else '—')
         table_data[1].append('Н/Д')
         table_data[2].append('Н/Д')
         table_data[3].append('Н/Д')
@@ -416,17 +422,17 @@ def _page_structure_table(pdf: PdfPages, df: pd.DataFrame, today: datetime.date)
             else:
                 days_elapsed = days_in_month
             avg_day = fact / days_elapsed if days_elapsed else 0
-            table_data[6].append(_fmt(avg_day))
+            table_data[6].append(table_money(avg_day))
 
             # День с максимальными тратами
             day_totals = sub.groupby(sub['date'].dt.day)['amount'].sum()
             max_day = int(day_totals.idxmax())
-            table_data[7].append(f"{max_day:02d}.{m:02d}.{y}")
+            table_data[7].append(f"{max_day:02d}.{m:02d}")
 
             # Самая дорогая покупка
             top_row = sub.nlargest(1, 'amount').iloc[0]
             desc = str(top_row['description']) if pd.notna(top_row.get('description', None)) and top_row['description'] else ''
-            purchase_str = f"{_fmt(float(top_row['amount']))}\n{_cap(top_row['category'])}"
+            purchase_str = f"{table_money(float(top_row['amount']))}\n{_cap(top_row['category'])}"
             if desc:
                 purchase_str += f"\n{desc[:20]}"
             table_data[8].append(purchase_str)
@@ -443,7 +449,7 @@ def _page_structure_table(pdf: PdfPages, df: pd.DataFrame, today: datetime.date)
         loc='center',
         bbox=[0, 0, 1, 1],
     )
-    tbl.auto_set_font_size(False)
+    tbl.auto_set_font_size(True)
     tbl.set_fontsize(18)
 
     for (r, c), cell in tbl.get_celld().items():
@@ -482,10 +488,10 @@ def _page_structure_table(pdf: PdfPages, df: pd.DataFrame, today: datetime.date)
     ax_pie2 = fig.add_axes([pie_xs[1], pie_y, pie_w, pie_h])
     ax_pie3 = fig.add_axes([pie_xs[2], pie_y, pie_w, pie_h])
     ax_pie4 = fig.add_axes([pie_xs[3], pie_y, pie_w, pie_h])
-    _pie_for_period(ax_pie1, df, cur_y,     cur_m,     "")
-    _pie_for_period(ax_pie2, df, prev_y,    prev_m,    "")
-    _pie_for_period(ax_pie3, df, six_ago_y, six_ago_m, "")
-    _pie_for_period(ax_pie4, df, ry,        rm,        "")
+    _pie_for_period(ax_pie1, df, cur_y,     cur_m,     "", currency=currency)
+    _pie_for_period(ax_pie2, df, prev_y,    prev_m,    "", currency=currency)
+    _pie_for_period(ax_pie3, df, six_ago_y, six_ago_m, "", currency=currency)
+    _pie_for_period(ax_pie4, df, ry,        rm,        "", currency=currency)
 
     pdf.savefig(fig, bbox_inches='tight', pad_inches=0.5, facecolor='white')
     plt.close(fig)
@@ -493,9 +499,9 @@ def _page_structure_table(pdf: PdfPages, df: pd.DataFrame, today: datetime.date)
 
 # ─── Страница 3: 4 круговых диаграммы ───────────────────────────────────────
 
-def _pie_for_period(ax, df: pd.DataFrame, year: int, month: int, title: str):
+def _pie_for_period(ax, df: pd.DataFrame, year: int, month: int, title: str, currency=None):
     sub = df[(df['date'].dt.year == year) & (df['date'].dt.month == month)]
-    if sub.empty:
+    if sub.empty or sub['amount'].sum() <= 0:
         ax.text(0.5, 0.5, 'Нет данных', ha='center', va='center',
                 fontsize=16, fontweight='bold', color='#999999', transform=ax.transAxes)
         if title:
@@ -518,7 +524,7 @@ def _pie_for_period(ax, df: pd.DataFrame, year: int, month: int, title: str):
     wedges, _ = ax.pie(values, labels=None, colors=colors,
                        startangle=90, counterclock=False,
                        wedgeprops=dict(width=0.5, edgecolor='white', linewidth=0.5))
-    ax.text(0, 0, _fmt(total), ha='center', va='center',
+    ax.text(0, 0, _fmt(total, currency=currency), ha='center', va='center',
             fontsize=15, fontweight='bold', color='#2A2A2A')
 
     legend_texts = [f"{lbl}  {v/total*100:.0f}%" for lbl, v in zip(labels, values)]
@@ -530,7 +536,7 @@ def _pie_for_period(ax, df: pd.DataFrame, year: int, month: int, title: str):
 
 # ─── Страница 4: Bar-сравнение + Stacked bar ─────────────────────────────────
 
-def _page_bar_charts(pdf: PdfPages, df: pd.DataFrame, today: datetime.date):
+def _page_bar_charts(pdf: PdfPages, df: pd.DataFrame, today: datetime.date, currency=None):
     months = _rolling_months(today)
     month_labels = [_month_label(y, m, today) for y, m in months]
     monthly_totals = [float(df[(df['date'].dt.year == y) & (df['date'].dt.month == m)]['amount'].sum())
@@ -561,7 +567,7 @@ def _page_bar_charts(pdf: PdfPages, df: pd.DataFrame, today: datetime.date):
 
     # ── Bar 1: фактические расходы по месяцам ────────────────────────────────
     x = np.arange(12)
-    max_v = max(monthly_totals) if monthly_totals else 1
+    max_v = (max(monthly_totals) if monthly_totals else 1) or 1
     bar_colors = [plt.cm.Blues(0.35 + 0.55 * (v / max_v)) for v in monthly_totals]
     bars = ax1.bar(x, monthly_totals, color=bar_colors,
                    edgecolor='white', linewidth=1.2, width=0.65)
@@ -569,12 +575,12 @@ def _page_bar_charts(pdf: PdfPages, df: pd.DataFrame, today: datetime.date):
         if v > 0:
             ax1.text(bar.get_x() + bar.get_width() / 2,
                      bar.get_height() + max_v * 0.012,
-                     _fmt(v), ha='center', va='bottom', fontsize=11, fontweight='bold', color='#444444')
+                     _fmt(v, currency=currency), ha='center', va='bottom', fontsize=11, fontweight='bold', color='#444444')
     ax1.set_xticks(x)
     ax1.set_xticklabels(month_labels, fontsize=12)
     ax1.set_title("Фактические расходы по месяцам",
                   fontsize=20, fontweight='bold', color='#333333', loc='left', pad=20)
-    ax1.set_ylabel("Сумма, ₽", fontsize=14, color='#555555')
+    ax1.set_ylabel(f"Сумма, {currency or 'без валюты'}", fontsize=14, color='#555555')
     ax1.yaxis.set_major_formatter(mticker.FuncFormatter(_rub_formatter))
     ax1.set_ylim(0, max_v * 1.20)
     sns.despine(ax=ax1)
@@ -591,7 +597,7 @@ def _page_bar_charts(pdf: PdfPages, df: pd.DataFrame, today: datetime.date):
     ax2.set_xticklabels(month_labels, fontsize=12)
     ax2.set_title("Структура расходов по категориям (накопленная)",
                   fontsize=20, fontweight='bold', color='#333333', loc='left', pad=20)
-    ax2.set_ylabel("Сумма, ₽", fontsize=14, color='#555555')
+    ax2.set_ylabel(f"Сумма, {currency or 'без валюты'}", fontsize=14, color='#555555')
     ax2.yaxis.set_major_formatter(mticker.FuncFormatter(_rub_formatter))
     _n_leg_cols_bar = 1 if len(top_cats_list) <= 6 else 2
     ax2.legend(
@@ -619,7 +625,7 @@ def _page_bar_charts(pdf: PdfPages, df: pd.DataFrame, today: datetime.date):
     ax3.set_xticklabels(month_labels, fontsize=12)
     ax3.set_title("Расходы по категориям — динамика за год",
                   fontsize=20, fontweight='bold', color='#333333', loc='left', pad=20)
-    ax3.set_ylabel("Сумма, ₽", fontsize=14, color='#555555')
+    ax3.set_ylabel(f"Сумма, {currency or 'без валюты'}", fontsize=14, color='#555555')
     ax3.yaxis.set_major_formatter(mticker.FuncFormatter(_rub_formatter))
     _n_leg_cols = 1 if len(top_cats_list) <= 6 else 2
     ax3.legend(
@@ -645,7 +651,7 @@ def _page_bar_charts(pdf: PdfPages, df: pd.DataFrame, today: datetime.date):
 
 # ─── Страница 5: Multi-line chart ────────────────────────────────────────────
 
-def _page_multiline(pdf: PdfPages, df: pd.DataFrame, today: datetime.date):
+def _page_multiline(pdf: PdfPages, df: pd.DataFrame, today: datetime.date, currency=None):
     months = _rolling_months(today)
     month_labels = [_month_label(y, m, today) for y, m in months]
 
@@ -669,7 +675,7 @@ def _page_multiline(pdf: PdfPages, df: pd.DataFrame, today: datetime.date):
     ax.set_xticklabels(month_labels, fontsize=12)
     ax.set_title("Расходы по категориям — динамика за год",
                  fontsize=20, fontweight='bold', color='#333333', loc='left', pad=20)
-    ax.set_ylabel("Сумма, ₽", fontsize=14, color='#555555')
+    ax.set_ylabel(f"Сумма, {currency or 'без валюты'}", fontsize=14, color='#555555')
     ax.yaxis.set_major_formatter(mticker.FuncFormatter(_rub_formatter))
     ax.legend(loc='upper left', fontsize=9, frameon=False,
               ncol=2, bbox_to_anchor=(1.01, 1.0))
@@ -685,7 +691,7 @@ def _page_multiline(pdf: PdfPages, df: pd.DataFrame, today: datetime.date):
 
 # ─── Страница 6: Тренды + прогноз + ECDF ────────────────────────────────────
 
-def _page_trends(pdf: PdfPages, df: pd.DataFrame, today: datetime.date):
+def _page_trends(pdf: PdfPages, df: pd.DataFrame, today: datetime.date, currency=None):
     months = _rolling_months(today)
     month_labels = [_month_label(y, m, today) for y, m in months]
     monthly_totals = [float(df[(df['date'].dt.year == y) & (df['date'].dt.month == m)]['amount'].sum())
@@ -732,7 +738,7 @@ def _page_trends(pdf: PdfPages, df: pd.DataFrame, today: datetime.date):
     next_y = today.year if today.month < 12 else today.year + 1
     next_label = f"{MONTH_SHORT_RU[next_m]} {str(next_y)[2:]}"
     ax1.annotate(
-        f"Прогноз {next_label}:\n{_fmt(forecast_val)}",
+        f"Прогноз {next_label}:\n{_fmt(forecast_val, currency=currency)}",
         xy=(11, monthly_totals[-1] if monthly_totals else 0),
         xytext=(10, max_v * 0.85),
         fontsize=9, color='#555555',
@@ -744,7 +750,7 @@ def _page_trends(pdf: PdfPages, df: pd.DataFrame, today: datetime.date):
     ax1.set_xticklabels(month_labels, fontsize=12)
     ax1.set_title("Тренд расходов за год + прогноз",
                   fontsize=20, fontweight='bold', color='#333333', loc='left', pad=20)
-    ax1.set_ylabel("Сумма, ₽", fontsize=14, color='#555555')
+    ax1.set_ylabel(f"Сумма, {currency or 'без валюты'}", fontsize=14, color='#555555')
     ax1.yaxis.set_major_formatter(mticker.FuncFormatter(_rub_formatter))
     ax1.set_ylim(0, max_v * 1.30)
     ax1.legend(fontsize=9, frameon=False)
@@ -765,13 +771,13 @@ def _page_trends(pdf: PdfPages, df: pd.DataFrame, today: datetime.date):
                 val = amounts_sorted[min(idx, n - 1)]
                 ax2.axhline(pct, color='#E15759', linestyle='--', linewidth=1, alpha=0.6)
                 ax2.axvline(val, color='#E15759', linestyle='--', linewidth=1, alpha=0.6)
-                ax2.annotate(f"{pct}% ≤ {_fmt(val)}",
+                ax2.annotate(f"{pct}% ≤ {_fmt(val, currency=currency)}",
                              xy=(val, pct),
                              xytext=(val + amounts_sorted.max() * 0.05, pct - 4),
                              fontsize=8, color='#E15759',
                              arrowprops=dict(arrowstyle='->', color='#E15759', lw=0.8))
 
-        ax2.set_xlabel("Сумма покупки, ₽", fontsize=14, color='#555555')
+        ax2.set_xlabel(f"Сумма покупки, {currency or 'без валюты'}", fontsize=14, color='#555555')
         ax2.set_ylabel("Доля транзакций, %", fontsize=14, color='#555555')
         ax2.xaxis.set_major_formatter(mticker.FuncFormatter(_rub_formatter))
         ax2.set_ylim(0, 105)
@@ -792,7 +798,7 @@ def _page_trends(pdf: PdfPages, df: pd.DataFrame, today: datetime.date):
 
 # ─── Страница 7: Heatmaps ─────────────────────────────────────────────────────
 
-def _page_heatmaps(pdf: PdfPages, df: pd.DataFrame, today: datetime.date):
+def _page_heatmaps(pdf: PdfPages, df: pd.DataFrame, today: datetime.date, currency=None):
     months = _rolling_months(today)
 
     df2 = df.copy()
@@ -833,12 +839,12 @@ def _page_heatmaps(pdf: PdfPages, df: pd.DataFrame, today: datetime.date):
         pd.DataFrame(hm1_array, columns=WEEKDAY_SHORT_RU),
         ax=ax1, cmap='YlOrRd', annot=True,
         fmt='.0f', linewidths=0.5, linecolor='white',
-        cbar_kws={'label': '₽'},
+        cbar_kws={'label': f'{currency or "без валюты"}'},
         annot_kws={'fontsize': 14},
     )
     for _coll in ax1.collections:
         _coll.set_alpha(0.9)
-    ax1.set_title("Средние расходы по дням недели, ₽",
+    ax1.set_title(f"Средние расходы по дням недели, {currency or 'без валюты'}",
                   fontsize=20, fontweight='bold', color='#333333', loc='left', pad=20)
     ax1.set_ylabel('')
     ax1.set_yticklabels([])
@@ -847,12 +853,12 @@ def _page_heatmaps(pdf: PdfPages, df: pd.DataFrame, today: datetime.date):
     sns.heatmap(
         pivot2, ax=ax2, cmap='YlOrRd',
         linewidths=0.3, linecolor='white',
-        cbar_kws={'label': '₽'},
+        cbar_kws={'label': f'{currency or "без валюты"}'},
         yticklabels=pivot2_labels,
     )
     for _coll in ax2.collections:
         _coll.set_alpha(0.9)
-    ax2.set_title("Суммы расходов по дням месяца × месяцам, ₽",
+    ax2.set_title(f"Суммы расходов по дням месяца × месяцам, {currency or 'без валюты'}",
                   fontsize=20, fontweight='bold', color='#333333', loc='left', pad=20)
     ax2.set_xlabel("День месяца", fontsize=14, color='#555555')
     ax2.set_ylabel("")
@@ -865,7 +871,7 @@ def _page_heatmaps(pdf: PdfPages, df: pd.DataFrame, today: datetime.date):
 
 # ─── Страница 8: Scatter plots ────────────────────────────────────────────────
 
-def _page_scatter(pdf: PdfPages, df: pd.DataFrame, today: datetime.date):
+def _page_scatter(pdf: PdfPages, df: pd.DataFrame, today: datetime.date, currency=None):
     cur_y, cur_m = today.year, today.month
     cur_df = df[(df['date'].dt.year == cur_y) & (df['date'].dt.month == cur_m)].copy()
 
@@ -905,7 +911,7 @@ def _page_scatter(pdf: PdfPages, df: pd.DataFrame, today: datetime.date):
             ax1.scatter(sub['amount'], sub['day'],
                         color=cat_color_map[cat], alpha=0.75, s=60,
                         label=_cap(cat), edgecolors='white', linewidth=0.5)
-        ax1.set_xlabel("Сумма покупки, ₽", fontsize=14, color='#555555')
+        ax1.set_xlabel(f"Сумма покупки, {currency or 'без валюты'}", fontsize=14, color='#555555')
         ax1.set_ylabel("День месяца", fontsize=14, color='#555555')
         ax1.xaxis.set_major_formatter(mticker.FuncFormatter(_rub_formatter))
         ax1.set_yticks(range(1, today.day + 1))
@@ -930,7 +936,7 @@ def _page_scatter(pdf: PdfPages, df: pd.DataFrame, today: datetime.date):
             ax2.scatter(sub['amount'], sub['hour'],
                         color=cat_color_map[cat], alpha=0.75, s=60,
                         label=_cap(cat), edgecolors='white', linewidth=0.5)
-        ax2.set_xlabel("Сумма покупки, ₽", fontsize=14, color='#555555')
+        ax2.set_xlabel(f"Сумма покупки, {currency or 'без валюты'}", fontsize=14, color='#555555')
         ax2.set_ylabel("Час дня (0–23)", fontsize=14, color='#555555')
         ax2.xaxis.set_major_formatter(mticker.FuncFormatter(_rub_formatter))
         ax2.set_yticks(range(0, 24, 2))
@@ -950,7 +956,7 @@ def _page_scatter(pdf: PdfPages, df: pd.DataFrame, today: datetime.date):
 
 # ─── Страница 9: Scatter-3 (год) + Heatmap-3 (кат × д. недели) ──────────────
 
-def _page_scatter3_hm3(pdf: PdfPages, df: pd.DataFrame, today: datetime.date):
+def _page_scatter3_hm3(pdf: PdfPages, df: pd.DataFrame, today: datetime.date, currency=None):
     months = _rolling_months(today)
     month_idx = {(y, m): i for i, (y, m) in enumerate(months)}
     month_color = {(y, m): PALETTE[i % len(PALETTE)] for i, (y, m) in enumerate(months)}
@@ -1006,7 +1012,7 @@ def _page_scatter3_hm3(pdf: PdfPages, df: pd.DataFrame, today: datetime.date):
             alpha=0.70, edgecolors='white', linewidth=0.5,
         )
         ax1.set_xlabel("День месяца (1–31)", fontsize=14, color='#555555')
-        ax1.set_ylabel("Сумма трат за день, ₽", fontsize=14, color='#555555')
+        ax1.set_ylabel(f"Сумма трат за день, {currency or 'без валюты'}", fontsize=14, color='#555555')
         ax1.yaxis.set_major_formatter(mticker.FuncFormatter(_rub_formatter))
         ax1.set_xticks(range(1, 32, 2))
 
@@ -1034,12 +1040,12 @@ def _page_scatter3_hm3(pdf: PdfPages, df: pd.DataFrame, today: datetime.date):
             hm3_data, ax=ax2, cmap='YlOrRd',
             annot=True, fmt='.0f',
             linewidths=0.5, linecolor='white',
-            cbar_kws={'label': '₽'},
+            cbar_kws={'label': f'{currency or "без валюты"}'},
             annot_kws={'fontsize': 14},
         )
         for _coll in ax2.collections:
             _coll.set_alpha(0.9)
-        ax2.set_title("Расходы по категориям × дням недели, ₽",
+        ax2.set_title(f"Расходы по категориям × дням недели, {currency or 'без валюты'}",
                       fontsize=20, fontweight='bold', color='#333333', loc='left', pad=20)
         ax2.set_xlabel("День недели", fontsize=14, color='#555555')
         ax2.set_ylabel("")
@@ -1056,7 +1062,7 @@ def _page_scatter3_hm3(pdf: PdfPages, df: pd.DataFrame, today: datetime.date):
 
 # ─── Страница 10: Box plots ───────────────────────────────────────────────────
 
-def _page_boxplots(pdf: PdfPages, df: pd.DataFrame, today: datetime.date):
+def _page_boxplots(pdf: PdfPages, df: pd.DataFrame, today: datetime.date, currency=None):
     months = _rolling_months(today)
     month_labels = [_month_label(y, m, today) for y, m in months]
 
@@ -1101,7 +1107,7 @@ def _page_boxplots(pdf: PdfPages, df: pd.DataFrame, today: datetime.date):
         ax1.set_xticklabels(month_labels, fontsize=12)
         ax1.set_title("Распределение сумм покупок по месяцам",
                       fontsize=20, fontweight='bold', color='#333333', loc='left', pad=20)
-        ax1.set_ylabel("Сумма покупки, ₽", fontsize=14, color='#555555')
+        ax1.set_ylabel(f"Сумма покупки, {currency or 'без валюты'}", fontsize=14, color='#555555')
         ax1.yaxis.set_major_formatter(mticker.FuncFormatter(_rub_formatter))
 
         # Подпись 3 самых крупных выбросов
@@ -1120,9 +1126,9 @@ def _page_boxplots(pdf: PdfPages, df: pd.DataFrame, today: datetime.date):
                     if not sub.empty:
                         row = sub.iloc[0]
                         desc_raw = str(row['description']) if pd.notna(row.get('description', None)) and row['description'] else ''
-                        label_txt = f"{_fmt(v)}\n{_cap(row['category'])}\n{row['date'].date()}"
+                        label_txt = f"{_fmt(v, currency=currency)}\n{_cap(row['category'])}\n{row['date'].date()}"
                     else:
-                        label_txt = _fmt(v)
+                        label_txt = _fmt(v, currency=currency)
                     fliers_all.append((float(v), i + 1, label_txt))
 
         fliers_all.sort(key=lambda x: -x[0])
@@ -1160,7 +1166,7 @@ def _page_boxplots(pdf: PdfPages, df: pd.DataFrame, today: datetime.date):
             f"Распределение сумм по категориям — {MONTH_NAMES_RU[cur_m]} {cur_y}",
             fontsize=20, fontweight='bold', color='#333333', loc='left', pad=20,
         )
-        ax2.set_ylabel("Сумма покупки, ₽", fontsize=14, color='#555555')
+        ax2.set_ylabel(f"Сумма покупки, {currency or 'без валюты'}", fontsize=14, color='#555555')
         ax2.yaxis.set_major_formatter(mticker.FuncFormatter(_rub_formatter))
 
         # Подписи выбросов
@@ -1174,7 +1180,7 @@ def _page_boxplots(pdf: PdfPages, df: pd.DataFrame, today: datetime.date):
             upper = q3 + 1.5 * iqr
             for v in vals:
                 if v > upper:
-                    fliers2.append((float(v), i + 1, _fmt(v)))
+                    fliers2.append((float(v), i + 1, _fmt(v, currency=currency)))
 
         fliers2.sort(key=lambda x: -x[0])
         for val, x_pos, label in fliers2[:4]:
@@ -1203,7 +1209,7 @@ def _page_income_overview(
     income_df: pd.DataFrame,
     today: datetime.date,
     top_n: int = 5,
-):
+ currency=None):
     """Страница отчета с аналитикой по доходам и балансу."""
     _set_style()
     months = _rolling_months(today)
@@ -1250,11 +1256,15 @@ def _page_income_overview(
         ax_bar.set_title("Доходы по категориям", fontsize=18, fontweight="bold", loc="left")
         ax_bar.xaxis.set_major_formatter(mticker.FuncFormatter(_rub_formatter))
         for bar, value in zip(bars, bar_values):
-            ax_bar.text(bar.get_width() * 1.01, bar.get_y() + bar.get_height() / 2, _fmt(value), va="center", fontsize=10)
+            ax_bar.text(bar.get_width() * 1.01, bar.get_y() + bar.get_height() / 2, _fmt(value, currency=currency), va="center", fontsize=10)
         sns.despine(ax=ax_bar, left=True, bottom=False)
 
         pie_colors = bar_colors
-        ax_pie.pie(bar_values, labels=bar_categories, autopct="%1.1f%%", startangle=90, colors=pie_colors)
+        if sum(bar_values) > 0:
+            ax_pie.pie(bar_values, labels=bar_categories, autopct="%1.1f%%", startangle=90, colors=pie_colors)
+        else:
+            ax_pie.text(.5, .5, "Сумма после округления: 0", ha="center", va="center")
+            ax_pie.axis("off")
         ax_pie.set_title(f"Доли категорий доходов (top {top_n})", fontsize=18, fontweight="bold")
 
     # Доходы vs расходы по месяцам
@@ -1296,7 +1306,7 @@ def _page_income_overview(
 
 # ─── Главная синхронная функция рендеринга ────────────────────────────────────
 
-def _render_full_report(df: pd.DataFrame, income_df: pd.DataFrame, today: datetime.date, save_path: str):
+def _render_full_report(df: pd.DataFrame, income_df: pd.DataFrame, today: datetime.date, save_path: str, currency=None, legacy_text=""):
     """Рендерит все страницы PDF синхронно. Вызывается в ThreadPoolExecutor."""
     _set_style()
 
@@ -1312,16 +1322,25 @@ def _render_full_report(df: pd.DataFrame, income_df: pd.DataFrame, today: dateti
         d['Author'] = 'Telegram Expense Bot'
         d['Subject'] = 'Анализ личных финансов'
 
-        _page_overview(pdf, df, today)           # Стр. 1: обзор (KPI + line + топ-5 + pivot)
-        _page_structure_table(pdf, df, today)    # Стр. 2: сводная таблица + 4 круговых диаграммы
-        _page_bar_charts(pdf, df, today)         # Стр. 4: 2 гистограммы + line расходы по категориям
-        _page_trends(pdf, df, today)             # Стр. 6: тренд + ECDF
-        _page_heatmaps(pdf, df, today)           # Стр. 7: heatmaps (д. недели + д. месяца)
-        _page_scatter(pdf, df, today)            # Стр. 8: scatter 1+2 (тек. месяц)
-        _page_scatter3_hm3(pdf, df, today)       # Стр. 9: scatter 3 + heatmap кат×д.нед.
-        _page_boxplots(pdf, df, today)           # Стр. 10: box plots
+        fig = plt.figure(figsize=(11.7, 8.3))
+        fig.text(.08, .90, f"Валюта отчётности: {currency or 'без валюты'}", fontsize=20)
+        fig.text(.08, .82, "В итогах и графиках — только операции с указанной валютой.", fontsize=13)
+        fig.text(.08, .72, legacy_text or "Исторических записей без валюты за период нет.", fontsize=12, va='top')
         if income_df is not None and not income_df.empty:
-            _page_income_overview(pdf, df, income_df, today, top_n=5)
+            fig.text(.08, .30, "Доходы за период: " + _fmt(float(income_df['amount'].sum()), currency), fontsize=14)
+        pdf.savefig(fig)
+        plt.close(fig)
+        if not df.empty:
+            _page_overview(pdf, df, today, currency=currency)           # Стр. 1: обзор (KPI + line + топ-5 + pivot)
+            _page_structure_table(pdf, df, today, currency=currency)    # Стр. 2: сводная таблица + 4 круговых диаграммы
+            _page_bar_charts(pdf, df, today, currency=currency)         # Стр. 4: 2 гистограммы + line расходы по категориям
+            _page_trends(pdf, df, today, currency=currency)             # Стр. 6: тренд + ECDF
+            _page_heatmaps(pdf, df, today, currency=currency)           # Стр. 7: heatmaps (д. недели + д. месяца)
+            _page_scatter(pdf, df, today, currency=currency)            # Стр. 8: scatter 1+2 (тек. месяц)
+            _page_scatter3_hm3(pdf, df, today, currency=currency)       # Стр. 9: scatter 3 + heatmap кат×д.нед.
+            _page_boxplots(pdf, df, today, currency=currency)           # Стр. 10: box plots
+        if income_df is not None and not income_df.empty:
+            _page_income_overview(pdf, df, income_df, today, top_n=5, currency=currency)
 
     return save_path
 
@@ -1329,67 +1348,32 @@ def _render_full_report(df: pd.DataFrame, income_df: pd.DataFrame, today: dateti
 # ─── Публичная async-функция ─────────────────────────────────────────────────
 
 async def generate_pdf_report(user_id, project_id=None) -> Optional[str]:
-    """
-    Генерирует PDF-отчёт по расходам за скользящие 12 месяцев.
-    Возвращает путь к PDF-файлу или None если данных нет.
-    """
+    """Render typed totals and a separate legacy section for the last 12 months."""
     today = datetime.date.today()
-    cur_year = today.year
-    prev_year = cur_year - 1
-
-    # Загружаем расходы и доходы за 2 года (нужны для скользящего окна 12 месяцев)
-    df_cur, df_prev, income_cur, income_prev = await asyncio.gather(
-        excel.get_all_expenses(user_id, cur_year, project_id),
-        excel.get_all_expenses(user_id, prev_year, project_id),
-        income_utils.get_all_incomes(user_id, cur_year, project_id),
-        income_utils.get_all_incomes(user_id, prev_year, project_id),
+    first_year, first_month = _rolling_months(today)[0]
+    window_start = datetime.date(first_year, first_month, 1)
+    currency = await get_reporting_currency(user_id, project_id)
+    legacy = await get_legacy_summary(user_id, project_id, start_date=window_start, end_date=today)
+    data = await asyncio.gather(
+        excel.get_all_expenses(user_id, today.year, project_id),
+        excel.get_all_expenses(user_id, today.year - 1, project_id),
+        income_utils.get_all_incomes(user_id, today.year, project_id),
+        income_utils.get_all_incomes(user_id, today.year - 1, project_id),
     )
-
     frames = []
-    if df_cur is not None and not df_cur.empty:
-        frames.append(df_cur)
-    if df_prev is not None and not df_prev.empty:
-        frames.append(df_prev)
-
-    if not frames:
+    for pair in (data[:2], data[2:]):
+        nonempty = [frame for frame in pair if frame is not None and not frame.empty]
+        frame = pd.concat(nonempty, ignore_index=True) if nonempty else pd.DataFrame(columns=['date','amount','category','description'])
+        frame['date'] = pd.to_datetime(frame['date'])
+        frame['amount'] = frame['amount'].astype(float)
+        frame = frame[(frame['date'].dt.date >= window_start) & (frame['date'].dt.date <= today)]
+        frames.append(frame)
+    legacy_text = format_legacy_summary(legacy)
+    if all(frame.empty for frame in frames) and not legacy_text:
         return None
-
-    df_all = pd.concat(frames, ignore_index=True)
-    df_all['date'] = pd.to_datetime(df_all['date'])
-    df_all['amount'] = df_all['amount'].astype(float)
-
-    # Фильтруем: скользящие 12 месяцев
-    cutoff = today.replace(day=1)
-    # Сдвигаем на 11 месяцев назад (начало окна = 12-й месяц назад включая текущий)
-    m = cutoff.month - 11
-    y = cutoff.year
-    while m <= 0:
-        m += 12
-        y -= 1
-    window_start = datetime.date(y, m, 1)
-    df_all = df_all[df_all['date'].dt.date >= window_start]
-
-    if df_all.empty:
-        return None
-
-    income_frames = []
-    if income_cur is not None and not income_cur.empty:
-        income_frames.append(income_cur)
-    if income_prev is not None and not income_prev.empty:
-        income_frames.append(income_prev)
-
-    income_all = pd.DataFrame(columns=["date", "amount", "category", "description", "created_at"])
-    if income_frames:
-        income_all = pd.concat(income_frames, ignore_index=True)
-        income_all["date"] = pd.to_datetime(income_all["date"])
-        income_all["amount"] = income_all["amount"].astype(float)
-        income_all = income_all[income_all["date"].dt.date >= window_start]
-
     user_dir = excel.create_user_dir(user_id)
-    save_path = os.path.join(user_dir, f"report_{today.strftime('%Y%m%d')}.pdf")
-
-    loop = asyncio.get_event_loop()
-    return await loop.run_in_executor(
-        None,
-        functools.partial(_render_full_report, df_all, income_all, today, save_path),
+    import uuid
+    save_path = os.path.join(user_dir, f"report_{today:%Y%m%d}_{uuid.uuid4().hex[:8]}.pdf")
+    return await asyncio.get_running_loop().run_in_executor(
+        None, functools.partial(_render_full_report, *frames, today, save_path, currency=currency, legacy_text=legacy_text),
     )

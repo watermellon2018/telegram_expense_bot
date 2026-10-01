@@ -21,6 +21,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import matplotlib.pyplot as plt
 import pandas as pd
 import pytest
+
+pytestmark = pytest.mark.usefixtures("mock_currency_context")
 from matplotlib.backends.backend_pdf import PdfPages
 
 from utils import report_generator as rg
@@ -94,32 +96,16 @@ def tmp_pdf(tmp_path):
 # ─── _fmt ─────────────────────────────────────────────────────────────────────
 
 class TestFmt:
-    """Тесты _fmt — форматирование суммы в рублях."""
+    @pytest.mark.parametrize('value,code,expected', [
+        (1234,'USD','1 234.00 USD'), (1500,'JPY','1 500 JPY'),
+        (0,'RUB','0.00 RUB'), (999.9,'KRW','1 000 KRW'),
+        (-500,'EUR','-500.00 EUR'),
+    ])
+    def test_explicit_currency(self,value,code,expected):
+        assert rg._fmt(value,code) == expected
 
-    def test_integer_value(self):
-        assert rg._fmt(1000) == "1\u202f000\u00a0₽"
-
-    def test_large_value(self):
-        assert rg._fmt(1_234_567) == "1\u202f234\u202f567\u00a0₽"
-
-    def test_zero(self):
-        assert rg._fmt(0) == "0\u00a0₽"
-
-    def test_float_rounds_up(self):
-        assert rg._fmt(999.9) == "1\u202f000\u00a0₽"
-
-    def test_float_rounds_down(self):
-        assert rg._fmt(999.4) == "999\u00a0₽"
-
-    def test_small_value(self):
-        result = rg._fmt(1)
-        assert "₽" in result
-        assert "1" in result
-
-    def test_negative_value_does_not_raise(self):
-        """_fmt не падает на отрицательных значениях."""
-        result = rg._fmt(-500)
-        assert "₽" in result
+    def test_no_currency_never_guesses_rubles(self):
+        assert '₽' not in rg._fmt(100)
 
 
 # ─── _cap ─────────────────────────────────────────────────────────────────────

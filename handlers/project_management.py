@@ -6,7 +6,9 @@ Handles member management, invitations, and role changes with inline keyboards.
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import CallbackQueryHandler, CommandHandler, ContextTypes
 
+import config
 from utils import helpers, projects
+from utils.currency_reporting import format_project_totals
 from utils.logger import get_logger, log_event
 from utils.permissions import Permission, get_role_description, has_permission
 
@@ -60,6 +62,8 @@ async def project_settings_menu(update: Update, context: ContextTypes.DEFAULT_TY
     # All members manage their own expense notification settings (feature_110)
     keyboard.append([InlineKeyboardButton("🔔 Уведомления о расходах", callback_data=f"proj_notify_{active_project_id}")])
 
+    keyboard.append([InlineKeyboardButton(config.SETTINGS_MENU_BUTTONS["currency"], callback_data=f"currency_project_{active_project_id}")])
+
     # Owner-specific options
     if is_owner:
         keyboard.append([InlineKeyboardButton("✉️ Пригласить участника", callback_data=f"proj_invite_{active_project_id}")])
@@ -80,8 +84,7 @@ async def project_settings_menu(update: Update, context: ContextTypes.DEFAULT_TY
         f"📁 {project['project_name']}\n"
         f"{role_emoji}\n\n"
         f"📊 Статистика:\n"
-        f"• Расходов: {stats['count']}\n"
-        f"• Сумма: {stats['total']:.2f}\n"
+        f"{format_project_totals(stats)}\n"
         f"• Участников: {len(members)}\n\n"
         f"Выберите действие:"
     )
@@ -545,6 +548,8 @@ async def back_to_settings(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     # All members manage their own expense notification settings (feature_110)
     keyboard.append([InlineKeyboardButton("🔔 Уведомления о расходах", callback_data=f"proj_notify_{project_id}")])
 
+    keyboard.append([InlineKeyboardButton(config.SETTINGS_MENU_BUTTONS["currency"], callback_data=f"currency_project_{project_id}")])
+
     # Owner-specific options
     if is_owner:
         keyboard.append([InlineKeyboardButton("✉️ Пригласить участника", callback_data=f"proj_invite_{project_id}")])
@@ -565,8 +570,7 @@ async def back_to_settings(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         f"📁 {project['project_name']}\n"
         f"{role_emoji}\n\n"
         f"📊 Статистика:\n"
-        f"• Расходов: {stats['count']}\n"
-        f"• Сумма: {stats['total']:.2f}\n"
+        f"{format_project_totals(stats)}\n"
         f"• Участников: {len(members)}\n\n"
         f"Выберите действие:"
     )

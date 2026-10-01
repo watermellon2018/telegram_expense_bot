@@ -22,8 +22,9 @@ import secrets
 from typing import Optional
 
 import metrics
-from utils import duplicate_service, project_notifier
+from utils import currencies, duplicate_service, project_notifier
 from utils.logger import get_logger, log_error, log_event
+from utils.permissions import Permission, has_permission
 
 logger = get_logger("utils.expense_creation")
 
@@ -66,7 +67,8 @@ async def _create_and_notify(
     project_id: Optional[int],
     idempotency_key: Optional[str],
     bot_data: Optional[dict],
-) -> Optional[int]:
+    money: dict,
+) -> dict:
     """Идемпотентно создаёт расход и (для проектов) запускает уведомления."""
     result = await duplicate_service.create_expense_idempotent(
         author_id=author_id,
@@ -76,11 +78,12 @@ async def _create_and_notify(
         project_id=project_id,
         idempotency_key=idempotency_key,
         bot_data=bot_data,
+        money=money,
     )
 
     expense_id = result.get("expense_id")
     if expense_id is None:
-        return None
+        return result
 
     # Уведомляем участников только если расход реально создан сейчас (не повтор)
     # и это проектный расход.
@@ -90,7 +93,7 @@ async def _create_and_notify(
             _safe_notify(bot, expense_id=expense_id, author_id=author_id)
         )
 
-    return expense_id
+    return result
 
 
 async def _safe_notify(bot, *, expense_id: int, author_id: int) -> None:
@@ -114,6 +117,7 @@ async def process_new_expense(
     description: str,
     project_id: Optional[int],
     bot_data: Optional[dict],
+    currency: Optional[str] = None,
 ) -> dict:
     """
     Главная точка обработки нового расхода с проверкой дубликата.
@@ -126,6 +130,14 @@ async def process_new_expense(
         {'status': 'error'}
             не удалось создать расход
     """
+    # Resolve once before locks and preserve this snapshot in a pending draft.
+    if not await has_permission(author_id, project_id, Permission.ADD_EXPENSE):
+        return {"status": "error", "message": "Нет прав на добавление расхода."}
+    try:
+        money = await currencies.prepare_money(author_id, project_id, amount, currency)
+    except currencies.CurrencyError as exc:
+        return {"status": "error", "message": str(exc)}
+    amount = money["amount"]
     # Нужна ли вообще проверка дубликатов?
     need_check = await duplicate_service.should_check_duplicates(author_id, project_id)
 
@@ -138,6 +150,7 @@ async def process_new_expense(
             expense_date=datetime.date.today(),
             created_at=datetime.datetime.now(),
             comment=description,
+            currency=money["currency"],
         )
         # bot_data нужен, чтобы сохранить черновик для последующего подтверждения.
         # В рантайме PTB всегда передаёт context.bot_data; проверка — защитная.
@@ -145,7 +158,9 @@ async def process_new_expense(
             metrics.track_duplicate_found()
             draft = {
                 "author_id": str(author_id),
-                "amount": float(amount),
+                "existing_expense_id": existing["id"],
+                "amount": amount,
+                "money": money,
                 "category_id": int(category_id),
                 "category_name": category_name,
                 "description": description or "",
@@ -155,10 +170,10 @@ async def process_new_expense(
             log_event(logger, "possible_expense_duplicate_prompt",
                       author_id=author_id, project_id=project_id,
                       existing_expense_id=existing["id"], draft_id=draft_id)
-            return {"status": "duplicate", "draft_id": draft_id, "existing": existing}
+            return {"status": "duplicate", "draft_id": draft_id, "existing": existing, "money": money}
 
     # Дубль не найден или проверка не нужна — создаём сразу
-    expense_id = await _create_and_notify(
+    result = await _create_and_notify(
         bot,
         author_id=author_id,
         amount=amount,
@@ -167,10 +182,12 @@ async def process_new_expense(
         project_id=project_id,
         idempotency_key=None,
         bot_data=bot_data,
+        money=money,
     )
+    expense_id = result.get("expense_id")
     if expense_id is None:
         return {"status": "error"}
-    return {"status": "created", "expense_id": expense_id}
+    return {"status": "created", "expense_id": expense_id, "money": money}
 
 
 async def confirm_pending_expense(
@@ -191,12 +208,12 @@ async def confirm_pending_expense(
     draft = get_draft(bot_data, draft_id)
     if draft is None:
         return {"status": "expired", "expense_id": None}
+    if not await has_permission(int(draft["author_id"]), draft.get("project_id"), Permission.ADD_EXPENSE):
+        return {"status": "error", "expense_id": None}
+    if not draft.get("money"):
+        return {"status": "expired", "expense_id": None}
 
-    # Проверяем, не создавался ли уже расход по этому черновику
-    cache = (bot_data or {}).get("expense_idempotency", {})
-    already = draft_id in cache
-
-    expense_id = await _create_and_notify(
+    result = await _create_and_notify(
         bot,
         author_id=int(draft["author_id"]),
         amount=draft["amount"],
@@ -205,15 +222,17 @@ async def confirm_pending_expense(
         project_id=draft.get("project_id"),
         idempotency_key=draft_id,
         bot_data=bot_data,
+        money=draft["money"],
     )
 
+    expense_id = result.get("expense_id")
     if expense_id is None:
         return {"status": "error", "expense_id": None}
 
-    if already:
-        return {"status": "already", "expense_id": expense_id}
+    if not result.get("created"):
+        return {"status": "already", "expense_id": expense_id, "money": draft["money"]}
 
     metrics.track_duplicate_confirmed()
     log_event(logger, "possible_expense_duplicate_confirmed",
               draft_id=draft_id, expense_id=expense_id)
-    return {"status": "created", "expense_id": expense_id}
+    return {"status": "created", "expense_id": expense_id, "money": draft["money"]}

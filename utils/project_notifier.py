@@ -50,7 +50,7 @@ def _error_type(exc: Exception) -> str:
     return exc.__class__.__name__
 
 
-def _should_notify(settings: dict, amount: Decimal) -> bool:
+def _should_notify(settings: dict, amount: Optional[Decimal], currency=None) -> bool:
     """Решает, нужно ли уведомлять участника с учётом его режима и порога."""
     mode = settings.get("expense_notify_mode", config.ExpenseNotifyMode.DEFAULT)
 
@@ -58,6 +58,8 @@ def _should_notify(settings: dict, amount: Decimal) -> bool:
         return False
 
     if mode == config.ExpenseNotifyMode.LARGE_ONLY:
+        if not currency or settings.get("threshold_currency") != currency or amount is None:
+            return False
         threshold = settings.get("large_expense_threshold")
         if threshold is None:
             # Порог не задан — уведомляем (безопасный дефолт)
@@ -115,7 +117,7 @@ async def notify_expense_created(
     text = expense_formatter.format_expense_notification(project_name, expense, author_name)
     keyboard = _notification_keyboard(expense_id)
 
-    amount = Decimal(str(expense["amount"]))
+    amount = expense.get("reporting_amount")
 
     try:
         members = await projects.get_project_members(project_id)
@@ -138,7 +140,7 @@ async def notify_expense_created(
 
         # Индивидуальные настройки уведомлений
         settings = await project_notifications.get_member_settings(project_id, int(recipient_user_id))
-        if not _should_notify(settings, amount):
+        if not _should_notify(settings, amount, expense.get("reporting_currency")):
             stats["skipped"] += 1
             continue
 

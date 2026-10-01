@@ -19,12 +19,13 @@ Service слой: поиск потенциальных дубликатов р�
 равенстве — самый свежий.
 """
 
+import asyncio
 import datetime
 from decimal import Decimal
 from typing import Optional
 
 import config
-from utils import db, excel
+from utils import currencies, db, excel
 from utils.logger import get_logger, log_error, log_event
 from utils.permissions import Permission, has_permission
 
@@ -79,6 +80,7 @@ async def find_possible_duplicate(
     created_at: Optional[datetime.datetime] = None,
     comment: Optional[str] = None,
     conn=None,
+    currency: Optional[str] = None,
 ) -> Optional[dict]:
     """
     Ищет наиболее похожий потенциальный дубликат расхода в совместном проекте.
@@ -105,7 +107,8 @@ async def find_possible_duplicate(
     tolerance = config.DUPLICATE_EXPENSE_AMOUNT_TOLERANCE_PERCENT
 
     sql = """
-        SELECT e.id, e.user_id AS author_id, e.amount, e.category_id,
+        SELECT e.id, e.user_id AS author_id, e.amount, e.currency,
+               e.reporting_amount, e.reporting_currency, e.fx_source, e.category_id,
                e.date, e.time, e.description, e.created_at,
                c.name AS category_name
         FROM expenses e
@@ -116,9 +119,10 @@ async def find_possible_duplicate(
           AND e.user_id <> $4
           AND e.deleted_at IS NULL
           AND e.created_at >= $5
+          AND e.currency IS NOT DISTINCT FROM $6
         ORDER BY e.created_at DESC
     """
-    params = (project_id, int(category_id), expense_date, str(author_id), earliest)
+    params = (project_id, int(category_id), expense_date, str(author_id), earliest, currency)
 
     try:
         if conn is not None:
@@ -173,7 +177,17 @@ async def find_possible_duplicate(
     return result
 
 
-async def create_expense_idempotent(
+async def create_expense_idempotent(**kwargs) -> dict:
+    """Serialize retries of the same draft, including the cache check."""
+    data, key = kwargs.get('bot_data'), kwargs.get('idempotency_key')
+    if data is None or not key:
+        return await _create_expense_idempotent(**kwargs)
+    lock = data.setdefault('expense_idempotency_locks', {}).setdefault(key, asyncio.Lock())
+    async with lock:
+        return await _create_expense_idempotent(**kwargs)
+
+
+async def _create_expense_idempotent(
     *,
     author_id: int,
     amount,
@@ -182,6 +196,8 @@ async def create_expense_idempotent(
     project_id: Optional[int],
     idempotency_key: Optional[str] = None,
     bot_data: Optional[dict] = None,
+    money: Optional[dict] = None,
+    currency: Optional[str] = None,
 ) -> dict:
     """
     Идемпотентно создаёт расход.
@@ -215,6 +231,10 @@ async def create_expense_idempotent(
     project_id_norm = excel._normalize_project_id(project_id)
 
     try:
+        if not await has_permission(author_id, project_id_norm, Permission.ADD_EXPENSE):
+            return result
+        if money is None:
+            money = await currencies.prepare_money(author_id, project_id_norm, amount, currency)
         # Для проектов берём транзакционный advisory lock, чтобы проверка дубля
         # и вставка были атомарны относительно других участников.
         async with db.transaction() as conn:
@@ -224,7 +244,7 @@ async def create_expense_idempotent(
 
                 expense_id = await excel.create_expense(
                     author_id, amount, category_id, description,
-                    project_id_norm, conn=conn,
+                    project_id_norm, conn=conn, money=money,
                 )
 
         if expense_id is None:

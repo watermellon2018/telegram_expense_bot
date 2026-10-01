@@ -20,29 +20,29 @@ from utils.projects import get_project_members
 logger = get_logger("utils.budget_notifier")
 
 def _fmt_threshold_message(budget_amount: float, spending: float, threshold: float,
-                            month_name: str, year: int) -> str:
+                            month_name: str, year: int, currency=None) -> str:
     remaining = budget_amount - spending
     pct = spending / budget_amount * 100 if budget_amount > 0 else 0
     return (
         f"⚠️ Приближение к лимиту бюджета\n\n"
         f"📅 {month_name} {year}\n"
-        f"💰 Бюджет: {budget_amount:,.0f}\u00a0руб.\n"
-        f"💸 Потрачено: {spending:,.0f}\u00a0руб. ({pct:.0f}%)\n"
-        f"🔻 Остаток: {remaining:,.0f}\u00a0руб.\n"
-        f"📌 Порог уведомления: {threshold:,.0f}\u00a0руб."
+        f"💰 Бюджет: {budget_amount:,.0f} {currency or 'без валюты'}\n"
+        f"💸 Потрачено: {spending:,.0f} {currency or 'без валюты'} ({pct:.0f}%)\n"
+        f"🔻 Остаток: {remaining:,.0f} {currency or 'без валюты'}\n"
+        f"📌 Порог уведомления: {threshold:,.0f} {currency or 'без валюты'}"
     )
 
 
 def _fmt_overspent_message(budget_amount: float, spending: float,
-                           month_name: str, year: int) -> str:
+                           month_name: str, year: int, currency=None) -> str:
     overspent = spending - budget_amount
     pct = spending / budget_amount * 100 if budget_amount > 0 else 0
     return (
         f"🚨 Бюджет превышен!\n\n"
         f"📅 {month_name} {year}\n"
-        f"💰 Бюджет: {budget_amount:,.0f}\u00a0руб.\n"
-        f"💸 Потрачено: {spending:,.0f}\u00a0руб. ({pct:.0f}%)\n"
-        f"📈 Перерасход: {overspent:,.0f}\u00a0руб."
+        f"💰 Бюджет: {budget_amount:,.0f} {currency or 'без валюты'}\n"
+        f"💸 Потрачено: {spending:,.0f} {currency or 'без валюты'} ({pct:.0f}%)\n"
+        f"📈 Перерасход: {overspent:,.0f} {currency or 'без валюты'}"
     )
 
 
@@ -100,6 +100,8 @@ async def check_budget_notifications(bot) -> None:
 async def _process_budget(bot, budget: dict, month: int, year: int,
                           now: datetime.datetime) -> None:
     """Проверить один бюджет и отправить уведомления при необходимости."""
+    if not budget.get('currency'):
+        return
     user_id = budget['user_id']
     project_id = budget.get('project_id')
     budget_amount = budget['amount']
@@ -107,7 +109,9 @@ async def _process_budget(bot, budget: dict, month: int, year: int,
 
     # Получаем текущие траты за месяц
     expenses = await excel.get_month_expenses(int(user_id), month, year, project_id)
-    current_spending = float(expenses.get('total', 0)) if expenses else 0.0
+    if not expenses or expenses.get('currency') != budget['currency']:
+        return
+    current_spending = float(expenses.get('total', 0))
 
     # Нет трат — не беспокоим
     if current_spending == 0:
@@ -129,7 +133,7 @@ async def _process_budget(bot, budget: dict, month: int, year: int,
     # --- Уведомление «порог достигнут» ---
     if threshold is not None and current_spending >= threshold:
         if _should_send(budget.get('threshold_notified_at'), last_spending, current_spending):
-            msg = _fmt_threshold_message(budget_amount, current_spending, threshold, month_name, year)
+            msg = _fmt_threshold_message(budget_amount, current_spending, threshold, month_name, year, budget['currency'])
             await _send_to_users(bot, recipient_ids, msg)
             threshold_sent = True
             log_event(logger, "threshold_notification_sent",
@@ -139,7 +143,7 @@ async def _process_budget(bot, budget: dict, month: int, year: int,
     # --- Уведомление «бюджет превышен» ---
     if current_spending > budget_amount:
         if _should_send(budget.get('overspent_notified_at'), last_spending, current_spending):
-            msg = _fmt_overspent_message(budget_amount, current_spending, month_name, year)
+            msg = _fmt_overspent_message(budget_amount, current_spending, month_name, year, budget['currency'])
             await _send_to_users(bot, recipient_ids, msg)
             overspent_sent = True
             log_event(logger, "overspent_notification_sent",

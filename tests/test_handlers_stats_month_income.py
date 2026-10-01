@@ -4,6 +4,8 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
+pytestmark = pytest.mark.usefixtures("mock_currency_context")
+
 from handlers.stats import month_command
 
 

@@ -21,6 +21,7 @@ import seaborn as sns
 import config
 from utils import excel
 from utils import incomes as income_utils
+from utils.currencies import format_money, get_reporting_currency
 
 logger = logging.getLogger(__name__)
 
@@ -54,9 +55,9 @@ plt.rcParams.update({
 })
 
 
-def _fmt_amount(value: float) -> str:
+def _fmt_amount(value: float, currency=None) -> str:
     """Форматирует сумму: 1 500 руб."""
-    return f"{int(float(value)):,}".replace(",", "\u202f") + "\u00a0руб."
+    return format_money(value, currency) if currency else f"{value:,.2f}"
 
 
 def _cap(name: str) -> str:
@@ -89,7 +90,7 @@ def _get_colors(categories: list) -> list:
 # ---------------------------------------------------------------------------
 
 def _render_pie_chart(raw_names: list, amounts: list, total: float,
-                      month: int, year: int, save_path: str) -> str:
+                      month: int, year: int, save_path: str, currency=None) -> str:
     """Синхронный рендеринг donut-диаграммы. Вызывается через run_in_executor."""
     labels = [_cap(n) for n in raw_names]
     colors = _get_colors(raw_names)
@@ -162,7 +163,7 @@ def _render_pie_chart(raw_names: list, amounts: list, total: float,
 
     ax.text(
         0, 0,
-        _fmt_amount(total),
+        _fmt_amount(total, currency),
         ha='center', va='center',
         fontsize=16, fontweight=600, color='#2A2A2A',
     )
@@ -172,7 +173,7 @@ def _render_pie_chart(raw_names: list, amounts: list, total: float,
 
     max_len = max(len(labels[i]) for i in sorted_idxs)
     legend_texts = [
-        f"{labels[i].ljust(max_len)}  {_fmt_amount(amounts[i]).rjust(3)}"
+        f"{labels[i].ljust(max_len)}  {_fmt_amount(amounts[i], currency).rjust(3)}"
         for i in sorted_idxs
     ]
     ax.legend(
@@ -199,7 +200,7 @@ def _render_pie_chart(raw_names: list, amounts: list, total: float,
 
 
 def _render_bar_chart(months_labels: list, amounts: list, year: int,
-                      save_path: str) -> str:
+                      save_path: str, currency=None) -> str:
     """Синхронный рендеринг столбчатой диаграммы по месяцам."""
     max_val = max(amounts) if max(amounts) > 0 else 1
     bar_colors = [
@@ -217,7 +218,7 @@ def _render_bar_chart(months_labels: list, amounts: list, year: int,
             ax.text(
                 bar.get_x() + bar.get_width() / 2,
                 bar.get_height() + max_val * 0.012,
-                _fmt_amount(amount),
+                _fmt_amount(amount, currency),
                 ha='center', va='bottom', fontsize=7.5, fontweight='bold', color='#444444',
             )
 
@@ -227,7 +228,7 @@ def _render_bar_chart(months_labels: list, amounts: list, year: int,
         fontsize=12, fontweight='bold', color='#333333', pad=12,
     )
     ax.set_xlabel("Месяц", fontsize=10, color='#555555')
-    ax.set_ylabel("Сумма, руб.", fontsize=10, color='#555555')
+    ax.set_ylabel(f"Сумма, {currency or 'без валюты'}", fontsize=10, color='#555555')
     ax.yaxis.set_major_formatter(
         mticker.FuncFormatter(lambda x, _: f"{int(x):,}".replace(",", "\u202f"))
     )
@@ -241,7 +242,7 @@ def _render_bar_chart(months_labels: list, amounts: list, year: int,
 
 
 def _render_trend_chart(months_labels: list, amounts: list, category: str,
-                        line_color: str, year: int, save_path: str) -> str:
+                        line_color: str, year: int, save_path: str, currency=None) -> str:
     """Синхронный рендеринг линейного графика тренда по категории."""
     fig, ax = plt.subplots(figsize=(12, 6))
     fig.patch.set_facecolor('white')
@@ -254,7 +255,7 @@ def _render_trend_chart(months_labels: list, amounts: list, category: str,
     max_val = max(amounts) if max(amounts) > 0 else 1
     for i, amount in enumerate(amounts):
         if amount > 0:
-            ax.text(i, amount + max_val * 0.03, _fmt_amount(amount),
+            ax.text(i, amount + max_val * 0.03, _fmt_amount(amount, currency),
                     ha='center', fontsize=8, fontweight='bold', color='#444444')
 
     ax.set_xticks(range(12))
@@ -265,7 +266,7 @@ def _render_trend_chart(months_labels: list, amounts: list, category: str,
         fontsize=12, fontweight='bold', color='#333333', pad=12,
     )
     ax.set_xlabel("Месяц", fontsize=10, color='#555555')
-    ax.set_ylabel("Сумма, руб.", fontsize=10, color='#555555')
+    ax.set_ylabel(f"Сумма, {currency or 'без валюты'}", fontsize=10, color='#555555')
     ax.yaxis.set_major_formatter(
         mticker.FuncFormatter(lambda x, _: f"{int(x):,}".replace(",", "\u202f"))
     )
@@ -279,7 +280,7 @@ def _render_trend_chart(months_labels: list, amounts: list, category: str,
 
 
 def _render_distribution_chart(raw_names: list, amounts_vals: list,
-                                year: int, save_path: str) -> str:
+                                year: int, save_path: str, currency=None) -> str:
     """Синхронный рендеринг горизонтальной столбчатой диаграммы распределения."""
     colors = _get_colors(raw_names)
     labels = [_cap(n) for n in raw_names]
@@ -295,7 +296,7 @@ def _render_distribution_chart(raw_names: list, amounts_vals: list,
         ax.text(
             bar.get_width() + max_val * 0.01,
             bar.get_y() + bar.get_height() / 2,
-            _fmt_amount(amount),
+            _fmt_amount(amount, currency),
             va='center', fontsize=9, fontweight='bold', color='#444444',
         )
 
@@ -304,7 +305,7 @@ def _render_distribution_chart(raw_names: list, amounts_vals: list,
         loc='right',
         fontsize=12, fontweight='bold', color='#333333', pad=12,
     )
-    ax.set_xlabel("Сумма, руб.", fontsize=10, color='#555555')
+    ax.set_xlabel(f"Сумма, {currency or 'без валюты'}", fontsize=10, color='#555555')
     ax.xaxis.set_major_formatter(
         mticker.FuncFormatter(lambda x, _: f"{int(x):,}".replace(",", "\u202f"))
     )
@@ -318,7 +319,7 @@ def _render_distribution_chart(raw_names: list, amounts_vals: list,
 
 
 def _render_named_distribution_chart(raw_names: list, amounts_vals: list,
-                                     title: str, save_path: str) -> str:
+                                     title: str, save_path: str, currency=None) -> str:
     """Синхронный рендер горизонтальной столбчатой диаграммы с кастомным заголовком."""
     colors = _get_colors(raw_names)
     labels = [_cap(n) for n in raw_names]
@@ -334,7 +335,7 @@ def _render_named_distribution_chart(raw_names: list, amounts_vals: list,
         ax.text(
             bar.get_width() + max_val * 0.01,
             bar.get_y() + bar.get_height() / 2,
-            _fmt_amount(amount),
+            _fmt_amount(amount, currency),
             va='center', fontsize=9, fontweight='bold', color='#444444',
         )
 
@@ -343,7 +344,7 @@ def _render_named_distribution_chart(raw_names: list, amounts_vals: list,
         loc='right',
         fontsize=12, fontweight='bold', color='#333333', pad=12,
     )
-    ax.set_xlabel("Сумма, руб.", fontsize=10, color='#555555')
+    ax.set_xlabel(f"Сумма, {currency or 'без валюты'}", fontsize=10, color='#555555')
     ax.xaxis.set_major_formatter(
         mticker.FuncFormatter(lambda x, _: f"{int(x):,}".replace(",", "\u202f"))
     )
@@ -407,11 +408,11 @@ async def create_monthly_pie_chart(user_id, month=None, year=None, save_path=Non
     loop = asyncio.get_event_loop()
     return await loop.run_in_executor(
         None,
-        functools.partial(_render_pie_chart, raw_names, amounts, total, month, year, save_path)
+        functools.partial(_render_pie_chart, raw_names, amounts, total, month, year, save_path, currency=await get_reporting_currency(user_id, project_id))
     )
 
 
-async def create_category_trend_chart(user_id, category, year=None, save_path=None):
+async def create_category_trend_chart(user_id, category, year=None, save_path=None, project_id=None):
     """
     Создаёт линейный график тренда расходов по категории за год.
     Рендеринг matplotlib выполняется в ThreadPoolExecutor, не блокируя event loop.
@@ -419,7 +420,7 @@ async def create_category_trend_chart(user_id, category, year=None, save_path=No
     if year is None:
         year = datetime.datetime.now().year
 
-    category_data = await excel.get_category_expenses(user_id, category, year)
+    category_data = await excel.get_category_expenses(user_id, category, year, project_id)
 
     if not category_data or category_data['total'] == 0:
         return None
@@ -435,12 +436,12 @@ async def create_category_trend_chart(user_id, category, year=None, save_path=No
     loop = asyncio.get_event_loop()
     return await loop.run_in_executor(
         None,
-        functools.partial(_render_trend_chart, months_labels, amounts, category, line_color, year, save_path)
+        functools.partial(_render_trend_chart, months_labels, amounts, category, line_color, year, save_path, currency=await get_reporting_currency(user_id, project_id))
     )
 
 
 def _render_budget_comparison_chart(budget_by_month: dict, spending_by_month: dict,
-                                     year: int, save_path: str) -> str:
+                                     year: int, save_path: str, currency=None) -> str:
     """Синхронный рендеринг диаграммы «Бюджет vs. расходы по месяцам»."""
     from matplotlib.lines import Line2D
     from matplotlib.patches import Patch
@@ -476,7 +477,7 @@ def _render_budget_comparison_chart(budget_by_month: dict, spending_by_month: di
             ax.text(
                 bar.get_x() + bar.get_width() / 2,
                 bar.get_height() + max_val * 0.012,
-                _fmt_amount(amount),
+                _fmt_amount(amount, currency),
                 ha='center', va='bottom', fontsize=7.5, fontweight='bold', color='#444444',
             )
 
@@ -495,7 +496,7 @@ def _render_budget_comparison_chart(budget_by_month: dict, spending_by_month: di
         fontsize=12, fontweight='bold', color='#333333', pad=12,
     )
     ax.set_xlabel("Месяц", fontsize=10, color='#555555')
-    ax.set_ylabel("Сумма, руб.", fontsize=10, color='#555555')
+    ax.set_ylabel(f"Сумма, {currency or 'без валюты'}", fontsize=10, color='#555555')
     ax.yaxis.set_major_formatter(
         mticker.FuncFormatter(lambda x, _: f"{int(x):,}".replace(",", "\u202f"))
     )
@@ -551,7 +552,7 @@ async def create_budget_comparison_chart(user_id, year=None, save_path=None, pro
         functools.partial(
             _render_budget_comparison_chart,
             budget_by_month, spending_by_month, year, save_path,
-        )
+         currency=await get_reporting_currency(user_id, project_id))
     )
 
 
@@ -587,7 +588,7 @@ async def create_category_distribution_chart(user_id, year=None, save_path=None,
     loop = asyncio.get_event_loop()
     return await loop.run_in_executor(
         None,
-        functools.partial(_render_distribution_chart, raw_names, amounts_vals, year, save_path)
+        functools.partial(_render_distribution_chart, raw_names, amounts_vals, year, save_path, currency=await get_reporting_currency(user_id, project_id))
     )
 
 
@@ -615,7 +616,7 @@ async def create_monthly_participant_distribution_chart(user_id, project_id, mon
     loop = asyncio.get_event_loop()
     return await loop.run_in_executor(
         None,
-        functools.partial(_render_named_distribution_chart, raw_names, amounts_vals, title, save_path),
+        functools.partial(_render_named_distribution_chart, raw_names, amounts_vals, title, save_path, currency=await get_reporting_currency(user_id, project_id)),
     )
 
 
@@ -645,11 +646,11 @@ async def create_project_participant_distribution_chart(user_id, project_id, yea
     loop = asyncio.get_event_loop()
     return await loop.run_in_executor(
         None,
-        functools.partial(_render_named_distribution_chart, raw_names, amounts_vals, title, save_path),
+        functools.partial(_render_named_distribution_chart, raw_names, amounts_vals, title, save_path, currency=await get_reporting_currency(user_id, project_id)),
     )
 
 
-def _render_income_vs_expense_chart(months_labels: list, income_amounts: list, expense_amounts: list, year: int, save_path: str) -> str:
+def _render_income_vs_expense_chart(months_labels: list, income_amounts: list, expense_amounts: list, year: int, save_path: str, currency=None) -> str:
     """Синхронный рендер сравнительного графика доходов и расходов по месяцам."""
     fig, ax = plt.subplots(figsize=(12, 6))
     fig.patch.set_facecolor("white")
@@ -682,7 +683,7 @@ def _render_income_vs_expense_chart(months_labels: list, income_amounts: list, e
             ax.text(
                 bar.get_x() + bar.get_width() / 2,
                 bar.get_height() + max_val * 0.01,
-                _fmt_amount(bar.get_height()),
+                _fmt_amount(bar.get_height(), currency),
                 ha="center",
                 va="bottom",
                 fontsize=7,
@@ -693,7 +694,7 @@ def _render_income_vs_expense_chart(months_labels: list, income_amounts: list, e
             ax.text(
                 bar.get_x() + bar.get_width() / 2,
                 bar.get_height() + max_val * 0.01,
-                _fmt_amount(bar.get_height()),
+                _fmt_amount(bar.get_height(), currency),
                 ha="center",
                 va="bottom",
                 fontsize=7,
@@ -710,7 +711,7 @@ def _render_income_vs_expense_chart(months_labels: list, income_amounts: list, e
         color="#333333",
     )
     ax.set_xlabel("Месяц", fontsize=10, color="#555555")
-    ax.set_ylabel("Сумма, руб.", fontsize=10, color="#555555")
+    ax.set_ylabel(f"Сумма, {currency or 'без валюты'}", fontsize=10, color="#555555")
     ax.yaxis.set_major_formatter(mticker.FuncFormatter(lambda val, _: f"{int(val):,}".replace(",", "\u202f")))
     ax.set_ylim(0, max_val * 1.2)
     ax.legend(frameon=False)
@@ -750,7 +751,7 @@ async def create_income_distribution_chart(user_id, year=None, save_path=None, p
     loop = asyncio.get_event_loop()
     return await loop.run_in_executor(
         None,
-        functools.partial(_render_distribution_chart, raw_names, amounts_vals, year, save_path),
+        functools.partial(_render_distribution_chart, raw_names, amounts_vals, year, save_path, currency=await get_reporting_currency(user_id, project_id)),
     )
 
 
@@ -776,5 +777,5 @@ async def create_income_vs_expense_chart(user_id, year=None, save_path=None, pro
     loop = asyncio.get_event_loop()
     return await loop.run_in_executor(
         None,
-        functools.partial(_render_income_vs_expense_chart, months_labels, income_amounts, expense_amounts, year, save_path),
+        functools.partial(_render_income_vs_expense_chart, months_labels, income_amounts, expense_amounts, year, save_path, currency=await get_reporting_currency(user_id, project_id)),
     )

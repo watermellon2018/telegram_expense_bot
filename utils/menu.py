@@ -56,6 +56,7 @@ def get_settings_menu_keyboard():
     btn = config.SETTINGS_MENU_BUTTONS
     keyboard = [
         [btn["categories"], btn["recurring"]],
+        [btn["currency"]],
         [btn["back"]],
     ]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
