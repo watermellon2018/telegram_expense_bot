@@ -1,0 +1,26 @@
+name: Probe bot now
+
+on:
+  push:
+    branches:
+      - probe-bot-20261003
+
+jobs:
+  probe:
+    runs-on: self-hosted
+    steps:
+      - name: Probe current runtime
+        shell: bash
+        run: |
+          set +e
+          echo "=== bot ==="
+          docker inspect money_bot --format='status={{.State.Status}} running={{.State.Running}} exit={{.State.ExitCode}} restart_count={{.RestartCount}} image={{.Config.Image}} health={{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' || true
+
+          echo "=== db ==="
+          timeout 10s docker exec money_bot python -c 'import os,psycopg; c=psycopg.connect(host=os.environ["DB_HOST"],port=os.environ.get("DB_PORT","5432"),dbname=os.environ["DB_NAME"],user=os.environ["DB_USER"],password=os.environ["DB_PASSWORD"],connect_timeout=5); cur=c.cursor(); cur.execute("select 1"); print("DB_OK",cur.fetchone()[0]); c.close()' || echo DB_FAILED
+
+          echo "=== telegram ==="
+          timeout 25s docker exec money_bot python -c 'import os,httpx; t=os.environ["TELEGRAM_BOT_TOKEN"]; r=httpx.get("https://api.telegram.org/bot"+t+"/getMe",timeout=12,trust_env=True); print("TELEGRAM_OK",r.status_code,r.json().get("ok"))' || echo TELEGRAM_FAILED
+
+          echo "=== recent logs ==="
+          docker logs money_bot --since 5m --tail 120 2>&1 || true
