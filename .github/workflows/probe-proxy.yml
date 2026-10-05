@@ -1,0 +1,38 @@
+name: Probe Telegram proxy
+
+on:
+  push:
+    branches:
+      - probe-proxy-20261005
+
+jobs:
+  probe:
+    runs-on: self-hosted
+    steps:
+      - name: Probe proxy endpoint
+        shell: bash
+        env:
+          PROXY_URL: ${{ secrets.HTTPS_PROXY }}
+        run: |
+          set +e
+          python3 - <<'PY'
+          import os, socket
+          from urllib.parse import urlsplit
+          p=os.environ.get("PROXY_URL","")
+          u=urlsplit(p)
+          print("scheme=", u.scheme or "none")
+          print("host_present=", bool(u.hostname))
+          print("port=", u.port or "none")
+          print("auth=", "yes" if u.username else "no")
+          if not u.hostname or not u.port:
+              raise SystemExit(0)
+          try:
+              s=socket.create_connection((u.hostname,u.port),8)
+              print("proxy_tcp=OK")
+              s.close()
+          except Exception as e:
+              print("proxy_tcp=FAILED", type(e).__name__, repr(e))
+          PY
+
+          echo "=== container proxy request ==="
+          timeout 25s docker exec money_bot python -c 'import os,httpx; t=os.environ["TELEGRAM_BOT_TOKEN"]; r=httpx.get("https://api.telegram.org/bot"+t+"/getMe",timeout=12,trust_env=True); print("proxy_getMe",r.status_code,r.json().get("ok"))' || echo proxy_getMe=FAILED
