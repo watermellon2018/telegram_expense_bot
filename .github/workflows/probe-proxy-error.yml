@@ -1,0 +1,30 @@
+name: Diagnose proxy failure
+
+on:
+  push:
+    branches:
+      - probe-proxy-error-20261005
+
+jobs:
+  probe:
+    runs-on: self-hosted
+    steps:
+      - name: Diagnose SOCKS failure
+        shell: bash
+        run: |
+          set +e
+          docker exec money_bot python - <<'PY'
+          import os, httpx, time
+          token=os.environ["TELEGRAM_BOT_TOKEN"]
+          proxy=os.environ.get("HTTPS_PROXY")
+          t=time.time()
+          try:
+              timeout=httpx.Timeout(connect=6, read=8, write=8, pool=6)
+              with httpx.Client(proxy=proxy, timeout=timeout, trust_env=False) as c:
+                  r=c.get("https://api.telegram.org/bot"+token+"/getMe")
+              print("RESULT",r.status_code,r.json().get("ok"),"sec",round(time.time()-t,2))
+          except Exception as e:
+              print("ERROR_CLASS",type(e).__name__)
+              print("ERROR_REPR",repr(e))
+              print("sec",round(time.time()-t,2))
+          PY
