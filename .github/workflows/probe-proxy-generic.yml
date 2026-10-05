@@ -1,4 +1,4 @@
-name: Probe Telegram through proxy
+name: Restart money bot
 
 on:
   push:
@@ -6,24 +6,49 @@ on:
       - probe-proxy-generic-20261005
 
 jobs:
-  probe:
+  restart:
     runs-on: self-hosted
     steps:
-      - name: Probe Telegram API through configured proxy
+      - name: Restart money_bot and verify
         shell: bash
         run: |
-          timeout 20s docker exec money_bot python -c 'import os,httpx,time,sys
+          set -e
+          echo "Before restart:"
+          docker inspect money_bot --format='status={{.State.Status}} running={{.State.Running}} restart_count={{.RestartCount}}' || true
+
+          docker restart money_bot
+
+          echo "Waiting for container..."
+          for i in $(seq 1 24); do
+            STATUS=$(docker inspect money_bot --format='{{.State.Status}}' 2>/dev/null || true)
+            HEALTH=$(docker inspect money_bot --format='{{if .State.Health}}{{.State.Health.Status}}{{else}}no-healthcheck{{end}}' 2>/dev/null || true)
+            echo "status=$STATUS health=$HEALTH"
+            if [ "$STATUS" = "running" ] && { [ "$HEALTH" = "healthy" ] || [ "$HEALTH" = "no-healthcheck" ]; }; then
+              break
+            fi
+            sleep 5
+          done
+
+          STATUS=$(docker inspect money_bot --format='{{.State.Status}}')
+          HEALTH=$(docker inspect money_bot --format='{{if .State.Health}}{{.State.Health.Status}}{{else}}no-healthcheck{{end}}')
+          [ "$STATUS" = "running" ]
+          if [ "$HEALTH" != "healthy" ] && [ "$HEALTH" != "no-healthcheck" ]; then
+            echo "Container did not become healthy"
+            docker logs money_bot --tail 100 || true
+            exit 1
+          fi
+
+          echo "Checking Telegram API through container proxy..."
+          timeout 20s docker exec money_bot python -c 'import os,httpx,sys
           token=os.environ["TELEGRAM_BOT_TOKEN"]
-          t=time.time()
+          r=httpx.get("https://api.telegram.org/bot"+token+"/getMe",timeout=12,trust_env=True)
+          ok=False
           try:
-              r=httpx.get("https://api.telegram.org/bot"+token+"/getMe",timeout=12,trust_env=True)
-              ok=False
-              try:
-                  ok=(r.json().get("ok") is True)
-              except Exception:
-                  pass
-              print("TELEGRAM_HTTP",r.status_code,"ok=",ok,"sec",round(time.time()-t,2))
-              sys.exit(0 if r.status_code==200 and ok else 2)
-          except Exception as e:
-              print("TELEGRAM_FAIL",type(e).__name__,repr(e),"sec",round(time.time()-t,2))
-              sys.exit(3)'
+              ok=(r.json().get("ok") is True)
+          except Exception:
+              pass
+          print("TELEGRAM_HTTP",r.status_code,"ok=",ok)
+          sys.exit(0 if r.status_code==200 and ok else 2)'
+
+          echo "Recent logs:"
+          docker logs money_bot --tail 50 || true
