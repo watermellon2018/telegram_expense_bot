@@ -1,0 +1,27 @@
+name: Probe Telegram IP
+
+on:
+  push:
+    branches:
+      - probe-telegram-ip-20261005
+
+jobs:
+  probe:
+    runs-on: self-hosted
+    steps:
+      - name: Probe direct Telegram IPs
+        shell: bash
+        run: |
+          set +e
+          docker exec money_bot python -c 'import socket; 
+          infos=socket.getaddrinfo("api.telegram.org",443,type=socket.SOCK_STREAM);
+          print("ADDRS",[(x[0],x[4][0]) for x in infos]);
+          seen=set();
+          for fam,_,_,_,addr in infos:
+              ip=addr[0]
+              if ip in seen: continue
+              seen.add(ip)
+              try:
+                  s=socket.socket(fam,socket.SOCK_STREAM); s.settimeout(5); s.connect((ip,443)); print("TCP_OK",fam,ip); s.close()
+              except Exception as e:
+                  print("TCP_FAIL",fam,ip,type(e).__name__,repr(e))'
