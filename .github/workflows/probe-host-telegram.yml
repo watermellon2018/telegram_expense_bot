@@ -1,0 +1,30 @@
+name: Probe host Telegram
+
+on:
+  push:
+    branches:
+      - probe-host-telegram-20261005
+
+jobs:
+  probe:
+    runs-on: self-hosted
+    steps:
+      - name: Probe host direct Telegram
+        shell: bash
+        run: |
+          set +e
+          python3 - <<'PY'
+          import socket, urllib.request, ssl
+          for host in ["api.telegram.org","149.154.166.110"]:
+              try:
+                  s=socket.create_connection((host,443),6)
+                  print("HOST_TCP_OK",host,s.getpeername()); s.close()
+              except Exception as e:
+                  print("HOST_TCP_FAIL",host,type(e).__name__,repr(e))
+          try:
+              opener=urllib.request.build_opener(urllib.request.ProxyHandler({}))
+              r=opener.open("https://api.telegram.org",timeout=10)
+              print("HOST_HTTPS_OK",r.status)
+          except Exception as e:
+              print("HOST_HTTPS_FAIL",type(e).__name__,repr(e))
+          PY
