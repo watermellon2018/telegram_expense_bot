@@ -1,0 +1,21 @@
+name: Probe proxy generic
+
+on:
+  push:
+    branches:
+      - probe-proxy-generic-20261005
+
+jobs:
+  probe:
+    runs-on: self-hosted
+    steps:
+      - name: Probe generic HTTPS through proxy
+        shell: bash
+        run: |
+          set +e
+          timeout 15s docker exec money_bot python -c 'import httpx,time; 
+          t=time.time();
+          try:
+              r=httpx.get("https://example.com",timeout=10,trust_env=True); print("EXAMPLE_OK",r.status_code,"sec",round(time.time()-t,2))
+          except Exception as e:
+              print("EXAMPLE_FAIL",type(e).__name__,repr(e),"sec",round(time.time()-t,2))' || echo EXAMPLE_TIMEOUT
