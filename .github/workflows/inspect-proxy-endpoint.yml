@@ -1,0 +1,34 @@
+name: Inspect proxy endpoint
+
+on:
+  push:
+    branches:
+      - inspect-proxy-endpoint-20261005
+
+jobs:
+  inspect:
+    runs-on: self-hosted
+    steps:
+      - name: Inspect endpoint
+        shell: bash
+        env:
+          PROXY_URL: ${{ secrets.HTTPS_PROXY }}
+        run: |
+          python3 - <<'PY'
+          import os,socket,ipaddress
+          from urllib.parse import urlsplit
+          u=urlsplit(os.environ["PROXY_URL"])
+          print("HOST",u.hostname)
+          print("PORT",u.port)
+          try:
+              ips=sorted({x[4][0] for x in socket.getaddrinfo(u.hostname,u.port,type=socket.SOCK_STREAM)})
+              print("IPS",ips)
+              for x in ips:
+                  try:
+                      ip=ipaddress.ip_address(x)
+                      print("IPCLASS",x,"private",ip.is_private,"loopback",ip.is_loopback,"global",ip.is_global)
+                  except Exception:
+                      pass
+          except Exception as e:
+              print("RESOLVE_FAILED",type(e).__name__,repr(e))
+          PY
