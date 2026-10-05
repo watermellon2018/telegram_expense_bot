@@ -1,4 +1,4 @@
-name: Probe proxy generic
+name: Probe Telegram through proxy
 
 on:
   push:
@@ -9,13 +9,21 @@ jobs:
   probe:
     runs-on: self-hosted
     steps:
-      - name: Probe generic HTTPS through proxy
+      - name: Probe Telegram API through configured proxy
         shell: bash
         run: |
-          set +e
-          timeout 15s docker exec money_bot python -c 'import httpx,time; 
-          t=time.time();
+          timeout 20s docker exec money_bot python -c 'import os,httpx,time,sys
+          token=os.environ["TELEGRAM_BOT_TOKEN"]
+          t=time.time()
           try:
-              r=httpx.get("https://example.com",timeout=10,trust_env=True); print("EXAMPLE_OK",r.status_code,"sec",round(time.time()-t,2))
+              r=httpx.get("https://api.telegram.org/bot"+token+"/getMe",timeout=12,trust_env=True)
+              ok=False
+              try:
+                  ok=(r.json().get("ok") is True)
+              except Exception:
+                  pass
+              print("TELEGRAM_HTTP",r.status_code,"ok=",ok,"sec",round(time.time()-t,2))
+              sys.exit(0 if r.status_code==200 and ok else 2)
           except Exception as e:
-              print("EXAMPLE_FAIL",type(e).__name__,repr(e),"sec",round(time.time()-t,2))' || echo EXAMPLE_TIMEOUT
+              print("TELEGRAM_FAIL",type(e).__name__,repr(e),"sec",round(time.time()-t,2))
+              sys.exit(3)'
