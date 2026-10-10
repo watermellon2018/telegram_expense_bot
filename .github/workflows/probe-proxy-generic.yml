@@ -1,4 +1,4 @@
-name: Diagnose and restart money bot
+name: Recover postgres and money bot
 
 on:
   push:
@@ -6,37 +6,72 @@ on:
       - probe-proxy-generic-20261005
 
 jobs:
-  diagnose_restart:
+  recover:
     runs-on: self-hosted
     steps:
-      - name: Diagnose, restart, and verify money_bot
+      - name: Diagnose and recover postgres_server + money_bot
         shell: bash
         run: |
-          set -e
+          set +e
 
-          echo "=== PRE-RESTART STATE ==="
-          docker inspect money_bot --format='status={{.State.Status}} running={{.State.Running}} exit={{.State.ExitCode}} oom={{.State.OOMKilled}} restart_count={{.RestartCount}} started={{.State.StartedAt}} finished={{.State.FinishedAt}}' || true
-          docker inspect money_bot --format='health={{if .State.Health}}{{.State.Health.Status}}{{else}}no-healthcheck{{end}}' || true
-          echo
-          echo "=== PRE-RESTART HEALTH LOG ==="
-          docker inspect money_bot --format='{{if .State.Health}}{{range .State.Health.Log}}{{println .Start "|" .ExitCode "|" .Output}}{{end}}{{end}}' 2>/dev/null | tail -20 || true
-          echo
-          echo "=== PRE-RESTART RESOURCE SNAPSHOT ==="
-          docker stats money_bot --no-stream --format='cpu={{.CPUPerc}} mem={{.MemUsage}} mem_pct={{.MemPerc}} pids={{.PIDs}}' || true
-          echo
-          echo "=== PRE-RESTART BOT LOGS (last 500) ==="
-          docker logs money_bot --tail 500 2>&1 || true
-          echo
-          echo "=== ERROR SUMMARY ==="
-          docker logs money_bot --tail 2000 2>&1 | grep -E 'TimedOut|Pool timeout|NetworkError|ConnectError|ReadTimeout|Conflict|ERROR|CRITICAL|Traceback|Exception' | tail -120 || true
+          echo "=== ALL RELEVANT CONTAINERS BEFORE ==="
+          docker ps -a --format 'table {{.Names}}\t{{.Status}}\t{{.Image}}' | grep -E 'NAMES|postgres|money_bot' || true
 
           echo
-          echo "=== RESTART ==="
-          docker restart money_bot
+          echo "=== postgres_server inspect ==="
+          docker inspect postgres_server --format='status={{.State.Status}} running={{.State.Running}} exit={{.State.ExitCode}} oom={{.State.OOMKilled}} restart_count={{.RestartCount}} started={{.State.StartedAt}} finished={{.State.FinishedAt}}' 2>&1 || true
 
+          echo
+          echo "=== postgres_server recent logs ==="
+          docker logs postgres_server --tail 150 2>&1 || true
+
+          if docker inspect postgres_server >/dev/null 2>&1; then
+            PG_RUNNING=$(docker inspect postgres_server --format='{{.State.Running}}')
+            if [ "$PG_RUNNING" != "true" ]; then
+              echo
+              echo "=== STARTING postgres_server ==="
+              docker start postgres_server || exit 10
+            fi
+          else
+            echo "postgres_server container not found"
+            echo "Possible postgres containers:"
+            docker ps -a --format '{{.Names}} | {{.Status}} | {{.Image}}' | grep -i postgres || true
+            exit 11
+          fi
+
+          echo
+          echo "=== WAIT FOR POSTGRES ==="
+          PG_READY=0
+          for i in $(seq 1 30); do
+            if docker exec money_bot python -c 'import os,psycopg; c=psycopg.connect(host=os.environ["DB_HOST"],port=os.environ.get("DB_PORT","5432"),dbname=os.environ["DB_NAME"],user=os.environ["DB_USER"],password=os.environ["DB_PASSWORD"],connect_timeout=3); cur=c.cursor(); cur.execute("select 1"); print(cur.fetchone()[0]); c.close()' >/tmp/dbcheck.out 2>/tmp/dbcheck.err; then
+              echo "DB_OK $(cat /tmp/dbcheck.out)"
+              PG_READY=1
+              break
+            fi
+            echo "DB not ready yet: $(tail -1 /tmp/dbcheck.err)"
+            sleep 2
+          done
+          if [ "$PG_READY" != "1" ]; then
+            echo "Postgres did not become reachable"
+            docker logs postgres_server --tail 200 2>&1 || true
+            exit 12
+          fi
+
+          echo
+          echo "=== money_bot BEFORE RESTART ==="
+          docker inspect money_bot --format='status={{.State.Status}} running={{.State.Running}} exit={{.State.ExitCode}} oom={{.State.OOMKilled}} restart_count={{.RestartCount}}' 2>&1 || true
+          echo "--- recent errors ---"
+          docker logs money_bot --tail 500 2>&1 | grep -E 'ERROR|CRITICAL|Traceback|Exception|TimedOut|Pool timeout|psycopg|OperationalError|Connection|database|postgres' | tail -120 || true
+
+          echo
+          echo "=== RESTART money_bot ==="
+          docker restart money_bot || exit 20
+
+          echo
+          echo "=== WAIT money_bot ==="
           for i in $(seq 1 24); do
-            STATUS=$(docker inspect money_bot --format='{{.State.Status}}' 2>/dev/null || true)
-            HEALTH=$(docker inspect money_bot --format='{{if .State.Health}}{{.State.Health.Status}}{{else}}no-healthcheck{{end}}' 2>/dev/null || true)
+            STATUS=$(docker inspect money_bot --format='{{.State.Status}}' 2>/dev/null)
+            HEALTH=$(docker inspect money_bot --format='{{if .State.Health}}{{.State.Health.Status}}{{else}}no-healthcheck{{end}}' 2>/dev/null)
             echo "status=$STATUS health=$HEALTH"
             if [ "$STATUS" = "running" ] && { [ "$HEALTH" = "healthy" ] || [ "$HEALTH" = "no-healthcheck" ]; }; then
               break
@@ -44,43 +79,15 @@ jobs:
             sleep 5
           done
 
-          STATUS=$(docker inspect money_bot --format='{{.State.Status}}')
-          HEALTH=$(docker inspect money_bot --format='{{if .State.Health}}{{.State.Health.Status}}{{else}}no-healthcheck{{end}}')
-          [ "$STATUS" = "running" ]
-          if [ "$HEALTH" != "healthy" ] && [ "$HEALTH" != "no-healthcheck" ]; then
-            echo "Container did not become healthy"
-            docker logs money_bot --tail 150 || true
-            exit 1
-          fi
+          echo
+          echo "=== FINAL DB CHECK ==="
+          docker exec money_bot python -c 'import os,psycopg,sys; c=psycopg.connect(host=os.environ["DB_HOST"],port=os.environ.get("DB_PORT","5432"),dbname=os.environ["DB_NAME"],user=os.environ["DB_USER"],password=os.environ["DB_PASSWORD"],connect_timeout=5); cur=c.cursor(); cur.execute("select 1"); print("DB_OK",cur.fetchone()[0]); c.close()' || exit 21
 
           echo
-          echo "=== TELEGRAM API THROUGH CURRENT PROXY ==="
-          timeout 20s docker exec money_bot python -c 'import os,httpx,sys,time
-          token=os.environ["TELEGRAM_BOT_TOKEN"]
-          t=time.time()
-          try:
-              r=httpx.get("https://api.telegram.org/bot"+token+"/getMe",timeout=12,trust_env=True)
-              ok=False
-              try:
-                  ok=(r.json().get("ok") is True)
-              except Exception:
-                  pass
-              print("TELEGRAM_HTTP",r.status_code,"ok=",ok,"sec=",round(time.time()-t,2))
-              sys.exit(0 if r.status_code==200 and ok else 2)
-          except Exception as e:
-              print("TELEGRAM_FAIL",type(e).__name__,repr(e),"sec=",round(time.time()-t,2))
-              sys.exit(3)'
+          echo "=== FINAL TELEGRAM CHECK ==="
+          timeout 20s docker exec money_bot python -c 'import os,httpx,sys,time; token=os.environ["TELEGRAM_BOT_TOKEN"]; t=time.time(); r=httpx.get("https://api.telegram.org/bot"+token+"/getMe",timeout=12,trust_env=True); ok=(r.json().get("ok") is True); print("TELEGRAM_HTTP",r.status_code,"ok=",ok,"sec=",round(time.time()-t,2)); sys.exit(0 if r.status_code==200 and ok else 2)' || exit 22
 
           echo
-          echo "=== DB CHECK ==="
-          timeout 10s docker exec money_bot python -c 'import os,psycopg,sys
-          try:
-              c=psycopg.connect(host=os.environ["DB_HOST"],port=os.environ.get("DB_PORT","5432"),dbname=os.environ["DB_NAME"],user=os.environ["DB_USER"],password=os.environ["DB_PASSWORD"],connect_timeout=5)
-              cur=c.cursor(); cur.execute("select 1"); print("DB",cur.fetchone()[0]); c.close()
-          except Exception as e:
-              print("DB_FAIL",type(e).__name__,repr(e)); sys.exit(4)'
-
-          echo
-          echo "=== POST-RESTART LOGS ==="
+          echo "=== money_bot logs after restart ==="
           sleep 3
           docker logs money_bot --since 2m --tail 150 2>&1 || true
