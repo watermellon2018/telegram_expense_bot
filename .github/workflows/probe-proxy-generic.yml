@@ -1,4 +1,4 @@
-name: Inspect previous host boot
+name: Inspect kernel update reboot
 
 on:
   push:
@@ -9,15 +9,23 @@ jobs:
   inspect:
     runs-on: self-hosted
     steps:
-      - name: Inspect previous boot ending
+      - name: Inspect apt and unattended-upgrades
         shell: bash
         run: |
           set +e
-          echo "=== LAST REBOOTS ==="
-          last -x | head -20 || true
+          echo "=== CURRENT/PREV KERNEL ==="
+          uname -a || true
+          last -x | head -8 || true
           echo
-          echo "=== PREVIOUS BOOT TAIL ==="
-          journalctl -b -1 -n 180 --no-pager 2>&1 || true
+          echo "=== UNATTENDED UPGRADES ==="
+          grep -Ei 'linux-image|linux-headers|reboot|restart|required' /var/log/unattended-upgrades/unattended-upgrades.log 2>/dev/null | tail -160 || true
           echo
-          echo "=== PREVIOUS BOOT POWER/REBOOT SIGNALS ==="
-          journalctl -b -1 --no-pager 2>&1 | grep -Ei 'reboot|shutdown|power|watchdog|panic|oom|out of memory|thermal|segfault|systemd-shutdown|Reached target.*Shutdown|Stopping Docker|Stopped Docker' | tail -120 || true
+          echo "=== APT HISTORY ==="
+          grep -Ei -A4 -B4 'linux-image|linux-headers|linux-generic|upgrade' /var/log/apt/history.log 2>/dev/null | tail -220 || true
+          echo
+          echo "=== REBOOT REQUIRED ==="
+          cat /var/run/reboot-required 2>/dev/null || true
+          cat /var/run/reboot-required.pkgs 2>/dev/null || true
+          echo
+          echo "=== UNATTENDED REBOOT CONFIG ==="
+          grep -RHiE 'Automatic-Reboot|Automatic-Reboot-Time' /etc/apt/apt.conf.d 2>/dev/null || true
