@@ -1,4 +1,4 @@
-name: Diagnose postgres exit cause
+name: Inspect previous host boot
 
 on:
   push:
@@ -6,28 +6,18 @@ on:
       - probe-proxy-generic-20261005
 
 jobs:
-  diagnose:
+  inspect:
     runs-on: self-hosted
     steps:
-      - name: Inspect postgres restart policy and host events
+      - name: Inspect previous boot ending
         shell: bash
         run: |
           set +e
-          echo "=== POSTGRES INSPECT ==="
-          docker inspect postgres_server --format='status={{.State.Status}} running={{.State.Running}} exit={{.State.ExitCode}} oom={{.State.OOMKilled}} error={{.State.Error}} started={{.State.StartedAt}} finished={{.State.FinishedAt}} restart_count={{.RestartCount}} restart_policy={{.HostConfig.RestartPolicy.Name}} max_retry={{.HostConfig.RestartPolicy.MaximumRetryCount}}'
+          echo "=== LAST REBOOTS ==="
+          last -x | head -20 || true
           echo
-          echo "=== MONEY BOT RESTART POLICY ==="
-          docker inspect money_bot --format='restart_policy={{.HostConfig.RestartPolicy.Name}} restart_count={{.RestartCount}}'
+          echo "=== PREVIOUS BOOT TAIL ==="
+          journalctl -b -1 -n 180 --no-pager 2>&1 || true
           echo
-          echo "=== HOST UPTIME ==="
-          uptime -s || true
-          who -b || true
-          echo
-          echo "=== DOCKER EVENTS AROUND FAILURE ==="
-          docker events --since '2026-10-10T07:50:00Z' --until '2026-10-10T08:10:00Z' --filter container=postgres_server 2>&1 | tail -100 || true
-          echo
-          echo "=== JOURNAL DOCKER AROUND FAILURE ==="
-          journalctl --since '2026-10-10 07:50:00 UTC' --until '2026-10-10 08:10:00 UTC' -u snap.docker.dockerd -u docker --no-pager 2>&1 | tail -160 || true
-          echo
-          echo "=== OOM/KERNEL AROUND FAILURE ==="
-          journalctl -k --since '2026-10-10 07:50:00 UTC' --until '2026-10-10 08:10:00 UTC' --no-pager 2>&1 | grep -Ei 'oom|killed process|docker|I/O error|ext4|nvme|segfault' | tail -100 || true
+          echo "=== PREVIOUS BOOT POWER/REBOOT SIGNALS ==="
+          journalctl -b -1 --no-pager 2>&1 | grep -Ei 'reboot|shutdown|power|watchdog|panic|oom|out of memory|thermal|segfault|systemd-shutdown|Reached target.*Shutdown|Stopping Docker|Stopped Docker' | tail -120 || true
