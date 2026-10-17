@@ -1,4 +1,4 @@
-name: Inspect current host reboot
+name: Inspect postgres stop event
 
 on:
   push:
@@ -9,17 +9,18 @@ jobs:
   inspect:
     runs-on: self-hosted
     steps:
-      - name: Inspect host and postgres timing
+      - name: Inspect docker and postgres around stop time
         shell: bash
         run: |
           set +e
-          echo "=== HOST ==="
-          uptime -s || true
-          who -b || true
-          last -x | head -8 || true
+          echo "=== DOCKER EVENTS ==="
+          docker events --since '2026-10-16T19:45:00Z' --until '2026-10-16T20:05:00Z' --filter container=postgres_server 2>&1 || true
           echo
-          echo "=== POSTGRES ==="
-          docker inspect postgres_server --format='status={{.State.Status}} running={{.State.Running}} started={{.State.StartedAt}} finished={{.State.FinishedAt}} exit={{.State.ExitCode}} oom={{.State.OOMKilled}} restart_policy={{.HostConfig.RestartPolicy.Name}}'
+          echo "=== DOCKER JOURNAL ==="
+          journalctl --since '2026-10-16 19:45:00 UTC' --until '2026-10-16 20:05:00 UTC' -u snap.docker.dockerd -u docker --no-pager 2>&1 | tail -220 || true
           echo
-          echo "=== CURRENT BOOT KERNEL ==="
-          uname -a || true
+          echo "=== POSTGRES LOG TAIL ==="
+          docker logs postgres_server --since '2026-10-16T19:40:00Z' --until '2026-10-16T20:00:00Z' 2>&1 | tail -180 || true
+          echo
+          echo "=== SYSTEM JOURNAL RELEVANT ==="
+          journalctl --since '2026-10-16 19:45:00 UTC' --until '2026-10-16 20:05:00 UTC' --no-pager 2>&1 | grep -Ei 'postgres_server|docker|shutdown|reboot|stop|kill|compose|systemctl' | tail -220 || true
