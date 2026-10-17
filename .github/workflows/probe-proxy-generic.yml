@@ -1,4 +1,4 @@
-name: Inspect kernel update reboot
+name: Inspect current host reboot
 
 on:
   push:
@@ -9,23 +9,17 @@ jobs:
   inspect:
     runs-on: self-hosted
     steps:
-      - name: Inspect apt and unattended-upgrades
+      - name: Inspect host and postgres timing
         shell: bash
         run: |
           set +e
-          echo "=== CURRENT/PREV KERNEL ==="
-          uname -a || true
+          echo "=== HOST ==="
+          uptime -s || true
+          who -b || true
           last -x | head -8 || true
           echo
-          echo "=== UNATTENDED UPGRADES ==="
-          grep -Ei 'linux-image|linux-headers|reboot|restart|required' /var/log/unattended-upgrades/unattended-upgrades.log 2>/dev/null | tail -160 || true
+          echo "=== POSTGRES ==="
+          docker inspect postgres_server --format='status={{.State.Status}} running={{.State.Running}} started={{.State.StartedAt}} finished={{.State.FinishedAt}} exit={{.State.ExitCode}} oom={{.State.OOMKilled}} restart_policy={{.HostConfig.RestartPolicy.Name}}'
           echo
-          echo "=== APT HISTORY ==="
-          grep -Ei -A4 -B4 'linux-image|linux-headers|linux-generic|upgrade' /var/log/apt/history.log 2>/dev/null | tail -220 || true
-          echo
-          echo "=== REBOOT REQUIRED ==="
-          cat /var/run/reboot-required 2>/dev/null || true
-          cat /var/run/reboot-required.pkgs 2>/dev/null || true
-          echo
-          echo "=== UNATTENDED REBOOT CONFIG ==="
-          grep -RHiE 'Automatic-Reboot|Automatic-Reboot-Time' /etc/apt/apt.conf.d 2>/dev/null || true
+          echo "=== CURRENT BOOT KERNEL ==="
+          uname -a || true
