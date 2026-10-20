@@ -13,7 +13,7 @@ jobs:
     runs-on: self-hosted
     timeout-minutes: 5
     env:
-      EXPECTED_COMMIT: 9721c132ce278fa5f58bcc9960c3ff732c6b3e8f
+      EXPECTED_COMMIT: 1cc736b7d5869a9674251bc3c1047cf05938443b
     steps:
       - name: Verify exact deployed version and preserved data
         shell: bash
@@ -50,6 +50,9 @@ jobs:
           for key in ("TELEGRAM_BOT_TOKEN", "DB_HOST", "DB_PORT", "DB_NAME", "DB_USER", "DB_PASSWORD", "HTTPS_PROXY"):
               if old_env.get(key) != new_env.get(key):
                   raise SystemExit("Working configuration changed: " + key)
+          exclusions = {item.strip() for item in new_env.get("NO_PROXY", "").split(",")}
+          if not {"cbr.ru", "www.cbr.ru"}.issubset(exclusions):
+              raise SystemExit("Production container does not bypass CBR")
           old_mounts = {(item["Source"], item["Destination"]) for item in original["Mounts"]}
           new_mounts = {(item["Source"], item["Destination"]) for item in current["Mounts"]}
           if not old_mounts.issubset(new_mounts):
@@ -125,32 +128,12 @@ jobs:
                   if sequence and not connection.execute("SELECT has_sequence_privilege(current_user,%s,'USAGE')", (sequence,)).fetchone()[0]:
                       raise SystemExit("Sequence access is missing: " + table)
           print("CURRENCY_SCHEMA_OK revision=0003_currencies supported=12 constraints=16 legacy_data_preserved=true")
-          try:
-              response = httpx.get("https://www.cbr.ru/scripts/XML_daily.asp", params={"date_req": date.today().strftime("%d/%m/%Y")}, timeout=8)
-              response.raise_for_status()
-              effective_date, rates = parse_cbr_xml(response.content, date.today())
-              if not {"USD", "JPY", "KRW"}.issubset(rates):
-                  raise ValueError("Required currency quotes are missing")
-              print("CBR_RATE_SOURCE_OK", effective_date.isoformat(), "USD/JPY/KRW=true")
-          except Exception as error:
-              print("CBR_RATE_SOURCE_UNAVAILABLE", type(error).__name__, "manual_rates_supported=true")
-              try:
-                  direct = httpx.get("https://www.cbr.ru/scripts/XML_daily.asp", params={"date_req": date.today().strftime("%d/%m/%Y")}, timeout=8, trust_env=False)
-                  direct.raise_for_status()
-                  direct_date, direct_rates = parse_cbr_xml(direct.content, date.today())
-                  if not {"USD", "JPY", "KRW"}.issubset(direct_rates):
-                      raise ValueError("Required direct quotes are missing")
-                  print("CBR_DIRECT_RATE_SOURCE_OK", direct_date.isoformat(), "USD/JPY/KRW=true")
-                  print("CURRENT_NO_PROXY_EMPTY", not bool(os.environ.get("NO_PROXY") or os.environ.get("no_proxy")))
-                  os.environ["NO_PROXY"] = os.environ.get("NO_PROXY") or "cbr.ru,www.cbr.ru"
-                  bypass = httpx.get("https://www.cbr.ru/scripts/XML_daily.asp", params={"date_req": date.today().strftime("%d/%m/%Y")}, timeout=8)
-                  bypass.raise_for_status()
-                  bypass_date, bypass_rates = parse_cbr_xml(bypass.content, date.today())
-                  if not {"USD", "JPY", "KRW"}.issubset(bypass_rates):
-                      raise ValueError("Required bypass quotes are missing")
-                  print("CBR_NO_PROXY_DEFAULT_OK", bypass_date.isoformat(), "USD/JPY/KRW=true")
-              except Exception as direct_error:
-                  print("CBR_DIRECT_RATE_SOURCE_UNAVAILABLE", type(direct_error).__name__)
+          response = httpx.get("https://www.cbr.ru/scripts/XML_daily.asp", params={"date_req": date.today().strftime("%d/%m/%Y")}, timeout=8)
+          response.raise_for_status()
+          effective_date, rates = parse_cbr_xml(response.content, date.today())
+          if not {"USD", "JPY", "KRW"}.issubset(rates):
+              raise ValueError("Required currency quotes are missing")
+          print("CBR_RATE_SOURCE_OK", effective_date.isoformat(), "USD/JPY/KRW=true")
           PY
           )
           docker exec -i money_bot python -c "$VERIFY_CODE" < "$BACKUP_DIR/database-preflight.json"
@@ -192,4 +175,3 @@ jobs:
           PY
           rm -f -- "$ROUTING_DIR/.env" "$ROUTING_DIR/container.json" "$ROUTING_DIR/rendered.json" "$ROUTING_DIR/compose.yml"
           rmdir "$ROUTING_DIR"
-
