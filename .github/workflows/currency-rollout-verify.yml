@@ -160,7 +160,7 @@ jobs:
         run: |
           set -euo pipefail
           umask 077
-          ROUTING_DIR="/opt/money_bot/cbr-config-check-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          ROUTING_DIR="${RUNNER_TEMP}/cbr-config-check-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           install -d -m 700 "$ROUTING_DIR"
           export ROUTING_DIR
           docker inspect money_bot > "$ROUTING_DIR/container.json"
