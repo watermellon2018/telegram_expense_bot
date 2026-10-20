@@ -55,7 +55,7 @@ jobs:
           ) as connection:
               connection.execute("SET TRANSACTION READ ONLY")
               connection.execute("SET LOCAL statement_timeout = '60s'")
-              address = connection.execute("SELECT inet_server_addr()::text").fetchone()[0]
+              address = connection.execute("SELECT host(inet_server_addr())").fetchone()[0]
               if address not in sys.argv[1].split():
                   raise SystemExit("Active database is not postgres_server; preparation stopped")
               revision = connection.execute("SELECT version_num FROM alembic_version").fetchall()
