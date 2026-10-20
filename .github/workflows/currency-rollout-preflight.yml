@@ -1,0 +1,67 @@
+name: Currency rollout preflight
+
+on:
+  push:
+    branches: [codex/currency-rollout-20261020]
+    paths: [.github/workflows/currency-rollout-preflight.yml]
+
+permissions:
+  contents: read
+
+jobs:
+  inspect:
+    runs-on: self-hosted
+    timeout-minutes: 5
+    steps:
+      - name: Inspect runtime and migration ownership
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker inspect money_bot --format='image={{.Config.Image}} status={{.State.Status}} health={{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}} restarts={{.RestartCount}} mounts={{json .Mounts}} networks={{json .NetworkSettings.Networks}}'
+          docker diff money_bot | grep -E ' /app/(app/|main.py|requirements.txt)' || true
+          for marker in /opt/money_bot/current_version /opt/money_bot/previous_version; do
+            if [ -f "$marker" ]; then
+              echo "$(basename "$marker")=$(cat "$marker")"
+            fi
+          done
+          df -h /opt/money_bot
+          docker exec -i money_bot python - <<'PY'
+          import json
+          import os
+          from urllib.parse import urlsplit
+
+          import psycopg
+
+          print("ENV_KEYS", json.dumps(sorted(os.environ)))
+          for key in ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy"):
+              if os.environ.get(key):
+                  proxy = urlsplit(os.environ[key])
+                  print("PROXY", key, proxy.scheme, "authenticated=" + str(bool(proxy.username)))
+          with psycopg.connect(
+              host=os.environ["DB_HOST"],
+              port=os.environ.get("DB_PORT", "5432"),
+              dbname=os.environ["DB_NAME"],
+              user=os.environ["DB_USER"],
+              password=os.environ["DB_PASSWORD"],
+              connect_timeout=10,
+          ) as connection:
+              connection.execute("SET TRANSACTION READ ONLY")
+              print("DATABASE", connection.execute("SELECT current_database(), current_user").fetchone())
+              print("ALEMBIC", connection.execute("SELECT version_num FROM alembic_version").fetchall())
+              for row in connection.execute(
+                  "SELECT c.relname, pg_get_userbyid(c.relowner), c.relkind "
+                  "FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace "
+                  "WHERE n.nspname='public' AND c.relkind IN ('r','v','S') ORDER BY c.relname"
+              ):
+                  print("OWNER", *row)
+              for row in connection.execute(
+                  "SELECT table_name,column_name FROM information_schema.columns "
+                  "WHERE table_schema='public' AND (column_name IN "
+                  "('currency','reporting_currency','threshold_currency') "
+                  "OR table_name IN ('currency_preferences','currency_fallback_rates','currency_daily_rates')) "
+                  "ORDER BY table_name,ordinal_position"
+              ):
+                  print("CURRENCY_COLUMN", *row)
+          PY
+          docker exec postgres_server sh -eu -c 'psql -X -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d postgres -Atc "SELECT current_user, rolsuper FROM pg_roles WHERE rolname=current_user"'
+
