@@ -141,6 +141,14 @@ jobs:
                   if not {"USD", "JPY", "KRW"}.issubset(direct_rates):
                       raise ValueError("Required direct quotes are missing")
                   print("CBR_DIRECT_RATE_SOURCE_OK", direct_date.isoformat(), "USD/JPY/KRW=true")
+                  print("CURRENT_NO_PROXY_EMPTY", not bool(os.environ.get("NO_PROXY") or os.environ.get("no_proxy")))
+                  os.environ["NO_PROXY"] = os.environ.get("NO_PROXY") or "cbr.ru,www.cbr.ru"
+                  bypass = httpx.get("https://www.cbr.ru/scripts/XML_daily.asp", params={"date_req": date.today().strftime("%d/%m/%Y")}, timeout=8)
+                  bypass.raise_for_status()
+                  bypass_date, bypass_rates = parse_cbr_xml(bypass.content, date.today())
+                  if not {"USD", "JPY", "KRW"}.issubset(bypass_rates):
+                      raise ValueError("Required bypass quotes are missing")
+                  print("CBR_NO_PROXY_DEFAULT_OK", bypass_date.isoformat(), "USD/JPY/KRW=true")
               except Exception as direct_error:
                   print("CBR_DIRECT_RATE_SOURCE_UNAVAILABLE", type(direct_error).__name__)
           PY
