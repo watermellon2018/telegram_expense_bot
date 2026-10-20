@@ -17,6 +17,18 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          python3 - <<'PY'
+          import datetime
+          import re
+          import sys
+
+          for fraction in ("", ".1", ".123", ".123456", ".1234567", ".93262644", ".930181545"):
+              timestamp = "2026-10-20T14:51:01" + fraction + "Z"
+              normalized = re.sub(r"\.(\d+)", lambda match: "." + (match.group(1) + "000000")[:6], timestamp)
+              parsed = datetime.datetime.fromisoformat(normalized.replace("Z", "+00:00"))
+              assert parsed.tzinfo is not None
+          print("HOST_DATETIME_REGRESSION_OK", sys.version.split()[0], "cases=7")
+          PY
           docker inspect money_bot --format='image={{.Config.Image}} status={{.State.Status}} health={{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}} restarts={{.RestartCount}} mounts={{json .Mounts}} networks={{json .NetworkSettings.Networks}}'
           docker inspect postgres_server --format='postgres_networks={{json .NetworkSettings.Networks}} postgres_ports={{json .NetworkSettings.Ports}}'
           docker diff money_bot | grep -E ' /app/(app/|main.py|requirements.txt)' || true
