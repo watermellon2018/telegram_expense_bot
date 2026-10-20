@@ -1,18 +1,435 @@
 name: Rollback to Previous
-
 on:
-  workflow_dispatch:
-
+  workflow_dispatch: null
+permissions:
+  contents: read
+  packages: read
+concurrency:
+  group: production-money-bot
+  cancel-in-progress: false
 jobs:
   rollback:
+    if: github.ref == 'refs/heads/master'
     runs-on: self-hosted
+    timeout-minutes: 10
     steps:
-      - name: Read previous version
+      - name: Checkout code
+        uses: actions/checkout@v3
+      - name: Preserve running production configuration and recovery image
+        id: runtime
+        shell: bash
         run: |
-          PREV=$(cat /opt/money_bot/previous_version)
-          echo "BOT_TAG=$PREV" >> $GITHUB_ENV
+          set -euo pipefail
+          umask 077
+          command -v python3 >/dev/null
+          BACKUP_DIR="/opt/money_bot/${GITHUB_JOB}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          install -d -m 700 "$BACKUP_DIR"
+          docker inspect money_bot > "$BACKUP_DIR/container.json"
+          CURRENT_IMAGE=$(docker inspect money_bot --format='{{.Config.Image}}')
+          if [[ ! "$CURRENT_IMAGE" =~ ^ghcr\.io/watermellon2018/money_bot:[0-9]{8}-[0-9]{6}-[0-9a-f]{7,40}$ ]]; then
+            echo "Refusing rollout: running container has an unexpected image reference."
+            exit 1
+          fi
+          if [ "$(docker inspect money_bot --format='{{.State.Status}}')" != running ]; then
+            echo "Refusing rollout: a running production container is required to preserve configuration."
+            exit 1
+          fi
+          docker image inspect "$CURRENT_IMAGE" > "$BACKUP_DIR/image.json"
+          export BACKUP_DIR
+          python3 - <<'PY'
+          import json
+          import os
+          import re
+          from pathlib import Path
 
-      - name: Redeploy previous version
+          backup = Path(os.environ["BACKUP_DIR"])
+          container = json.loads((backup / "container.json").read_text())[0]
+          image = json.loads((backup / "image.json").read_text())[0]
+          if container["Image"] != image["Id"]:
+              raise SystemExit("Recovery tag does not resolve to the running image.")
+          base_keys = {item.split("=", 1)[0] for item in image["Config"].get("Env", [])}
+          app_keys = {
+              "TELEGRAM_BOT_TOKEN", "DB_HOST", "DB_PORT", "DB_NAME", "DB_USER", "DB_PASSWORD",
+              "USER_FOLDER_FOR_MIGRATION", "HTTPS_PROXY", "HTTP_PROXY", "ALL_PROXY", "NO_PROXY",
+              "https_proxy", "http_proxy", "all_proxy", "no_proxy", "LOG_LEVEL", "LOG_FILE",
+              "METRICS_PORT", "DUPLICATE_EXPENSE_TIME_WINDOW_MINUTES",
+              "DUPLICATE_EXPENSE_AMOUNT_TOLERANCE_PERCENT",
+          }
+          env = dict(item.split("=", 1) for item in container["Config"]["Env"])
+          app_env = {key: value for key, value in env.items() if key in app_keys or key not in base_keys}
+          for key in ("HOSTNAME", "HOME", "PWD", "PATH", "GPG_KEY", "PYTHON_VERSION", "PYTHON_SHA256"):
+              app_env.pop(key, None)
+          required = {"TELEGRAM_BOT_TOKEN", "DB_HOST", "DB_PORT", "DB_NAME", "DB_USER", "DB_PASSWORD"}
+          if any(not app_env.get(key) for key in required):
+              raise SystemExit("Required application configuration is missing from the current container.")
+          if any(not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", key) for key in app_env):
+              raise SystemExit("Invalid application environment key.")
+          if any("\n" in value or "\r" in value for value in app_env.values()):
+              raise SystemExit("Multiline configuration needs an explicit deployment review.")
+          lines = [key + "='" + value.replace("'", "\\'") + "'\n" for key, value in sorted(app_env.items())]
+          (backup / "runtime.env").write_text("".join(lines))
+          (backup / "application-env.json").write_text(json.dumps(app_env))
+          project = container["Config"].get("Labels", {}).get("com.docker.compose.project", "")
+          if not re.fullmatch(r"[a-z0-9][a-z0-9_-]*", project):
+              raise SystemExit("Current Compose project label is missing or invalid.")
+          with open(os.environ["GITHUB_ENV"], "a") as output:
+              output.write(f"BACKUP_DIR={backup}\nCOMPOSE_PROJECT_NAME={project}\n")
+          with open(os.environ["GITHUB_OUTPUT"], "a") as output:
+              output.write(f"backup_dir={backup}\nrecovery_image={container['Config']['Image']}\n")
+              output.write(f"recovery_tag={container['Config']['Image'].rsplit(':', 1)[1]}\n")
+              output.write(f"recovery_id={container['Id']}\nrecovery_image_id={container['Image']}\n")
+          PY
+          chmod 600 "$BACKUP_DIR"/*
+          install -m 600 "$BACKUP_DIR/runtime.env" .env
+          cat > "$BACKUP_DIR/verify.py" <<'PY'
+          import datetime
+          import json
+          import os
+          import re
+          import subprocess
+          import sys
+          import time
+
+          expected_image, cutover_epoch = sys.argv[1], float(sys.argv[2])
+          expected_id = subprocess.check_output(
+              ["docker", "image", "inspect", expected_image, "--format={{.Id}}"], text=True, timeout=10,
+          ).strip()
+          if len(sys.argv) > 3 and expected_id != sys.argv[3]:
+              raise SystemExit("Recovery image ID changed; refusing to run an unverified image.")
+
+          def inspect():
+              return json.loads(subprocess.check_output(["docker", "inspect", "money_bot"], text=True, timeout=10))[0]
+
+          stable_since = None
+          previous_identity = None
+          deadline = time.monotonic() + 180
+          def fresh_logs(state):
+              logs = subprocess.check_output(
+                  ["docker", "logs", "--since", state["State"]["StartedAt"], "money_bot"],
+                  text=True, stderr=subprocess.STDOUT, timeout=10,
+              )
+              if (re.search(r'"level"\s*:\s*"(?:ERROR|CRITICAL)"', logs)
+                      or re.search(r"(?:^|\s)(?:ERROR|CRITICAL)(?:\s|:)", logs)
+                      or re.search(r"\b(?:Traceback|telegram\.error\.(?:Conflict|TimedOut|NetworkError)|TimedOut|NetworkError)\b", logs)):
+                  raise SystemExit("Fresh startup logs contain an error, traceback or Telegram polling/network failure.")
+              return logs
+
+          while time.monotonic() < deadline:
+              state = inspect()
+              started = datetime.datetime.fromisoformat(state["State"]["StartedAt"].replace("Z", "+00:00"))
+              correct = (
+                  state["Config"]["Image"] == expected_image
+                  and state["Image"] == expected_id
+                  and state["State"]["Status"] == "running"
+                  and state["State"].get("Health", {}).get("Status") == "healthy"
+                  and started.timestamp() >= cutover_epoch
+              )
+              logs = fresh_logs(state)
+              started_event = any(
+                  re.search(r"\bbot_started\b", line)
+                  and ("status=success" in line or re.search(r'"status"\s*:\s*"success"', line))
+                  for line in logs.splitlines()
+              )
+              identity = (state["Id"], state["RestartCount"], state["State"]["StartedAt"])
+              if not correct or not started_event:
+                  stable_since = None
+              elif stable_since is None or identity != previous_identity:
+                  stable_since = time.monotonic()
+              elif time.monotonic() - stable_since >= 40:
+                  break
+              previous_identity = identity
+              time.sleep(5)
+          else:
+              raise SystemExit("Readiness timeout: expected image, fresh startup, healthy state and stable restarts required.")
+
+          probe = r"""
+          import asyncio
+          import os
+          import urllib.request
+          import psycopg
+          from alembic.config import Config
+          from alembic.script import ScriptDirectory
+          from telegram import Bot
+          from telegram.request import HTTPXRequest
+
+          async def telegram_probe():
+              proxy = (os.environ.get("HTTPS_PROXY") or os.environ.get("https_proxy")
+                       or os.environ.get("ALL_PROXY") or os.environ.get("all_proxy"))
+              request = HTTPXRequest(proxy=proxy, connect_timeout=10, read_timeout=10,
+                                     write_timeout=10, pool_timeout=10)
+              async with Bot(os.environ["TELEGRAM_BOT_TOKEN"], request=request) as bot:
+                  if not bot.bot.is_bot:
+                      raise RuntimeError("Telegram getMe did not return a bot")
+
+          try:
+              with psycopg.connect(host=os.environ["DB_HOST"], port=os.environ.get("DB_PORT", "5432"),
+                                  dbname=os.environ["DB_NAME"], user=os.environ["DB_USER"],
+                                  password=os.environ["DB_PASSWORD"], connect_timeout=10) as connection:
+                  connection.execute("SET TRANSACTION READ ONLY")
+                  connection.execute("SET LOCAL statement_timeout = '10s'")
+                  versions = {row[0] for row in connection.execute("SELECT version_num FROM alembic_version")}
+                  heads = set(ScriptDirectory.from_config(Config("alembic.ini")).get_heads())
+                  # An application-only recovery can run against the compatible newer currency schema.
+                  if versions != heads and not (ALLOW_NEWER_CURRENCY_SCHEMA and versions == {"0003_currencies"}):
+                      raise RuntimeError("Database revision is not compatible with the selected application")
+                  for query in (
+                      "SELECT reporting_currency FROM projects LIMIT 0",
+                      "SELECT reporting_currency FROM users LIMIT 0",
+                      "SELECT currency,reporting_amount,reporting_currency,fx_rate,fx_date,fx_source FROM expenses LIMIT 0",
+                      "SELECT currency,reporting_amount,reporting_currency,fx_rate,fx_date,fx_source FROM incomes LIMIT 0",
+                      "SELECT threshold_currency FROM project_member_settings LIMIT 0",
+                      "SELECT currency FROM cashback_monthly_snapshots LIMIT 0",
+                      "SELECT currency FROM recurring_rules LIMIT 0",
+                      "SELECT currency FROM recurring_incomes LIMIT 0",
+                      "SELECT currency FROM budgets LIMIT 0",
+                      "SELECT * FROM currency_preferences LIMIT 0",
+                      "SELECT * FROM currency_fallback_rates LIMIT 0",
+                      "SELECT * FROM currency_daily_rates LIMIT 0",
+                      "SELECT * FROM reporting_expenses LIMIT 0",
+                      "SELECT * FROM reporting_incomes LIMIT 0",
+                  ):
+                      connection.execute(query)
+              opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+              port = int(os.environ.get("METRICS_PORT", "8000"))
+              with opener.open(f"http://127.0.0.1:{port}/metrics", timeout=10) as response:
+                  if response.status != 200 or b"python_info" not in response.read(262144):
+                      raise RuntimeError("Metrics probe failed")
+              asyncio.run(telegram_probe())
+          except Exception as error:
+              print("Runtime verification failed:", type(error).__name__)
+              raise SystemExit(1) from None
+          print("Database/currency schema, metrics and Telegram getMe verified.")
+          """
+          probe = "ALLOW_NEWER_CURRENCY_SCHEMA = " + str(os.environ.get("ALLOW_NEWER_CURRENCY_SCHEMA") == "1") + "\n" + probe
+          result = subprocess.run(["docker", "exec", "-i", "money_bot", "python", "-"],
+                                  input=probe, text=True, capture_output=True, timeout=max(1, min(90, deadline - time.monotonic())))
+          if result.returncode:
+              raise SystemExit("Database/currency schema, metrics or Telegram getMe verification failed.")
+          final = inspect()
+          if (final["Id"] != state["Id"] or final["RestartCount"] != state["RestartCount"]
+                  or final["State"]["Status"] != "running"
+                  or final["State"].get("Health", {}).get("Status") != "healthy"):
+              raise SystemExit("Container changed or restarted during verification.")
+          fresh_logs(final)
+          if time.monotonic() > deadline:
+              raise SystemExit("Runtime verification exceeded its three-minute deadline.")
+          print("Verified expected image, fresh bot_started, healthy state, stable restarts, DB/currencies, metrics and getMe.")
+          PY
+          chmod 600 "$BACKUP_DIR/verify.py"
+          cat > "$BACKUP_DIR/guard.py" <<'PY'
+          import json
+          import os
+          import subprocess
+          import sys
+          from pathlib import Path
+
+          target = sys.argv[1]
+          awareness = subprocess.run(
+              ["docker", "run", "--rm", "--pull=never", "--network", "none", "--entrypoint", "python", target,
+               "-c", "import importlib.util; print(int(importlib.util.find_spec('utils.currencies') is not None))"],
+              capture_output=True, text=True, timeout=30,
+          )
+          if awareness.returncode or awareness.stdout.strip() not in {"0", "1"}:
+              raise SystemExit("Cannot establish target currency support; current container retained.")
+          if awareness.stdout.strip() == "1":
+              print("Recovery target supports currencies.")
+              raise SystemExit(0)
+
+          backup = Path(os.environ["BACKUP_DIR"])
+          settings = json.loads((backup / "application-env.json").read_text())
+          settings = {key: settings[key] for key in ("DB_HOST", "DB_PORT", "DB_NAME", "DB_USER", "DB_PASSWORD")}
+          query_image = json.loads((backup / "container.json").read_text())[0]["Image"]
+          probe = r'''
+          import json
+          import sys
+          import psycopg
+          import time
+
+          try:
+              settings = json.load(sys.stdin)
+              with psycopg.connect(host=settings["DB_HOST"], port=settings["DB_PORT"],
+                                  dbname=settings["DB_NAME"], user=settings["DB_USER"],
+                                  password=settings["DB_PASSWORD"], connect_timeout=10) as connection:
+                  connection.execute("SET TRANSACTION READ ONLY")
+                  connection.execute("SET LOCAL statement_timeout = '10s'")
+                  deadline = time.monotonic() + 10
+                  while connection.execute(
+                      "SELECT EXISTS (SELECT 1 FROM pg_stat_activity WHERE datname=current_database() "
+                      "AND usename=current_user AND pid<>pg_backend_pid() AND backend_type='client backend')"
+                  ).fetchone()[0]:
+                      if time.monotonic() >= deadline:
+                          raise RuntimeError("Other database clients have not quiesced")
+                      time.sleep(0.5)
+                      connection.execute("SELECT pg_stat_clear_snapshot()")
+                  in_use = connection.execute("""
+                      SELECT EXISTS (SELECT 1 FROM expenses WHERE currency IS NOT NULL)
+                          OR EXISTS (SELECT 1 FROM incomes WHERE currency IS NOT NULL)
+                          OR EXISTS (SELECT 1 FROM recurring_rules WHERE currency IS NOT NULL)
+                          OR EXISTS (SELECT 1 FROM recurring_incomes WHERE currency IS NOT NULL)
+                          OR EXISTS (SELECT 1 FROM budgets WHERE currency IS NOT NULL)
+                          OR EXISTS (SELECT 1 FROM cashback_monthly_snapshots WHERE currency IS NOT NULL)
+                          OR EXISTS (SELECT 1 FROM project_member_settings WHERE threshold_currency IS NOT NULL)
+                          OR EXISTS (SELECT 1 FROM users WHERE reporting_currency <> 'RUB')
+                          OR EXISTS (SELECT 1 FROM projects WHERE reporting_currency <> 'RUB')
+                          OR EXISTS (SELECT 1 FROM currency_preferences)
+                          OR EXISTS (SELECT 1 FROM currency_fallback_rates)
+                  """).fetchone()[0]
+              if in_use:
+                  print("currency_in_use")
+                  raise SystemExit(2)
+          except Exception as error:
+              print("Currency safety query failed:", type(error).__name__)
+              raise SystemExit(1) from None
+          print("legacy_safe")
+          '''
+          def current():
+              return json.loads(subprocess.check_output(["docker", "inspect", "money_bot"], text=True, timeout=10))[0]
+
+          original = current()
+          original_id = original["Id"]
+          was_running = original["State"]["Status"] in {"running", "restarting", "paused"}
+
+          def retained():
+              with open(os.environ["GITHUB_OUTPUT"], "a") as output:
+                  output.write("guard_retained_current=true\n")
+
+          def same_container():
+              state = current()
+              if state["Id"] != original_id:
+                  retained()
+                  raise SystemExit("Container identity changed; refusing to stop/start/recreate an unexpected container.")
+              return state
+
+          try:
+              same_container()
+              if was_running:
+                  subprocess.run(["docker", "stop", "--time", "30", original_id], check=True,
+                                 capture_output=True, text=True, timeout=45)
+              if same_container()["State"]["Status"] in {"running", "restarting", "paused"}:
+                  raise SystemExit("Current writer did not stop; refusing legacy rollback.")
+              result = subprocess.run(
+                  ["docker", "run", "--rm", "--pull=never", "-i", "--network", "postgres_net",
+                   "--entrypoint", "python", query_image, "-c", probe],
+                  input=json.dumps(settings), capture_output=True, text=True, timeout=45,
+              )
+              if result.returncode == 2:
+                  raise SystemExit("Unsafe legacy rollback refused: persisted currency data/configuration exists; current container retained.")
+              if result.returncode or result.stdout.strip() != "legacy_safe":
+                  raise SystemExit("Cannot verify legacy rollback safety; current container retained.")
+          except BaseException:
+              state = same_container()
+              if was_running and state["State"]["Status"] not in {"running", "restarting"}:
+                  subprocess.run(["docker", "start", original_id], check=True,
+                                 capture_output=True, text=True, timeout=30)
+                  same_container()
+              retained()
+              raise
+          print("Stopped writer and read-only currency usage guard passed for legacy target.")
+          PY
+          chmod 600 "$BACKUP_DIR/guard.py"
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Read and validate previous version
+        shell: bash
         run: |
+          set -euo pipefail
+          PREVIOUS_TAG=$(cat /opt/money_bot/previous_version)
+          if [[ ! "$PREVIOUS_TAG" =~ ^[0-9]{8}-[0-9]{6}-[0-9a-f]{7,40}$ ]]; then
+            echo "Previous version marker is missing or invalid."
+            exit 1
+          fi
+          export BOT_TAG="$PREVIOUS_TAG"
+          echo "BOT_TAG=$BOT_TAG" >> "$GITHUB_ENV"
+      - name: Verify preserved Compose configuration
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          docker compose --profile tools config --format json > "$BACKUP_DIR/compose.json"
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          backup = Path(os.environ["BACKUP_DIR"])
+          expected = json.loads((backup / "application-env.json").read_text())
+          services = json.loads((backup / "compose.json").read_text())["services"]
+          for name in ("money_bot", "migrations"):
+              actual = services[name]["environment"]
+              if any(actual.get(key) != value for key, value in expected.items()):
+                  raise SystemExit("Compose changed application configuration; refusing cutover.")
+          print("Application environment round-trip verified without displaying credentials.")
+          PY
+      - name: Redeploy previous application version
+        id: deploy
+        env:
+          RECOVERY_IMAGE: ${{ steps.runtime.outputs.recovery_image }}
+          RECOVERY_TAG: ${{ steps.runtime.outputs.recovery_tag }}
+          RECOVERY_ID: ${{ steps.runtime.outputs.recovery_id }}
+          RECOVERY_IMAGE_ID: ${{ steps.runtime.outputs.recovery_image_id }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
           docker compose pull money_bot
-          docker compose up -d --no-deps money_bot
+          if [ "$(docker inspect money_bot --format='{{.Id}}')" != "$RECOVERY_ID" ] || \
+             [ "$(docker inspect money_bot --format='{{.Config.Image}}')" != "$RECOVERY_IMAGE" ]; then
+            echo "Production container changed after configuration capture; refusing cutover."
+            exit 1
+          fi
+          echo "cutover_epoch=$(date +%s)" >> "$GITHUB_OUTPUT"
+          echo "switch_attempted=true" >> "$GITHUB_OUTPUT"
+          python3 "$BACKUP_DIR/guard.py" "ghcr.io/watermellon2018/money_bot:$BOT_TAG"
+          printf '%s\n' "$RECOVERY_TAG" > /opt/money_bot/previous_version.tmp
+          mv /opt/money_bot/previous_version.tmp /opt/money_bot/previous_version
+          docker compose up -d --no-deps --force-recreate money_bot
+      - name: Verify rollback runtime
+        env:
+          CUTOVER_EPOCH: ${{ steps.deploy.outputs.cutover_epoch }}
+          ALLOW_NEWER_CURRENCY_SCHEMA: '1'
+        shell: bash
+        run: |
+          python3 "$BACKUP_DIR/verify.py" "ghcr.io/watermellon2018/money_bot:$BOT_TAG" "$CUTOVER_EPOCH"
+      - name: Save verified current version
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          printf '%s\n' "$BOT_TAG" > /opt/money_bot/current_version.tmp
+          mv /opt/money_bot/current_version.tmp /opt/money_bot/current_version
+      - name: Recover original application after a failed rollback
+        if: ${{ failure() && steps.deploy.outputs.switch_attempted == 'true' && steps.deploy.outputs.guard_retained_current
+          != 'true' }}
+        env:
+          RECOVERY_IMAGE: ${{ steps.runtime.outputs.recovery_image }}
+          RECOVERY_TAG: ${{ steps.runtime.outputs.recovery_tag }}
+          RECOVERY_ID: ${{ steps.runtime.outputs.recovery_id }}
+          RECOVERY_IMAGE_ID: ${{ steps.runtime.outputs.recovery_image_id }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          export BOT_TAG="$RECOVERY_TAG"
+          export ALLOW_NEWER_CURRENCY_SCHEMA=1
+          # The original image is already local: do not replace it by pulling a mutable tag.
+          if [ "$(docker image inspect "$RECOVERY_IMAGE" --format='{{.Id}}')" != "$RECOVERY_IMAGE_ID" ]; then
+            echo "Recovery image no longer matches the original container."
+            exit 1
+          fi
+          python3 "$BACKUP_DIR/guard.py" "$RECOVERY_IMAGE"
+          CUTOVER_EPOCH=$(date +%s)
+          docker compose up -d --no-deps --force-recreate money_bot
+          python3 "$BACKUP_DIR/verify.py" "$RECOVERY_IMAGE" "$CUTOVER_EPOCH" "$RECOVERY_IMAGE_ID"
+          printf '%s\n' "$BOT_TAG" > /opt/money_bot/current_version.tmp
+          mv /opt/money_bot/current_version.tmp /opt/money_bot/current_version
+          echo "Recovered and verified original running version: $BOT_TAG"
+      - name: Remove checkout credentials
+        if: ${{ always() && steps.runtime.outputs.backup_dir != '' }}
+        shell: bash
+        run: |
+          rm -f -- .env
+
