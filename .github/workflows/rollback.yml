@@ -116,7 +116,8 @@ jobs:
 
           while time.monotonic() < deadline:
               state = inspect()
-              started = datetime.datetime.fromisoformat(state["State"]["StartedAt"].replace("Z", "+00:00"))
+              timestamp = re.sub(r"\.(\d+)", lambda m: "." + (m.group(1) + "000000")[:6], state["State"]["StartedAt"])
+              started = datetime.datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
               correct = (
                   state["Config"]["Image"] == expected_image
                   and state["Image"] == expected_id
