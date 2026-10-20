@@ -1,0 +1,135 @@
+name: Prepare currency rollout
+
+on:
+  push:
+    branches: [codex/currency-rollout-20261020]
+    paths: [.github/workflows/currency-rollout-prepare.yml]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: money-bot-production
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    runs-on: self-hosted
+    timeout-minutes: 10
+    steps:
+      - name: Back up database and correct proven migration owner outliers
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          command -v python3
+          docker compose version --short
+          BACKUP_DIR="/opt/money_bot/backups/currency-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          mkdir -p /opt/money_bot/backups
+          mkdir -m 700 "$BACKUP_DIR"
+          docker inspect money_bot > "$BACKUP_DIR/runtime-inspect.json"
+          DB_NAME=$(python3 - "$BACKUP_DIR/runtime-inspect.json" <<'PY'
+          import json
+          import sys
+
+          with open(sys.argv[1], encoding="utf-8") as stream:
+              configuration = json.load(stream)[0]["Config"]
+          environment = dict(item.split("=", 1) for item in configuration["Env"])
+          if environment["DB_NAME"] != "botdb" or environment["DB_USER"] != "bot_user":
+              raise SystemExit("Unexpected database configuration; preparation stopped")
+          print(environment["DB_NAME"])
+          PY
+          )
+          PG_ADDRESSES=$(docker inspect postgres_server --format='{{range .NetworkSettings.Networks}}{{.IPAddress}} {{end}}')
+          docker exec -i money_bot python - "$PG_ADDRESSES" > "$BACKUP_DIR/database-preflight.json" <<'PY'
+          import json
+          import os
+          import sys
+
+          import psycopg
+
+          with psycopg.connect(
+              host=os.environ["DB_HOST"], port=os.environ.get("DB_PORT", "5432"),
+              dbname=os.environ["DB_NAME"], user=os.environ["DB_USER"],
+              password=os.environ["DB_PASSWORD"], connect_timeout=10,
+          ) as connection:
+              connection.execute("SET TRANSACTION READ ONLY")
+              connection.execute("SET LOCAL statement_timeout = '60s'")
+              address = connection.execute("SELECT inet_server_addr()::text").fetchone()[0]
+              if address not in sys.argv[1].split():
+                  raise SystemExit("Active database is not postgres_server; preparation stopped")
+              revision = connection.execute("SELECT version_num FROM alembic_version").fetchall()
+              if revision != [("0002_project_categories_isolated",)]:
+                  raise SystemExit("Unexpected database revision; preparation stopped")
+              for privilege in ("SELECT", "INSERT", "UPDATE", "DELETE"):
+                  if not connection.execute(
+                      "SELECT has_table_privilege(current_user,'public.alembic_version',%s)",
+                      (privilege,),
+                  ).fetchone()[0]:
+                      raise SystemExit("Missing Alembic version-table privilege: " + privilege)
+              if not connection.execute(
+                  "SELECT has_schema_privilege(current_user,'public','USAGE') "
+                  "AND has_schema_privilege(current_user,'public','CREATE')"
+              ).fetchone()[0]:
+                  raise SystemExit("Missing schema privileges; preparation stopped")
+              unexpected = connection.execute(
+                  "SELECT c.relname FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace "
+                  "WHERE n.nspname='public' AND c.relname IN "
+                  "('currency_preferences','currency_fallback_rates','currency_daily_rates',"
+                  "'reporting_expenses','reporting_incomes') AND pg_get_userbyid(c.relowner) <> current_user"
+              ).fetchall()
+              if unexpected:
+                  raise SystemExit("Unexpected currency relation owners; preparation stopped")
+              for table in ("project_member_settings", "cashback_monthly_snapshots"):
+                  sequence = connection.execute("SELECT pg_get_serial_sequence(%s,'id')", (table,)).fetchone()[0]
+                  if sequence and not connection.execute(
+                      "SELECT has_sequence_privilege(current_user,%s,'USAGE')", (sequence,)
+                  ).fetchone()[0]:
+                      raise SystemExit("Missing sequence privilege: " + table)
+              baseline = {}
+              for table in ("expenses", "incomes"):
+                  row = connection.execute(
+                      "SELECT COALESCE(max(id),0),count(*),COALESCE(sum(amount),0)::text,"
+                      "md5(COALESCE(string_agg(id::text || ':' || COALESCE(amount::text,'NULL'),',' ORDER BY id),'')) "
+                      "FROM " + table
+                  ).fetchone()
+                  baseline[table] = dict(zip(("max_id", "count", "amount_sum", "amount_digest"), row))
+          print(json.dumps(baseline))
+          PY
+          echo "PREPARATION_PREFLIGHT_OK"
+          docker exec postgres_server sh -eu -c 'exec pg_dump -U "$POSTGRES_USER" -d "$1" --format=custom --no-password' sh "$DB_NAME" > "$BACKUP_DIR/database.dump"
+          test -s "$BACKUP_DIR/database.dump"
+          docker exec -i postgres_server pg_restore --list < "$BACKUP_DIR/database.dump" > "$BACKUP_DIR/database.toc"
+          sha256sum "$BACKUP_DIR/database.dump" > "$BACKUP_DIR/database.sha256"
+          sha256sum --check "$BACKUP_DIR/database.sha256"
+          printf '%s\n' "$BACKUP_DIR" > /opt/money_bot/currency_rollout_backup
+          echo "Verified database backup: $BACKUP_DIR/database.dump"
+          docker exec -i postgres_server sh -eu -c 'exec psql -X -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$1"' sh "$DB_NAME" <<'SQL'
+          BEGIN;
+          SET LOCAL lock_timeout = '5s';
+          SET LOCAL statement_timeout = '60s';
+          DO $$
+          BEGIN
+              IF current_database() <> 'botdb' OR current_user <> 'postgres' THEN
+                  RAISE EXCEPTION 'Unexpected administrative connection';
+              END IF;
+              IF EXISTS (
+                  SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
+                  WHERE n.nspname='public'
+                    AND c.relname IN ('project_member_settings','cashback_monthly_snapshots')
+                    AND pg_get_userbyid(c.relowner) NOT IN ('postgres','bot_user')
+              ) THEN
+                  RAISE EXCEPTION 'Unexpected table owner; no ownership changes applied';
+              END IF;
+          END $$;
+          ALTER TABLE public.project_member_settings OWNER TO bot_user;
+          ALTER TABLE public.cashback_monthly_snapshots OWNER TO bot_user;
+          COMMIT;
+          SELECT c.relname, pg_get_userbyid(c.relowner) AS owner
+          FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
+          WHERE n.nspname='public'
+            AND c.relname IN ('project_member_settings','cashback_monthly_snapshots')
+          ORDER BY c.relname;
+          SQL
+          docker inspect money_bot --format='image={{.Config.Image}} status={{.State.Status}} restarts={{.RestartCount}}'
+
