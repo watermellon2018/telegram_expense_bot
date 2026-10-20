@@ -25,6 +25,9 @@ services:
     restart: always
     env_file:
       - .env
+    environment:
+      # CBR is reachable directly; Telegram continues to use HTTPS_PROXY.
+      NO_PROXY: ${NO_PROXY:-cbr.ru,www.cbr.ru}
     volumes:
       - /home/matafix/analitycs_money/telegram_bot_data/users:/app/data/users
     ports:
