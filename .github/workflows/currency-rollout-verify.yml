@@ -1,0 +1,141 @@
+name: Verify deployed currencies and historical data
+
+on:
+  push:
+    branches: [codex/currency-rollout-20261020]
+    paths: [.github/workflows/currency-rollout-verify.yml]
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: self-hosted
+    timeout-minutes: 5
+    env:
+      EXPECTED_COMMIT: 9721c132ce278fa5f58bcc9960c3ff732c6b3e8f
+    steps:
+      - name: Verify exact deployed version and preserved data
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          BACKUP_DIR=$(cat /opt/money_bot/currency_rollout_backup)
+          test -f "$BACKUP_DIR/database-preflight.json"
+          sha256sum --check "$BACKUP_DIR/database.sha256"
+          VERIFY_DIR="/opt/money_bot/verify-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          install -d -m 700 "$VERIFY_DIR"
+          docker inspect money_bot > "$VERIFY_DIR/container.json"
+          python3 - "$VERIFY_DIR/container.json" "$EXPECTED_COMMIT" "$BACKUP_DIR/runtime-inspect.json" <<'PY'
+          import json
+          import re
+          import sys
+
+          with open(sys.argv[1], encoding="utf-8") as stream:
+              current = json.load(stream)[0]
+          with open(sys.argv[3], encoding="utf-8") as stream:
+              original = json.load(stream)[0]
+          if not re.fullmatch(r"[0-9a-f]{40}", sys.argv[2]):
+              raise SystemExit("Expected commit is not pinned")
+          image = current["Config"]["Image"]
+          suffix = image.rsplit("-", 1)[-1]
+          if not re.fullmatch(r"[0-9a-f]{7,40}", suffix) or not sys.argv[2].startswith(suffix):
+              raise SystemExit("Production image does not match the deployed master commit")
+          if current["State"]["Status"] != "running" or current["State"].get("Health", {}).get("Status") != "healthy":
+              raise SystemExit("Production container is not healthy")
+          if current["RestartCount"] != 0:
+              raise SystemExit("Production container restarted after cutover")
+          old_env = dict(value.split("=", 1) for value in original["Config"]["Env"])
+          new_env = dict(value.split("=", 1) for value in current["Config"]["Env"])
+          for key in ("TELEGRAM_BOT_TOKEN", "DB_HOST", "DB_PORT", "DB_NAME", "DB_USER", "DB_PASSWORD", "HTTPS_PROXY"):
+              if old_env.get(key) != new_env.get(key):
+                  raise SystemExit("Working configuration changed: " + key)
+          old_mounts = {(item["Source"], item["Destination"]) for item in original["Mounts"]}
+          new_mounts = {(item["Source"], item["Destination"]) for item in current["Mounts"]}
+          if not old_mounts.issubset(new_mounts):
+              raise SystemExit("An original persistent mount is missing")
+          print("DEPLOYED_IMAGE", image, "healthy=true restarts=0 configuration_preserved=true")
+          PY
+          VERIFY_CODE=$(cat <<'PY'
+          import json
+          import os
+          import sys
+          from datetime import date
+
+          import httpx
+          import psycopg
+
+          from utils.currencies import CURRENCIES
+          from utils.currency_rates import parse_cbr_xml
+
+          baseline = json.load(sys.stdin)
+          if len(CURRENCIES) != 12 or not {"JPY", "KRW", "USD", "RUB"}.issubset(CURRENCIES):
+              raise SystemExit("Currency feature is missing from the deployed code")
+          with psycopg.connect(
+              host=os.environ["DB_HOST"], port=os.environ.get("DB_PORT", "5432"),
+              dbname=os.environ["DB_NAME"], user=os.environ["DB_USER"],
+              password=os.environ["DB_PASSWORD"], connect_timeout=10,
+          ) as connection:
+              connection.execute("SET TRANSACTION READ ONLY")
+              connection.execute("SET LOCAL statement_timeout = '30s'")
+              if connection.execute("SELECT version_num FROM alembic_version").fetchall() != [("0003_currencies",)]:
+                  raise SystemExit("Unexpected production schema revision")
+              for table in ("expenses", "incomes"):
+                  expected = baseline[table]
+                  actual = connection.execute(
+                      "SELECT count(*),COALESCE(sum(amount),0)::text,"
+                      "md5(COALESCE(string_agg(id::text || ':' || COALESCE(amount::text,'NULL'),',' ORDER BY id),'')) "
+                      "FROM " + table + " WHERE id <= %s", (expected["max_id"],)
+                  ).fetchone()
+                  if actual != (expected["count"], expected["amount_sum"], expected["amount_digest"]):
+                      raise SystemExit("Historical monetary data changed: " + table)
+                  typed_legacy = connection.execute(
+                      "SELECT count(*) FROM " + table + " WHERE id <= %s AND "
+                      "num_nonnulls(currency,reporting_amount,reporting_currency,fx_rate,fx_date,fx_source) <> 0",
+                      (expected["max_id"],),
+                  ).fetchone()[0]
+                  if typed_legacy:
+                      raise SystemExit("Historical rows were unexpectedly assigned currency: " + table)
+                  print("HISTORICAL_DATA_PRESERVED", table)
+              for table in ("currency_preferences", "currency_fallback_rates", "currency_daily_rates", "reporting_expenses", "reporting_incomes"):
+                  connection.execute("SELECT * FROM " + table + " LIMIT 0")
+              expected_constraints = {
+                  "expenses_currency_snapshot_complete", "expenses_currency_code", "expenses_reporting_currency_code",
+                  "incomes_currency_snapshot_complete", "incomes_currency_code", "incomes_reporting_currency_code",
+                  "users_reporting_currency_code", "projects_reporting_currency_code", "currency_preferences_currency_code",
+                  "currency_fallback_rates_source_currency_code", "currency_fallback_rates_target_currency_code",
+                  "recurring_rules_currency_code", "recurring_incomes_currency_code", "budgets_currency_code",
+                  "project_member_settings_threshold_currency_code", "cashback_monthly_snapshots_currency_code",
+              }
+              constraints = dict(connection.execute(
+                  "SELECT conname,convalidated FROM pg_constraint WHERE connamespace='public'::regnamespace AND conname=ANY(%s)",
+                  (list(expected_constraints),),
+              ).fetchall())
+              if set(constraints) != expected_constraints or not all(constraints.values()):
+                  raise SystemExit("Currency constraints are missing or not validated")
+              for table in ("recurring_rules", "recurring_incomes"):
+                  rules = connection.execute(
+                      "SELECT confdeltype::text FROM pg_constraint WHERE conrelid=to_regclass(%s) "
+                      "AND confrelid='public.projects'::regclass AND contype='f'", (table,),
+                  ).fetchall()
+                  if not rules or any(row[0] != "c" for row in rules):
+                      raise SystemExit("Recurring project relation is not cascading: " + table)
+              for table in ("project_member_settings", "cashback_monthly_snapshots"):
+                  sequence = connection.execute("SELECT pg_get_serial_sequence(%s,'id')", (table,)).fetchone()[0]
+                  if sequence and not connection.execute("SELECT has_sequence_privilege(current_user,%s,'USAGE')", (sequence,)).fetchone()[0]:
+                      raise SystemExit("Sequence access is missing: " + table)
+          print("CURRENCY_SCHEMA_OK revision=0003_currencies supported=12 constraints=16 legacy_data_preserved=true")
+          try:
+              response = httpx.get("https://www.cbr.ru/scripts/XML_daily.asp", params={"date_req": date.today().strftime("%d/%m/%Y")}, timeout=8)
+              response.raise_for_status()
+              effective_date, rates = parse_cbr_xml(response.content, date.today())
+              if not {"USD", "JPY", "KRW"}.issubset(rates):
+                  raise ValueError("Required currency quotes are missing")
+              print("CBR_RATE_SOURCE_OK", effective_date.isoformat(), "USD/JPY/KRW=true")
+          except Exception as error:
+              print("CBR_RATE_SOURCE_UNAVAILABLE", type(error).__name__, "manual_rates_supported=true")
+          PY
+          )
+          docker exec -i money_bot python -c "$VERIFY_CODE" < "$BACKUP_DIR/database-preflight.json"
+          docker inspect money_bot --format='final_status={{.State.Status}} final_health={{.State.Health.Status}} final_restarts={{.RestartCount}}'
+
