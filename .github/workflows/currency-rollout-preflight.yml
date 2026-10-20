@@ -18,6 +18,7 @@ jobs:
         run: |
           set -euo pipefail
           docker inspect money_bot --format='image={{.Config.Image}} status={{.State.Status}} health={{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}} restarts={{.RestartCount}} mounts={{json .Mounts}} networks={{json .NetworkSettings.Networks}}'
+          docker inspect postgres_server --format='postgres_networks={{json .NetworkSettings.Networks}} postgres_ports={{json .NetworkSettings.Ports}}'
           docker diff money_bot | grep -E ' /app/(app/|main.py|requirements.txt)' || true
           for marker in /opt/money_bot/current_version /opt/money_bot/previous_version; do
             if [ -f "$marker" ]; then
@@ -47,6 +48,7 @@ jobs:
           ) as connection:
               connection.execute("SET TRANSACTION READ ONLY")
               print("DATABASE", connection.execute("SELECT current_database(), current_user").fetchone())
+              print("DATABASE_ENDPOINT", os.environ["DB_HOST"], connection.execute("SELECT inet_server_addr()::text,inet_server_port(),pg_postmaster_start_time()::text").fetchone())
               print("ALEMBIC", connection.execute("SELECT version_num FROM alembic_version").fetchall())
               for row in connection.execute(
                   "SELECT c.relname, pg_get_userbyid(c.relowner), c.relkind "
@@ -63,5 +65,5 @@ jobs:
               ):
                   print("CURRENCY_COLUMN", *row)
           PY
-          docker exec postgres_server sh -eu -c 'psql -X -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d postgres -Atc "SELECT current_user, rolsuper FROM pg_roles WHERE rolname=current_user"'
+          docker exec postgres_server sh -eu -c 'psql -X -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d postgres -Atc "SELECT current_user, rolsuper, pg_postmaster_start_time() FROM pg_roles WHERE rolname=current_user"'
 
