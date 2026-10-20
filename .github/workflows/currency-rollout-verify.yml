@@ -155,4 +155,41 @@ jobs:
           )
           docker exec -i money_bot python -c "$VERIFY_CODE" < "$BACKUP_DIR/database-preflight.json"
           docker inspect money_bot --format='final_status={{.State.Status}} final_health={{.State.Health.Status}} final_restarts={{.RestartCount}}'
+      - name: Verify rendered CBR proxy exclusion
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          ROUTING_DIR="/opt/money_bot/cbr-config-check-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          install -d -m 700 "$ROUTING_DIR"
+          export ROUTING_DIR
+          docker inspect money_bot > "$ROUTING_DIR/container.json"
+          cp /opt/money_bot/deploy-39444413212-1/runtime.env "$ROUTING_DIR/.env"
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+          Path(os.environ["ROUTING_DIR"], "compose.yml").write_text("services:\n  # Одноразовый сервис применения миграций БД (feature_113).\n  # Использует ТОТ ЖЕ образ, что и бот. Запускается явно в деплое ДО старта бота\n  # (см. .github/workflows/deploy.yml) и локально: `docker compose run --rm migrations`.\n  # profile \"tools\" — чтобы обычный `docker compose up` его не поднимал;\n  # порядком \"миграции → бот\" управляет деплой (Postgres внешний, поэтому\n  # depends_on на него недоступен — готовность ждём внутри scripts/run_migrations.sh).\n  migrations:\n    image: ghcr.io/watermellon2018/money_bot:${BOT_TAG}\n    command: [\"sh\", \"scripts/run_migrations.sh\"]\n    restart: \"no\"\n    env_file:\n      - .env\n    environment:\n      # Сколько секунд ждать готовности внешнего PostgreSQL перед миграциями\n      DB_WAIT_TIMEOUT: \"90\"\n    networks:\n      - postgres_net\n    profiles:\n      - tools\n\n  money_bot:\n    image: ghcr.io/watermellon2018/money_bot:${BOT_TAG}\n    container_name: money_bot\n    restart: always\n    env_file:\n      - .env\n    environment:\n      # CBR is reachable directly; Telegram continues to use HTTPS_PROXY.\n      NO_PROXY: ${NO_PROXY:-cbr.ru,www.cbr.ru}\n    volumes:\n      - /home/matafix/analitycs_money/telegram_bot_data/users:/app/data/users\n    ports:\n      - \"8010:8000\"  # Prometheus metrics endpoint: http://<server-ip>:8010/metrics\n    networks:\n      - postgres_net\n    healthcheck:\n      test: [\"CMD\", \"python\", \"-c\", \"import sys; sys.exit(0)\"]\n      interval: 30s\n      timeout: 10s\n      retries: 3\n      start_period: 40s\n    labels:\n      logging: \"promtail\"\n\nnetworks:\n  postgres_net:\n    external: true\n")
+          PY
+          CURRENT_IMAGE=$(docker inspect money_bot --format='{{.Config.Image}}')
+          export BOT_TAG="${CURRENT_IMAGE##*:}"
+          export COMPOSE_PROJECT_NAME=$(docker inspect money_bot --format='{{index .Config.Labels "com.docker.compose.project"}}')
+          docker compose -f "$ROUTING_DIR/compose.yml" --profile tools config --format json > "$ROUTING_DIR/rendered.json"
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          routing = Path(os.environ["ROUTING_DIR"])
+          current = json.loads((routing / "container.json").read_text())[0]
+          expected = dict(item.split("=", 1) for item in current["Config"]["Env"])
+          environment = json.loads((routing / "rendered.json").read_text())["services"]["money_bot"]["environment"]
+          exclusions = {item.strip() for item in environment.get("NO_PROXY", "").split(",")}
+          if not {"cbr.ru", "www.cbr.ru"}.issubset(exclusions):
+              raise SystemExit("Rendered Compose configuration does not bypass CBR")
+          for key in ("TELEGRAM_BOT_TOKEN", "DB_HOST", "DB_PORT", "DB_NAME", "DB_USER", "DB_PASSWORD", "HTTPS_PROXY"):
+              if environment.get(key) != expected.get(key):
+                  raise SystemExit("Rendered Compose configuration changed a working setting: " + key)
+          print("COMPOSE_NO_PROXY_OK", environment["NO_PROXY"], "telegram_proxy_preserved=true")
+          PY
+          rm -f -- "$ROUTING_DIR/.env" "$ROUTING_DIR/container.json" "$ROUTING_DIR/rendered.json" "$ROUTING_DIR/compose.yml"
+          rmdir "$ROUTING_DIR"
 
